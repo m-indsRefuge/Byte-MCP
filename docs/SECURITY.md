@@ -22,8 +22,38 @@ Text found inside a retrieved file must be treated as untrusted content. It must
 
 ## Network boundary
 
-The V1 server binds through the MCP SDK's local Streamable HTTP development defaults. Do not expose the port directly to the public internet. The later ChatGPT integration phase should use the supported secure connection mechanism and authentication controls.
+Byte-MCP V1.1 explicitly binds to a loopback host. Supported V1 host values are:
+
+- `127.0.0.1`
+- `localhost`
+- `::1`
+
+The default endpoint is:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+V1 rejects non-loopback values such as `0.0.0.0`. Do not expose the port through a router, public firewall rule, or unauthenticated generic tunnel. The ChatGPT integration phase must use an approved secure connection mechanism and retain the local loopback boundary.
+
+Runtime configuration environment variables:
+
+```text
+BYTE_MCP_HOST
+BYTE_MCP_PORT
+BYTE_MCP_TRANSPORT
+BYTE_MCP_ROOTS_FILE
+BYTE_MCP_AUDIT_FILE
+BYTE_MCP_MAX_FILE_BYTES
+BYTE_MCP_MAX_RESPONSE_CHARS
+BYTE_MCP_MAX_SEARCH_FILES
+BYTE_MCP_CONTENT_SEARCH_MAX_BYTES
+```
+
+V1 supports only the `streamable-http` transport.
 
 ## Audit
 
-Allowed calls are appended to `data/audit.jsonl`. File contents are never written to the audit ledger.
+Allowed, denied, and unexpected-error outcomes are appended to `data/audit.jsonl`.
+
+The audit ledger records operation metadata but does not record fetched file contents. Search terms and opaque file references are represented by SHA-256 fingerprints and lengths rather than raw values. Denied operations include a bounded error type and message so the security boundary can be reviewed without storing requested file content.

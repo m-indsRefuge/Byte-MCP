@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.pytest-tmp/
 .ruff_cache/
 .coverage
 htmlcov/
@@ -10,6 +11,7 @@ htmlcov/
 
 # Local Byte-MCP configuration and runtime data
 config/roots.local.json
+config/inspector.local.json
 data/audit.jsonl
 .env
 
