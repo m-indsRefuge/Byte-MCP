@@ -5,7 +5,6 @@ import argparse
 import asyncio
 import json
 import os
-import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -74,114 +73,116 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         "checks": {},
     }
 
-    async with streamable_http_client(args.url) as (
-        read_stream,
-        write_stream,
-        _,
+    async with (
+        streamable_http_client(args.url) as (
+            read_stream,
+            write_stream,
+            _,
+        ),
+        ClientSession(read_stream, write_stream) as session,
     ):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
+        await session.initialize()
 
-            tools_result = await session.list_tools()
-            tool_names = {tool.name for tool in tools_result.tools}
-            missing = sorted(EXPECTED_TOOLS - tool_names)
-            if missing:
-                raise RuntimeError(f"Missing expected MCP tools: {missing}")
+        tools_result = await session.list_tools()
+        tool_names = {tool.name for tool in tools_result.tools}
+        missing = sorted(EXPECTED_TOOLS - tool_names)
+        if missing:
+            raise RuntimeError(f"Missing expected MCP tools: {missing}")
 
-            evidence["checks"]["tool_discovery"] = {
-                "status": "pass",
-                "tools": sorted(tool_names),
-            }
+        evidence["checks"]["tool_discovery"] = {
+            "status": "pass",
+            "tools": sorted(tool_names),
+        }
 
-            roots_result = await session.call_tool(
-                "list_roots",
-                arguments={},
+        roots_result = await session.call_tool(
+            "list_roots",
+            arguments={},
+        )
+        roots_payload = _payload(roots_result)
+        root_aliases = {
+            root["alias"]
+            for root in roots_payload.get("roots", [])
+            if isinstance(root, dict) and "alias" in root
+        }
+        if args.root not in root_aliases:
+            raise RuntimeError(
+                f"Requested smoke-test root is not approved: {args.root}"
             )
-            roots_payload = _payload(roots_result)
-            root_aliases = {
-                root["alias"]
-                for root in roots_payload.get("roots", [])
-                if isinstance(root, dict) and "alias" in root
-            }
-            if args.root not in root_aliases:
+
+        evidence["checks"]["list_roots"] = {
+            "status": "pass",
+            "mode": roots_payload.get("mode"),
+            "root_aliases": sorted(root_aliases),
+        }
+
+        if args.query:
+            search_result = await session.call_tool(
+                "search",
+                arguments={
+                    "query": args.query,
+                    "root": args.root,
+                    "max_results": args.max_results,
+                    "search_contents": False,
+                },
+            )
+            search_payload = _payload(search_result)
+            results = search_payload.get("results", [])
+            if not results:
                 raise RuntimeError(
-                    f"Requested smoke-test root is not approved: {args.root}"
+                    f"Search returned no results for query: {args.query!r}"
                 )
 
-            evidence["checks"]["list_roots"] = {
+            selected = None
+            if args.expect_name:
+                selected = next(
+                    (
+                        item
+                        for item in results
+                        if item.get("name") == args.expect_name
+                    ),
+                    None,
+                )
+                if selected is None:
+                    raise RuntimeError(
+                        "Search did not return the expected file: "
+                        f"{args.expect_name}"
+                    )
+            else:
+                selected = results[0]
+
+            reference = selected.get("ref")
+            if not isinstance(reference, str) or not reference:
+                raise RuntimeError("Search result did not contain a valid ref.")
+
+            evidence["checks"]["search"] = {
                 "status": "pass",
-                "mode": roots_payload.get("mode"),
-                "root_aliases": sorted(root_aliases),
+                "result_count": len(results),
+                "selected_name": selected.get("name"),
+                "scanned_files": search_payload.get("scanned_files"),
             }
 
-            if args.query:
-                search_result = await session.call_tool(
-                    "search",
-                    arguments={
-                        "query": args.query,
-                        "root": args.root,
-                        "max_results": args.max_results,
-                        "search_contents": False,
-                    },
-                )
-                search_payload = _payload(search_result)
-                results = search_payload.get("results", [])
-                if not results:
-                    raise RuntimeError(
-                        f"Search returned no results for query: {args.query!r}"
-                    )
+            fetch_result = await session.call_tool(
+                "fetch",
+                arguments={
+                    "reference": reference,
+                    "max_chars": args.max_chars,
+                },
+            )
+            fetch_payload = _payload(fetch_result)
+            sha256 = fetch_payload.get("sha256")
+            if not isinstance(sha256, str) or len(sha256) != 64:
+                raise RuntimeError("Fetch result did not contain a SHA-256.")
 
-                selected = None
-                if args.expect_name:
-                    selected = next(
-                        (
-                            item
-                            for item in results
-                            if item.get("name") == args.expect_name
-                        ),
-                        None,
-                    )
-                    if selected is None:
-                        raise RuntimeError(
-                            "Search did not return the expected file: "
-                            f"{args.expect_name}"
-                        )
-                else:
-                    selected = results[0]
-
-                reference = selected.get("ref")
-                if not isinstance(reference, str) or not reference:
-                    raise RuntimeError("Search result did not contain a valid ref.")
-
-                evidence["checks"]["search"] = {
-                    "status": "pass",
-                    "result_count": len(results),
-                    "selected_name": selected.get("name"),
-                    "scanned_files": search_payload.get("scanned_files"),
-                }
-
-                fetch_result = await session.call_tool(
-                    "fetch",
-                    arguments={
-                        "reference": reference,
-                        "max_chars": args.max_chars,
-                    },
-                )
-                fetch_payload = _payload(fetch_result)
-                sha256 = fetch_payload.get("sha256")
-                if not isinstance(sha256, str) or len(sha256) != 64:
-                    raise RuntimeError("Fetch result did not contain a SHA-256.")
-
-                evidence["checks"]["fetch"] = {
-                    "status": "pass",
-                    "name": fetch_payload.get("name"),
-                    "size_bytes": fetch_payload.get("size_bytes"),
-                    "sha256": sha256,
-                    "extractor": fetch_payload.get("extractor"),
-                    "content_truncated": fetch_payload.get(
-                        "content_truncated"
-                    ),
-                }
+            evidence["checks"]["fetch"] = {
+                "status": "pass",
+                "name": fetch_payload.get("name"),
+                "size_bytes": fetch_payload.get("size_bytes"),
+                "sha256": sha256,
+                "extractor": fetch_payload.get("extractor"),
+                "content_truncated": fetch_payload.get(
+                    "content_truncated"
+                ),
+            }
 
     return evidence
 
