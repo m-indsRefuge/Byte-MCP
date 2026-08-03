@@ -1,0 +1,7 @@
+{
+  "roots": {
+    "downloads": "%USERPROFILE%\\Downloads",
+    "documents": "%USERPROFILE%\\Documents",
+    "projects": "%USERPROFILE%\\AIProjects"
+  }
+}

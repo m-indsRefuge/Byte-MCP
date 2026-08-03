@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "byte-mcp"
+version = "0.1.0"
+description = "Extensible, permissioned MCP server for Byte's access to approved local resources."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "mcp>=2,<3",
+  "openpyxl>=3.1,<4",
+  "pypdf>=5,<7",
+  "python-docx>=1.2,<2",
+  "python-pptx>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+byte-mcp = "byte_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers --disable-warnings"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
