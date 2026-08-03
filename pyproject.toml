@@ -9,7 +9,7 @@ description = "Extensible, permissioned MCP server for Byte's access to approved
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-  "mcp>=2,<3",
+  "mcp[cli]==1.28.1",
   "openpyxl>=3.1,<4",
   "pypdf>=5,<7",
   "python-docx>=1.2,<2",
