@@ -10,6 +10,7 @@ htmlcov/
 
 # Local Byte-MCP configuration and runtime data
 config/roots.local.json
+config/inspector.local.json
 data/audit.jsonl
 .env
 
