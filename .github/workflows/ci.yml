@@ -33,7 +33,10 @@ jobs:
           python -m pip check
 
       - name: Compile
-        run: python -m compileall -q src tests scripts/mcp_smoke_test.py
+        run: >-
+          python -m compileall -q src tests
+          scripts/mcp_smoke_test.py
+          scripts/chess_mcp_smoke_test.py
 
       - name: Lint
         run: python -m ruff check .
