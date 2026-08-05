@@ -40,3 +40,26 @@ jobs:
 
       - name: Test
         run: python -m pytest
+
+      - name: Parse PowerShell scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Errors = @()
+          Get-ChildItem -LiteralPath scripts -Filter *.ps1 -File | ForEach-Object {
+              $Tokens = $null
+              $ParseErrors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  $_.FullName,
+                  [ref]$Tokens,
+                  [ref]$ParseErrors
+              ) | Out-Null
+              if ($ParseErrors.Count -gt 0) {
+                  $Errors += $ParseErrors
+              }
+          }
+          if ($Errors.Count -gt 0) {
+              $Errors | Format-List -Force
+              throw "PowerShell parse validation failed."
+          }
+          Write-Host "PASS: PowerShell scripts parsed in pwsh $($PSVersionTable.PSVersion)."
