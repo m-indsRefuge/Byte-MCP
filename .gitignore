@@ -13,6 +13,9 @@ htmlcov/
 config/roots.local.json
 config/inspector.local.json
 data/audit.jsonl
+data/chess-audit.jsonl
+data/chess-idempotency.json
+data/chess-idempotency.json.tmp
 .env
 
 # IDE / OS

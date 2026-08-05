@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "byte-mcp"
-version = "0.1.1"
-description = "Extensible, permissioned MCP server for Byte's access to approved local resources."
+version = "0.2.0"
+description = "Extensible, permissioned MCP servers for Byte's approved local capabilities."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 byte-mcp = "byte_mcp.server:main"
+byte-mcp-chess = "byte_mcp.chess_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
