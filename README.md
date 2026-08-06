@@ -1,6 +1,26 @@
 # Byte-MCP
 
-Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved resources on Nolan's Windows computer.
+Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved resources on a Windows computer.
+
+## Project status
+
+Byte-MCP V1.1 is complete and frozen as a validated local read-only MCP server.
+
+```text
+Release:             0.1.1
+Implementation:      successful_validation
+Deployment status:   integration_ready
+ChatGPT deployment:  blocked_external_dependency
+Lifecycle state:     complete_and_frozen
+```
+
+The accepted implementation performs its defined local role. The deployment account used during closeout did not expose the required custom MCP registration path. A tunnel can provide network reachability, but it cannot add a missing account entitlement.
+
+Authoritative closeout and future resumption documents:
+
+- [V1.1 Closeout and Freeze](docs/V1.1-CLOSEOUT.md)
+- [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md)
+- [Changelog](CHANGELOG.md)
 
 ## V1 scope
 
@@ -42,6 +62,8 @@ That file is excluded from Git. The scaffold creates these aliases:
 - `downloads`
 - `documents`
 - `projects`
+
+A remotely exposed deployment must begin with a separate restricted profile rather than automatically exposing these roots. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
 
 ## Supported V1 extraction
 
@@ -115,11 +137,11 @@ The file is excluded from Git. Fetched content is never written to the ledger. S
 ## Architecture
 
 ```text
-ChatGPT Web
+Supported remote MCP client                 future deployment
     |
-    |  Custom MCP app / secure local connection
+    |  authenticated supported connection
     v
-Byte-MCP Streamable HTTP server
+Byte-MCP Streamable HTTP server             complete
     |
     +-- explicit loopback network boundary
     +-- approved root aliases
@@ -129,6 +151,21 @@ Byte-MCP Streamable HTTP server
     +-- append-only local audit ledger
 ```
 
+No accepted public Byte-MCP endpoint is active as part of V1.1.
+
+## Release boundary
+
+V1.1 is frozen. Any of the following requires a new version and separate security review:
+
+- write, rename, move, delete, or rollback tools
+- shell, process, registry, application-control, or arbitrary HTTP tools
+- non-loopback binding
+- authentication or public-endpoint implementation
+- additional remotely exposed roots
+- integration with B87 Chess Arena or another Byte-Nolan system
+
+The future chess-capability work remains isolated from this release.
+
 ## Planned expansion
 
-Future versions can add separately governed capability modules, authentication, richer document parsing, local application adapters, explicit write approvals, and integration with other Byte-Nolan Construct systems. New capabilities should remain opt-in, policy-enforced, tested, and auditable.
+Future versions can add separately governed capability modules, authentication, richer document parsing, local application adapters, explicit write approvals, and integration with other Byte-Nolan Construct systems. New capabilities must remain opt-in, policy-enforced, tested, auditable, and separately releasable.
