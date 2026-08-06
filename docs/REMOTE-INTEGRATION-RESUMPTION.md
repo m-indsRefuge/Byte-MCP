@@ -52,7 +52,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
-Set-Location "C:\Users\nolan\AIProjects\Byte-MCP"
+Set-Location (Join-Path $env:USERPROFILE "AIProjects\Byte-MCP")
 
 git fetch origin
 git switch main
@@ -91,7 +91,7 @@ Required roots payload:
 ```json
 {
   "roots": {
-    "share": "C:\\Users\\nolan\\Byte-MCP-Share"
+    "share": "%USERPROFILE%\\Byte-MCP-Share"
   }
 }
 ```

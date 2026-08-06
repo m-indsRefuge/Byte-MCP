@@ -1,6 +1,6 @@
 # Byte-MCP
 
-Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved resources on Nolan's Windows computer.
+Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved resources on a Windows computer.
 
 ## Project status
 
@@ -14,7 +14,7 @@ ChatGPT deployment:  blocked_external_dependency
 Lifecycle state:     complete_and_frozen
 ```
 
-The accepted implementation performs its defined local role. ChatGPT custom-app deployment was not completed because the active ChatGPT Plus account does not currently provide the required custom MCP registration path. A tunnel can provide network reachability, but it cannot add a missing account entitlement.
+The accepted implementation performs its defined local role. The deployment account used during closeout did not expose the required custom MCP registration path. A tunnel can provide network reachability, but it cannot add a missing account entitlement.
 
 Authoritative closeout and future resumption documents:
 
