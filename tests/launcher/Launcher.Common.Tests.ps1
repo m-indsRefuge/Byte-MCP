@@ -36,9 +36,34 @@ Describe 'Launcher configuration contract' {
         Get-TunnelClientPath | Should -Be 'C:\Tools\tunnel-client.exe'
     }
 
-    It 'does not depend on the PowerShell 7 IsWindows automatic variable' {
-        $source = Get-Content -LiteralPath $commonScript -Raw
-        $source | Should -Not -Match '\$IsWindows\b'
+    It 'bootstraps Windows detection under Windows PowerShell 5.1' {
+        $platformScript = Join-Path $PSScriptRoot '../../scripts/Launcher.Platform.ps1'
+        Test-Path -LiteralPath $platformScript -PathType Leaf | Should -BeTrue
+
+        $escapedPath = $platformScript.Replace("'", "''")
+        $command = @"
+`$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+. '$escapedPath'
+`$platform = Get-Variable -Name IsWindows -ErrorAction Stop
+if (-not [bool] `$platform.Value) { exit 3 }
+"@
+
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $command
+        $LASTEXITCODE | Should -Be 0
+    }
+
+    It 'loads the platform bootstrap before common launcher code in setup and start' {
+        foreach ($name in @('Setup-ByteMCP.ps1', 'Start-ByteMCP.ps1')) {
+            $entryPath = Join-Path $PSScriptRoot "../../scripts/$name"
+            $source = Get-Content -LiteralPath $entryPath -Raw
+            $platformIndex = $source.IndexOf("Launcher.Platform.ps1")
+            $commonIndex = $source.IndexOf("Launcher.Common.ps1")
+
+            $platformIndex | Should -BeGreaterThan -1
+            $commonIndex | Should -BeGreaterThan -1
+            $platformIndex | Should -BeLessThan $commonIndex
+        }
     }
 
     It 'accepts complete prerequisites when credential checking is skipped' {
