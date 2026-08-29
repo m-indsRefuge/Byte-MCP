@@ -34,10 +34,12 @@ def test_build_initial_messages_uses_fixed_validator_mandate_and_packet_only() -
     messages = build_initial_messages(packet, objective="Check approval concurrency.")
 
     assert [message["role"] for message in messages] == ["system", "user"]
-    assert "independent validator" in messages[0]["content"].lower()
-    assert "falsifiable" in messages[0]["content"].lower()
-    assert "disproof" in messages[0]["content"].lower()
-    assert "ox-findings-v1" in messages[0]["content"]
+    system = messages[0]["content"].lower()
+    assert "independent engineering validator" in system
+    assert "falsifiable" in system
+    assert "natural text or markdown" in system
+    assert "do not force the response into json" in system
+    assert "ox-findings-v1" not in messages[0]["content"]
     user_payload = json.loads(messages[1]["content"])
     assert user_payload == {
         "objective": "Check approval concurrency.",
@@ -45,28 +47,21 @@ def test_build_initial_messages_uses_fixed_validator_mandate_and_packet_only() -
     }
 
 
-def test_system_mandate_spells_out_exact_findings_wire_contract() -> None:
+def test_system_mandate_spells_out_natural_review_contract() -> None:
     messages = build_initial_messages({}, objective="Review the supplied packet.")
     system = messages[0]["content"]
 
-    assert "exactly two top-level fields" in system
-    assert '"protocol_version":"ox-findings-v1"' in system
-    for field in (
-        "category",
-        "severity",
-        "confidence",
-        "location",
-        "claim",
-        "evidence",
-        "reproduction",
-        "expected_behavior",
-        "observed_or_predicted_behavior",
-        "disproof_condition",
-        "recommended_investigation",
-    ):
-        assert f'"{field}"' in system
-    assert "evidence must be one JSON string, not an array" in system
-    assert "Do not add IDs, titles, summaries, kinds, uncertainty fields" in system
+    assert "Report only defects you can substantiate" in system
+    assert "location" in system
+    assert "claim" in system
+    assert "supporting evidence" in system
+    assert "reproduction or demonstration" in system
+    assert "expected behavior" in system
+    assert "uncertainty" in system
+    assert "natural text or Markdown" in system
+    assert "Do not force the response into JSON" in system
+    assert "Return only JSON" not in system
+    assert "ox-findings-v1" not in system
 
 
 def test_parse_findings_assigns_deterministic_local_ids_in_array_order() -> None:
