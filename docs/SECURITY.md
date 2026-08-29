@@ -12,9 +12,16 @@ The implementation blocks common secret-bearing names and locations, including:
 - `.gnupg`
 - `AppData`
 - credential or secret directories
-- private-key and password-vault file formats
+- files whose stem is `secret`, `secrets`, `credential`, or `credentials`
+- private-key and password-vault suffixes, including when they occur inside a multi-suffix filename
+
+Examples such as `secrets.json`, `credentials.yaml`, and `database.key.bak` are denied. Similar non-secret names such as `secretary.txt` are not denied merely because they contain a denied word as a substring.
 
 The policy is intentionally conservative and can be extended only through a new-version security review.
+
+The per-component link/junction checks are defense-in-depth. The authoritative containment boundary remains strict path resolution followed by `relative_to()` against the canonical approved root.
+
+An approved root itself is resolved to its canonical target when configuration is loaded. Links or junctions encountered beneath that root are not traversed.
 
 ## Prompt injection
 
@@ -66,13 +73,33 @@ The public addressing contract is:
 
 `list_roots` returns aliases only. Search and fetch metadata return relative paths and do not include `absolute_path`.
 
-This prevents a remote MCP caller from learning Windows user-profile or machine-specific path details that are unnecessary to use the service.
+Opaque references are identifiers, not authentication tokens and not a security boundary. They are deliberately decodable. Every decoded root/path pair is passed back through the approved-root and containment checks before a file is accessed.
+
+This prevents a remote MCP caller from learning Windows user-profile or machine-specific path details that are unnecessary to use the service while ensuring a forged reference cannot bypass filesystem authority.
+
+## File and extraction limits
+
+`fetch` enforces `BYTE_MCP_MAX_FILE_BYTES` before extraction and raises a `LimitExceededError` when the configured ceiling is exceeded.
+
+Content search separately enforces `BYTE_MCP_CONTENT_SEARCH_MAX_BYTES` before extracting a candidate file. The extractor also has its own hard input ceiling as defense-in-depth so direct internal use cannot accidentally perform unbounded reads.
+
+Response text remains bounded by the configured response-character limit. When a client requests fewer than the V1 minimum, `fetch` reports the actual `max_chars_applied` value in its response.
+
+Malformed or encrypted document-library failures are normalized at the service boundary. A corrupt candidate encountered during content search is treated as a per-file miss so one bad document does not abort the entire search. A corrupt file requested directly through `fetch` returns a Byte-MCP domain error rather than a raw third-party exception.
 
 ## Audit
 
 Allowed, denied, and unexpected-error outcomes are appended to the configured audit ledger.
 
 The audit ledger records operation metadata but does not record fetched file contents. Search terms and opaque file references are represented by SHA-256 fingerprints and lengths rather than raw values. Denied operations include a bounded error type and message so the security boundary can be reviewed without storing requested file content.
+
+Audit persistence is fail-closed in V1. If Byte-MCP cannot serialize, create, open, or append the configured audit ledger, the operation result is not returned to the client and a Byte-MCP `AuditError` is raised. This is deliberate: an access that cannot be durably recorded is not treated as an accepted access.
+
+`AuditLog` uses an in-process lock and is therefore single-process by contract. Multiple Byte-MCP processes must use distinct audit files. Audit rotation and a dedicated audit reader are deferred V1 capabilities; operators should monitor ledger size. A future reader must tolerate and count malformed or torn JSONL lines rather than failing the whole ledger.
+
+## Runtime layout
+
+The V1 default configuration paths are derived from the source/repository layout. The supported deployment model is therefore the reviewed repository/editable-install launcher. A standalone wheel installation with unrelated filesystem layout is not yet a supported deployment contract and would require explicit configuration-path design and validation.
 
 ## Remote root boundary
 
@@ -127,3 +154,15 @@ Adding any such authority requires:
 5. a new release and deployment review.
 
 The separate chess-capability branch is not part of this remote integration increment and must not be merged merely to complete tunnel connectivity.
+
+## Known V1 limitations
+
+The following are intentionally deferred rather than silently assumed to be solved:
+
+- extraction and SHA-256 calculation read a fetched file in separate passes, so a concurrently modified file can create a content/hash TOCTOU mismatch;
+- PDF extraction is byte-bounded but does not yet apply a separate page-count ceiling;
+- PPTX extraction does not guarantee complete traversal of grouped shapes or tables;
+- audit logging has no built-in rotation and is not multi-process safe;
+- the default runtime layout assumes the reviewed source/repository deployment model.
+
+These limitations do not expand filesystem authority, but changing any of them should receive tests and review appropriate to the affected boundary.
