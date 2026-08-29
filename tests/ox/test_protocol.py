@@ -45,6 +45,30 @@ def test_build_initial_messages_uses_fixed_validator_mandate_and_packet_only() -
     }
 
 
+def test_system_mandate_spells_out_exact_findings_wire_contract() -> None:
+    messages = build_initial_messages({}, objective="Review the supplied packet.")
+    system = messages[0]["content"]
+
+    assert "exactly two top-level fields" in system
+    assert '"protocol_version":"ox-findings-v1"' in system
+    for field in (
+        "category",
+        "severity",
+        "confidence",
+        "location",
+        "claim",
+        "evidence",
+        "reproduction",
+        "expected_behavior",
+        "observed_or_predicted_behavior",
+        "disproof_condition",
+        "recommended_investigation",
+    ):
+        assert f'"{field}"' in system
+    assert "evidence must be one JSON string, not an array" in system
+    assert "Do not add IDs, titles, summaries, kinds, uncertainty fields" in system
+
+
 def test_parse_findings_assigns_deterministic_local_ids_in_array_order() -> None:
     payload = valid_payload()
     payload["findings"].append(
