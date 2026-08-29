@@ -26,7 +26,6 @@ from .settings import OXSettings
 _GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
 _MODEL = "zai/glm-5.3-flash"
 _PROVIDER_OPTIONS = {"gateway": {"only": ["zai"]}}
-_MAX_TOKENS = 16_384
 _TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
 _ATTEMPT_ID_PATTERN = re.compile(r"^OX-\d{6}-A\d{3}$")
 _SAFE_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
@@ -55,6 +54,7 @@ class OXClient:
         self, settings: OXSettings, *, transport: httpx.BaseTransport | None = None
     ) -> None:
         self._api_key = settings.api_key
+        self._max_output_tokens = settings.max_output_tokens
         self._transport = transport
 
     def __repr__(self) -> str:
@@ -76,7 +76,7 @@ class OXClient:
             "messages": validated_messages,
             "model": _MODEL,
             "stream": False,
-            "max_tokens": _MAX_TOKENS,
+            "max_tokens": self._max_output_tokens,
             "providerOptions": _PROVIDER_OPTIONS,
         }
         if json_mode:
@@ -212,7 +212,20 @@ def _parse_usage(value: object) -> ProviderUsage | None:
         raise OXProtocolError(attempt_outcome="COMPLETED")
     prompt_tokens = _token_count(value, "prompt_tokens")
     completion_tokens = _token_count(value, "completion_tokens")
-    return ProviderUsage(input_tokens=prompt_tokens, output_tokens=completion_tokens)
+    total_tokens = _token_count(value, "total_tokens")
+    details = value.get("prompt_tokens_details")
+    if details is None:
+        cached_tokens = 0
+    elif isinstance(details, Mapping):
+        cached_tokens = _token_count(details, "cached_tokens")
+    else:
+        raise OXProtocolError(attempt_outcome="COMPLETED")
+    return ProviderUsage(
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cached_input_tokens=cached_tokens,
+    )
 
 
 def _token_count(value: Mapping[str, object], field: str) -> int:
