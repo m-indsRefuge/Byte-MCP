@@ -74,6 +74,7 @@ def test_complete_posts_one_fixed_request_and_preserves_safe_response_evidence()
         "model": "zai/glm-5.3-flash",
         "stream": False,
         "max_tokens": 65_536,
+        "reasoning": {"effort": "medium"},
         "providerOptions": {"gateway": {"only": ["zai"]}},
     }
     assert result.content == "The packet is reviewable."
