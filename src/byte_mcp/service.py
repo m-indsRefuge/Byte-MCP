@@ -95,7 +95,6 @@ class FileService:
             "ref": encode_ref(alias, relative),
             "root": alias,
             "relative_path": relative,
-            "absolute_path": str(path),
             "name": path.name,
             "extension": path.suffix.casefold(),
             "size_bytes": stat.st_size,
@@ -109,11 +108,8 @@ class FileService:
                 "mode": "read-only",
                 "endpoint": self.settings.mcp_url,
                 "roots": [
-                    {
-                        "alias": alias,
-                        "path": str(path),
-                    }
-                    for alias, path in sorted(self.roots.items())
+                    {"alias": alias}
+                    for alias in sorted(self.roots)
                 ],
             }
 
