@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .errors import AccessDeniedError
+from .errors import AccessDeniedError, NotFoundError
 
 DENIED_NAMES = frozenset(
     {
@@ -40,15 +40,26 @@ def is_link_or_junction(path: Path) -> bool:
     return bool(checker and checker())
 
 
+def _name_variants(name: str) -> set[str]:
+    variants = {name}
+    current = Path(name)
+    while current.suffix:
+        current = Path(current.stem)
+        variants.add(current.name.casefold())
+    return variants
+
+
 def is_denied_relative(relative_path: Path) -> bool:
     lowered_parts = {part.casefold() for part in relative_path.parts}
     if lowered_parts & DENIED_NAMES:
         return True
 
     name = relative_path.name.casefold()
-    return name in DENIED_NAMES or any(
-        name.endswith(suffix) for suffix in DENIED_SUFFIXES
-    )
+    if _name_variants(name) & DENIED_NAMES:
+        return True
+
+    suffixes = {suffix.casefold() for suffix in Path(name).suffixes}
+    return bool(suffixes & DENIED_SUFFIXES)
 
 
 def resolve_under_root(root: Path, relative_path: str) -> Path:
@@ -68,8 +79,13 @@ def resolve_under_root(root: Path, relative_path: str) -> Path:
                 "Symbolic links and junctions are not traversed."
             )
 
-    candidate = (root / relative).resolve(strict=True)
-    resolved_root = root.resolve(strict=True)
+    try:
+        candidate = (root / relative).resolve(strict=True)
+        resolved_root = root.resolve(strict=True)
+    except OSError as exc:
+        raise NotFoundError(
+            f"Path cannot be resolved: {relative_path}"
+        ) from exc
 
     try:
         normalized_relative = candidate.relative_to(resolved_root)
