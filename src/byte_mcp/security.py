@@ -34,10 +34,15 @@ DENIED_SUFFIXES = frozenset(
 
 
 def is_link_or_junction(path: Path) -> bool:
-    if path.is_symlink():
+    try:
+        if path.is_symlink():
+            return True
+        checker = getattr(path, "is_junction", None)
+        return bool(checker and checker())
+    except OSError:
+        # If the entry vanishes or cannot be inspected, fail closed and let
+        # directory/search callers skip it rather than trusting its type.
         return True
-    checker = getattr(path, "is_junction", None)
-    return bool(checker and checker())
 
 
 def _name_variants(name: str) -> set[str]:
