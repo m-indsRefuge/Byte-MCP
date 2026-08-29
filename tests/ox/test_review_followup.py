@@ -10,6 +10,8 @@ from tests.ox.test_review_service import RecordingClient, make_service, prepare,
 
 class TextClient(RecordingClient):
     def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        if json_mode:
+            return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
         self.calls.append(
             {
                 "messages": [dict(message) for message in messages],
@@ -38,7 +40,7 @@ class UnknownContinuationClient(TextClient):
         self.fail_once = True
 
     def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
-        if self.fail_once:
+        if not json_mode and self.fail_once:
             self.fail_once = False
             self.calls.append(
                 {
