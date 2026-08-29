@@ -4,10 +4,10 @@ import pytest
 
 from byte_mcp.errors import OXBundleError
 from tests.ox.helpers import commit_files
-from tests.ox.test_review_service import RecordingClient, verification
+from tests.ox.test_review_service import verification
 from tests.ox.test_security_invariants import (
-    BoundaryClient,
     SECRET,
+    BoundaryClient,
     establish_review,
 )
 
