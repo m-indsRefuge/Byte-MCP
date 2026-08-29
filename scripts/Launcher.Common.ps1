@@ -403,6 +403,11 @@ function Rotate-LauncherLog {
         [Parameter(Mandatory)] [string] $Path
     )
 
+    $parent = Split-Path -Parent $Path
+    if ($parent) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+
     $previous = "$Path.previous"
     if (Test-Path -LiteralPath $previous) {
         Remove-Item -LiteralPath $previous -Force
@@ -464,7 +469,6 @@ function Start-LauncherServerProcess {
         [Parameter(Mandatory)] [pscustomobject] $Paths
     )
 
-    New-Item -ItemType Directory -Force -Path $Paths.LogsDir | Out-Null
     $userProfile = Get-LauncherUserProfileFromPaths -Paths $Paths
     $map = Get-ByteMcpServerEnvironment -UserProfile $userProfile
     $prior = @{}
@@ -495,7 +499,6 @@ function Start-LauncherTunnelProcess {
         [Parameter(Mandatory)] [pscustomobject] $Paths
     )
 
-    New-Item -ItemType Directory -Force -Path $Paths.LogsDir | Out-Null
     $secure = Unprotect-ByteMcpCredential -Path $Paths.CredentialFile
     $plain = $null
     $priorKey = [Environment]::GetEnvironmentVariable('CONTROL_PLANE_API_KEY', 'Process')
@@ -626,7 +629,6 @@ function Start-ByteMcpBackgroundStack {
         throw "Unmanaged launcher port conflict detected on port(s): $ports."
     }
 
-    New-Item -ItemType Directory -Force -Path $Paths.LogsDir | Out-Null
     foreach ($logPath in @($Paths.ServerStdOut, $Paths.ServerStdErr, $Paths.TunnelStdOut, $Paths.TunnelStdErr)) {
         Rotate-LauncherLog -Path $logPath
     }
@@ -680,11 +682,6 @@ function Start-ByteMcpForegroundStack {
     )
 
     Assert-ByteMcpLauncherPrerequisites -Paths $Paths
-    $conflicts = Get-LauncherPortConflicts
-    if ($conflicts.Count -gt 0) {
-        throw 'Unmanaged launcher port conflict detected; foreground startup refused.'
-    }
-
     $server = $null
     $tunnel = $null
 
