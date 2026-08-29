@@ -6,6 +6,7 @@ import pytest
 from byte_mcp.errors import (
     AccessDeniedError,
     ByteMCPError,
+    LimitExceededError,
     NotFoundError,
     UnsupportedFileError,
 )
@@ -55,6 +56,27 @@ def test_search_then_fetch(tmp_path: Path) -> None:
     fetched = service.fetch(search_result["results"][0]["ref"])
     assert fetched["content"] == "Kernel result: 42\nPASS"
     assert len(fetched["sha256"]) == 64
+
+
+def test_fetch_enforces_configured_file_size_limit(tmp_path: Path) -> None:
+    approved = tmp_path / "downloads"
+    approved.mkdir()
+    report = approved / "large.txt"
+    report.write_text("abcdef", encoding="utf-8")
+    settings = Settings(
+        repo_root=tmp_path,
+        roots_file=tmp_path / "roots.json",
+        audit_file=tmp_path / "audit.jsonl",
+        max_file_bytes=5,
+        max_response_chars=60_000,
+        max_search_files=1_000,
+        content_search_max_bytes=100_000,
+    )
+    service = FileService(settings, {"downloads": approved.resolve()})
+    reference = service.search("large", root="downloads")["results"][0]["ref"]
+
+    with pytest.raises(LimitExceededError, match="V1 limit"):
+        service.fetch(reference)
 
 
 def test_content_search(tmp_path: Path) -> None:
