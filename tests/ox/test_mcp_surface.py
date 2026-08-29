@@ -31,6 +31,11 @@ class FakeService:
     def continue_message(self, review_id: str, message: str) -> dict[str, Any]:
         return self._call("continue_message", review_id, message)
 
+    def record_findings(
+        self, review_id: str, findings: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        return self._call("record_findings", review_id, findings)
+
     def retry_continuation(
         self, review_id: str, attempt_id: str, *, renewed_approval: bool
     ) -> dict[str, Any]:
@@ -116,6 +121,7 @@ def test_ox_tool_signatures_match_v1_contract() -> None:
         "review_id",
         "mode",
         "message",
+        "findings",
         "adjudications",
         "retry_attempt_id",
         "approve_retry",
@@ -170,6 +176,14 @@ def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeyp
     assert (
         server.ox_continue(
             "OX-000001",
+            mode="record_findings",
+            findings=[{"claim": "derived"}],
+        )["operation"]
+        == "record_findings"
+    )
+    assert (
+        server.ox_continue(
+            "OX-000001",
             mode="adjudicate",
             adjudications=[{"finding_id": "OX-000001-F001"}],
         )["operation"]
@@ -191,6 +205,13 @@ def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeyp
             message="replacement is forbidden",
             retry_attempt_id="OX-000001-A002",
             approve_retry=True,
+        )
+    with pytest.raises(OXProtocolError):
+        server.ox_continue(
+            "OX-000001",
+            mode="record_findings",
+            message="must be local-only",
+            findings=[{"claim": "derived"}],
         )
 
     assert (
