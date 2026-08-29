@@ -166,14 +166,16 @@ def ox_continue(
     review_id: str,
     mode: str = "message",
     message: str | None = None,
+    findings: list[dict[str, Any]] | None = None,
     adjudications: list[dict[str, Any]] | None = None,
     retry_attempt_id: str | None = None,
     approve_retry: bool = False,
 ) -> dict[str, object]:
-    """Continue, adjudicate, or explicitly retry an approved OX review."""
+    """Continue, record findings, adjudicate, or explicitly retry an OX review."""
     if mode == "message":
         if (
             message is None
+            or findings is not None
             or adjudications is not None
             or retry_attempt_id is not None
             or approve_retry
@@ -181,9 +183,21 @@ def ox_continue(
             _invalid_ox_mode()
         return _ox_service().continue_message(review_id, message)
 
+    if mode == "record_findings":
+        if (
+            message is not None
+            or findings is None
+            or adjudications is not None
+            or retry_attempt_id is not None
+            or approve_retry
+        ):
+            _invalid_ox_mode()
+        return _ox_service().record_findings(review_id, findings)
+
     if mode == "adjudicate":
         if (
             message is not None
+            or findings is not None
             or adjudications is None
             or retry_attempt_id is not None
             or approve_retry
@@ -194,6 +208,7 @@ def ox_continue(
     if mode == "retry":
         if (
             message is not None
+            or findings is not None
             or adjudications is not None
             or retry_attempt_id is None
             or not approve_retry
