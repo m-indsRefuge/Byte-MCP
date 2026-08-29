@@ -195,7 +195,12 @@ Describe 'Launcher transactional background startup' {
             [Environment]::GetEnvironmentVariable('BYTE_MCP_HOST', 'Process') | Should -Be 'parent-sentinel'
         }
         finally {
-            [Environment]::SetEnvironmentVariable('BYTE_MCP_HOST', $priorHost, 'Process')
+            if ($null -eq $priorHost) {
+                Remove-Item -LiteralPath 'Env:\BYTE_MCP_HOST' -ErrorAction SilentlyContinue
+            }
+            else {
+                [Environment]::SetEnvironmentVariable('BYTE_MCP_HOST', $priorHost, 'Process')
+            }
         }
     }
 
@@ -204,8 +209,11 @@ Describe 'Launcher transactional background startup' {
         $prior = @{}
 
         foreach ($name in $map.Keys) {
-            $prior[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+            $prior[$name] = [PSCustomObject]@{
+                Exists = Test-Path -LiteralPath "Env:\$name"
+                Value = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+            Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
         }
 
         try {
@@ -216,12 +224,17 @@ Describe 'Launcher transactional background startup' {
             $null = Start-LauncherServerProcess -Paths $script:runtimePaths
 
             foreach ($name in $map.Keys) {
-                Test-Path -LiteralPath "Env:$name" | Should -BeFalse
+                Test-Path -LiteralPath "Env:\$name" | Should -BeFalse
             }
         }
         finally {
             foreach ($name in $map.Keys) {
-                [Environment]::SetEnvironmentVariable($name, $prior[$name], 'Process')
+                if ($prior[$name].Exists) {
+                    [Environment]::SetEnvironmentVariable($name, $prior[$name].Value, 'Process')
+                }
+                else {
+                    Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+                }
             }
         }
     }
@@ -245,7 +258,12 @@ Describe 'Launcher transactional background startup' {
             [Environment]::GetEnvironmentVariable('CONTROL_PLANE_API_KEY', 'Process') | Should -Be 'parent-sentinel'
         }
         finally {
-            [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $priorKey, 'Process')
+            if ($null -eq $priorKey) {
+                Remove-Item -LiteralPath 'Env:\CONTROL_PLANE_API_KEY' -ErrorAction SilentlyContinue
+            }
+            else {
+                [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $priorKey, 'Process')
+            }
         }
     }
 
