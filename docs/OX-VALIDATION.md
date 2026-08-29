@@ -36,6 +36,12 @@ The OX client is not a generic provider abstraction. V1 has no caller-selected U
 
 Vercel and Z.AI are external processors for any approved OX transmission. An approved review packet leaves the local Byte-MCP trust boundary and is sent through Vercel AI Gateway to Z.AI. Review their current data-handling terms before transmitting private repository material; the first live canary remains deliberately non-sensitive regardless.
 
+### Private-repository privacy gate
+
+Before any private repository content is transmitted, review the then-current Vercel and Z.AI data-handling terms again. For a Vercel Hobby team, Model Training is opted in by default under Vercel's current terms; the operator must explicitly opt out in **Team Settings → Data Preferences** before private repository transmission. Record that opt-out as part of the human approval evidence for the first private review. A non-sensitive canary does not waive this later private-code gate.
+
+Z.AI's current developer/API terms state that API User Content is not used to develop or improve its services unless the API customer explicitly agrees, and its API DPA states that prompt/output content is processed in real time and not stored on Z.AI servers. Those terms are still external dependencies and must be rechecked when the private-code gate is reached.
+
 ## MCP tool surface
 
 OX exposes exactly four high-level tools:
@@ -348,4 +354,4 @@ No live API key or live provider call belongs in CI.
 
 ## Acceptance after the canary
 
-The canary proves transport and provider behavior, not the quality of the entire integration. The first serious dogfood review should then review the committed OX subsystem itself, followed by Byte evidence-based adjudication, remediation of confirmed defects, blind OX revalidation, targeted completeness review where appropriate, regression verification, and Nolan's final human acceptance.
+The canary proves transport and provider behavior, not the quality of the entire integration. Before the first private dogfood review, satisfy and record the private-repository privacy gate above. The first serious dogfood review should then review the committed OX subsystem itself, followed by Byte evidence-based adjudication, remediation of confirmed defects, blind OX revalidation, targeted completeness review where appropriate, regression verification, and Nolan's final human acceptance.
