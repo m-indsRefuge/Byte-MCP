@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from byte_mcp.errors import OXApprovalError, OXProtocolError, OXTransportError
+from byte_mcp.errors import (
+    OXApprovalError,
+    OXFindingValidationError,
+    OXProtocolError,
+    OXTransportError,
+)
 from byte_mcp.ox.models import ProviderResult, ProviderUsage
 from tests.ox.helpers import commit_files
 from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
@@ -42,6 +47,56 @@ class UnknownContinuationClient(TextClient):
     def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
         if not json_mode and self.fail_once:
             self.fail_once = False
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "json_mode": json_mode,
+                    "attempt_id": attempt_id,
+                }
+            )
+            raise OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
+        return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
+
+
+class MalformedBlindClient(RecordingClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_count = 0
+
+    def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        self.request_count += 1
+        if self.request_count == 2:
+            self.calls.append(
+                {
+                    "messages": [dict(message) for message in messages],
+                    "json_mode": json_mode,
+                    "attempt_id": attempt_id,
+                }
+            )
+            raw = {
+                "id": f"response-{attempt_id}",
+                "model": "zai/glm-5.3-flash",
+                "choices": [{"message": {"role": "assistant", "content": "not-json"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+            return ProviderResult(
+                content="not-json",
+                usage=ProviderUsage(1, 1, 2, 0),
+                response_id=raw["id"],
+                model=raw["model"],
+                raw_response=raw,
+            )
+        return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
+
+
+class UnknownTargetedClient(RecordingClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_count = 0
+
+    def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        self.request_count += 1
+        if self.request_count == 3:
             self.calls.append(
                 {
                     "messages": [dict(message) for message in messages],
@@ -240,3 +295,76 @@ def test_revalidation_retry_requires_renewed_approval_and_keeps_scope_fixed(tmp_
     result = service.retry_revalidation(proposal["revalidation_id"], renewed_approval=True)
 
     assert result["state"] == "BLIND_REVALIDATED"
+
+
+def test_targeted_retry_rejects_history_changed_since_failed_attempt(tmp_path) -> None:
+    client = UnknownTargetedClient()
+    service, store, repository_path, base, target, _ = make_service(tmp_path, client)
+    review_id = _establish_review(service, base, target)
+    service.adjudicate(
+        review_id,
+        [
+            {
+                "finding_id": f"{review_id}-F001",
+                "status": "CONFIRMED",
+                "evidence": "Confirmed from the first review.",
+                "reasoning_summary": "Needs remediation.",
+            }
+        ],
+    )
+    remediation = commit_files(
+        repository_path,
+        {"src/alpha.py": b"value = 'remediated'\n"},
+        b"remediation",
+    )
+    proposal = service.prepare_revalidation(
+        review_id,
+        target_commit=remediation,
+        base_commit=target,
+        verification=verification(),
+    )
+    service.transmit_blind_revalidation(proposal["revalidation_id"])
+
+    with pytest.raises(OXTransportError):
+        service.run_targeted_revalidation(
+            proposal["revalidation_id"], [f"{review_id}-F001"]
+        )
+    calls_before_retry = len(client.calls)
+    store.append_revalidation_thread_message(
+        proposal["revalidation_id"],
+        "targeted-revalidation",
+        {"role": "user", "content": "tampered local history"},
+    )
+
+    with pytest.raises(OXApprovalError):
+        service.retry_revalidation(proposal["revalidation_id"], renewed_approval=True)
+
+    assert len(client.calls) == calls_before_retry
+
+
+def test_targeted_revalidation_blocked_after_malformed_blind_findings(tmp_path) -> None:
+    client = MalformedBlindClient()
+    service, _, repository_path, base, target, _ = make_service(tmp_path, client)
+    review_id = _establish_review(service, base, target)
+    remediation = commit_files(
+        repository_path,
+        {"src/alpha.py": b"value = 'remediated'\n"},
+        b"remediation",
+    )
+    proposal = service.prepare_revalidation(
+        review_id,
+        target_commit=remediation,
+        base_commit=target,
+        verification=verification(),
+    )
+
+    with pytest.raises(OXFindingValidationError):
+        service.transmit_blind_revalidation(proposal["revalidation_id"])
+    calls_before_targeted = len(client.calls)
+
+    with pytest.raises(OXApprovalError):
+        service.run_targeted_revalidation(
+            proposal["revalidation_id"], [f"{review_id}-F001"]
+        )
+
+    assert len(client.calls) == calls_before_targeted
