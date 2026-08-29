@@ -191,6 +191,28 @@ def test_manifest_tamper_invalidates_approval_before_provider(tmp_path: Path) ->
     assert_secret_absent(store._root, proposal)
 
 
+def test_same_length_objective_tamper_invalidates_approval_before_provider(
+    tmp_path: Path,
+) -> None:
+    client = BoundaryClient()
+    service, store, _, base, target, _ = make_security_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review_path = store._root / "reviews" / proposal["review_id"] / "review.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    original = review["objective"]
+    replacement = "X" * len(original)
+    assert replacement != original
+    assert len(replacement.encode()) == len(original.encode())
+    review["objective"] = replacement
+    review_path.write_text(json.dumps(review), encoding="utf-8")
+
+    with pytest.raises(OXApprovalError):
+        service.transmit_review(proposal["review_id"])
+
+    assert client.calls == 0
+    assert_secret_absent(store._root, proposal)
+
+
 def test_unknown_outcome_retry_and_revalidation_require_renewed_approval(tmp_path: Path) -> None:
     client = UnknownOutcomeClient()
     service, store, repository_path, base, target, _ = make_security_service(tmp_path, client)
