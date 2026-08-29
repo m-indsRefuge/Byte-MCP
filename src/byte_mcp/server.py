@@ -89,6 +89,8 @@ def fetch(
 
 
 def main() -> None:
+    # Validate roots and construct the service before binding the HTTP server.
+    service()
     mcp.run(transport=SETTINGS.transport)
 
 
