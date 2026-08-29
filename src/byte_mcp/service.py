@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat as stat_module
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from .errors import (
     ByteMCPError,
     LimitExceededError,
     NotFoundError,
+    UnsupportedFileError,
 )
 from .extractors import SUPPORTED_EXTENSIONS, extract_file
 from .refs import decode_ref, encode_ref
@@ -81,12 +83,20 @@ class FileService:
             tz=UTC,
         ).isoformat()
 
+    @staticmethod
+    def _directory_sort_key(path: Path) -> tuple[bool, str]:
+        try:
+            is_directory = path.is_dir()
+        except OSError:
+            is_directory = False
+        return not is_directory, path.name.casefold()
+
     def _metadata(
         self,
         alias: str,
         path: Path,
     ) -> dict[str, Any]:
-        stat = path.stat()
+        path_stat = path.stat()
         relative = path.relative_to(
             self._root(alias)
         ).as_posix()
@@ -97,8 +107,8 @@ class FileService:
             "relative_path": relative,
             "name": path.name,
             "extension": path.suffix.casefold(),
-            "size_bytes": stat.st_size,
-            "modified_utc": self._timestamp(stat.st_mtime),
+            "size_bytes": path_stat.st_size,
+            "modified_utc": self._timestamp(path_stat.st_mtime),
         }
 
     def list_roots(self) -> dict[str, Any]:
@@ -148,12 +158,10 @@ class FileService:
                 )
 
             entries: list[dict[str, Any]] = []
+            truncated = False
             children = sorted(
                 directory.iterdir(),
-                key=lambda item: (
-                    not item.is_dir(),
-                    item.name.casefold(),
-                ),
+                key=self._directory_sort_key,
             )
 
             for child in children:
@@ -164,35 +172,41 @@ class FileService:
                 ):
                     continue
 
-                stat = child.stat()
+                try:
+                    child_stat = child.stat()
+                except OSError:
+                    continue
+
+                if len(entries) >= bounded_max_entries:
+                    truncated = True
+                    break
+
+                is_directory = stat_module.S_ISDIR(child_stat.st_mode)
                 entries.append(
                     {
                         "name": child.name,
                         "kind": (
                             "directory"
-                            if child.is_dir()
+                            if is_directory
                             else "file"
                         ),
                         "relative_path": relative.as_posix(),
                         "size_bytes": (
                             None
-                            if child.is_dir()
-                            else stat.st_size
+                            if is_directory
+                            else child_stat.st_size
                         ),
                         "modified_utc": self._timestamp(
-                            stat.st_mtime
+                            child_stat.st_mtime
                         ),
                     }
                 )
-
-                if len(entries) >= bounded_max_entries:
-                    break
 
             result = {
                 "root": root,
                 "relative_path": relative_path,
                 "entries": entries,
-                "truncated": len(entries) >= bounded_max_entries,
+                "truncated": truncated,
             }
 
         self.audit.record(
@@ -248,7 +262,8 @@ class FileService:
             results: list[dict[str, Any]] = []
             scanned = 0
             query_folded = query.casefold()
-            stopped = False
+            truncated = False
+            stop_search = False
 
             for alias, approved_root in selected.items():
                 for current, dirnames, filenames in os.walk(
@@ -271,7 +286,8 @@ class FileService:
 
                     for filename in filenames:
                         if scanned >= self.settings.max_search_files:
-                            stopped = True
+                            truncated = True
+                            stop_search = True
                             break
                         scanned += 1
 
@@ -310,36 +326,40 @@ class FileService:
                                     content, _, _ = extract_file(
                                         path,
                                         200_000,
+                                        max_input_bytes=(
+                                            self.settings
+                                            .content_search_max_bytes
+                                        ),
                                     )
                                     matched = (
                                         query_folded
                                         in content.casefold()
                                     )
-                            except (
-                                OSError,
-                                ValueError,
-                                RuntimeError,
-                            ):
+                            except Exception:
                                 matched = False
 
                         if matched:
-                            results.append(
-                                self._metadata(alias, path)
-                            )
                             if len(results) >= bounded_max_results:
-                                stopped = True
+                                truncated = True
+                                stop_search = True
                                 break
 
-                    if stopped:
+                            try:
+                                metadata = self._metadata(alias, path)
+                            except OSError:
+                                continue
+                            results.append(metadata)
+
+                    if stop_search:
                         break
-                if stopped:
+                if stop_search:
                     break
 
             result = {
                 "query": query,
                 "results": results,
                 "scanned_files": scanned,
-                "truncated": stopped,
+                "truncated": truncated,
             }
 
         self.audit.record(
@@ -395,10 +415,19 @@ class FileService:
                 )
             )
 
-            content, truncated, extractor = extract_file(
-                path,
-                bounded_chars,
-            )
+            try:
+                content, truncated, extractor = extract_file(
+                    path,
+                    bounded_chars,
+                    max_input_bytes=self.settings.max_file_bytes,
+                )
+            except ByteMCPError:
+                raise
+            except Exception as exc:
+                raise UnsupportedFileError(
+                    f"Extraction failed for {path.name}: "
+                    f"{type(exc).__name__}"
+                ) from exc
 
             digest = hashlib.sha256()
             with path.open("rb") as handle:
@@ -414,6 +443,7 @@ class FileService:
                 **metadata,
                 "sha256": sha256,
                 "extractor": extractor,
+                "max_chars_applied": bounded_chars,
                 "content": content,
                 "content_truncated": truncated,
             }
