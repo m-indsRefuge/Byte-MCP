@@ -13,10 +13,10 @@ from tempfile import NamedTemporaryFile
 from byte_mcp.errors import OXEvidenceError
 from byte_mcp.ox.models import AttemptOutcome, ReviewState
 
-_REVIEW_ID = re.compile(r"OX-(\d{6,})")
-_ATTEMPT_ID = re.compile(r"(OX-\d{6,})-A(\d{3,})")
-_REVALIDATION_ID = re.compile(r"(OX-\d{6,})-RV(\d{3,})")
-_RESERVATION_ID = re.compile(r"\.OX-(\d{6,})\.reserve")
+_REVIEW_ID = re.compile(r"OX-(\d{6})")
+_ATTEMPT_ID = re.compile(r"(OX-\d{6})-A(\d{3})")
+_REVALIDATION_ID = re.compile(r"(OX-\d{6})-RV(\d{3})")
+_RESERVATION_ID = re.compile(r"\.OX-(\d{6})\.reserve")
 _RETRYABLE_OUTCOMES = frozenset(
     {
         AttemptOutcome.NOT_SENT.value,
@@ -119,6 +119,8 @@ class EvidenceStore:
                         ),
                         default=0,
                     )
+                    if maximum >= 999:
+                        raise OXEvidenceError("revalidation identity space is exhausted")
                     result = f"{review_id}-RV{maximum + 1:03d}"
                     (revalidations / result).mkdir()
                     return result
@@ -264,7 +266,7 @@ class EvidenceStore:
                     ]
                 )
                 candidate = maximum + 1
-                while True:
+                while candidate <= 999999:
                     review_id = f"OX-{candidate:06d}"
                     reservation = self._reservation_path(review_id)
                     try:
@@ -275,6 +277,9 @@ class EvidenceStore:
                         return review_id
                     except FileExistsError:
                         candidate += 1
+                raise OXEvidenceError("review identity space is exhausted")
+            except OXEvidenceError:
+                raise
             except (OSError, TypeError, ValueError):
                 raise OXEvidenceError("unable to allocate review identity") from None
 
@@ -296,6 +301,8 @@ class EvidenceStore:
                 ),
                 default=0,
             )
+            if maximum >= 999:
+                raise OXEvidenceError("attempt identity space is exhausted")
             return f"{review_id}-A{maximum + 1:03d}"
 
     def _append_event(self, review_id: str, event: Mapping[str, object]) -> None:
@@ -347,11 +354,11 @@ class EvidenceStore:
             elif event_type == "ATTEMPT_OUTCOME":
                 attempt_id = event.get("attempt_id")
                 outcome = event.get("outcome")
-                if not isinstance(attempt_id, str) or not _attempt_belongs_to_review(
-                    review_id, attempt_id
-                ) or outcome not in {
-                    item.value for item in AttemptOutcome
-                }:
+                if (
+                    not isinstance(attempt_id, str)
+                    or not _attempt_belongs_to_review(review_id, attempt_id)
+                    or outcome not in {item.value for item in AttemptOutcome}
+                ):
                     raise OXEvidenceError("review events are malformed")
                 matching = next(
                     (attempt for attempt in attempts if attempt["attempt_id"] == attempt_id), None
@@ -449,7 +456,7 @@ class EvidenceStore:
 
     @staticmethod
     def _require_review_id(review_id: str) -> None:
-        if _REVIEW_ID.fullmatch(review_id) is None:
+        if not isinstance(review_id, str) or _REVIEW_ID.fullmatch(review_id) is None:
             raise OXEvidenceError("review identity is invalid")
 
     @staticmethod
