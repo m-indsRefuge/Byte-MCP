@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from types import MappingProxyType
@@ -20,6 +21,7 @@ _VERIFICATION_FIELDS = (
     "recorded_at",
     "provenance",
 )
+_VERIFICATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +85,11 @@ def _json_value(value: object) -> object:
 def _canonical_json(value: object) -> bytes:
     try:
         encoded = json.dumps(
-            _json_value(value), ensure_ascii=False, separators=(",", ":"), sort_keys=True
+            _json_value(value),
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
         )
     except (TypeError, ValueError) as error:
         raise OXBundleError("bundle data must be canonical JSON") from error
@@ -163,6 +169,7 @@ def _verification_payload(
     if not verification:
         raise OXBundleError("verification evidence is mandatory")
     prepared: list[Mapping[str, object]] = []
+    seen_ids: set[str] = set()
     for record in verification:
         if not isinstance(record, Mapping) or any(
             field not in record for field in _VERIFICATION_FIELDS
@@ -172,6 +179,14 @@ def _verification_payload(
             raise OXBundleError("verification stdout and stderr must be strings")
         if not isinstance(record["exit_code"], int) or isinstance(record["exit_code"], bool):
             raise OXBundleError("verification exit_code must be an integer")
+        verification_id = record["id"]
+        if (
+            not isinstance(verification_id, str)
+            or _VERIFICATION_ID.fullmatch(verification_id) is None
+            or verification_id in seen_ids
+        ):
+            raise OXBundleError("verification ID must be a unique safe logical-path component")
+        seen_ids.add(verification_id)
         payload = dict(record)
         payload["sha256"] = sha256_json(payload)
         prepared.append(MappingProxyType({key: _freeze(value) for key, value in payload.items()}))

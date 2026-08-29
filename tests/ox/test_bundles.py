@@ -140,6 +140,46 @@ def test_definition_hash_and_bundle_limit_fail_closed(tmp_path):
         )
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_sha256_json_rejects_non_finite_numbers(value):
+    with pytest.raises(OXBundleError, match="canonical JSON"):
+        sha256_json({"metadata": value})
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_prepare_rejects_non_finite_verification_metadata(tmp_path, value):
+    _, base, target, definition, reader = _builder(tmp_path)
+    verification = _verification()
+    verification[0]["metadata"] = {"duration": value}
+
+    with pytest.raises(OXBundleError, match="canonical JSON"):
+        BundleBuilder(reader, max_bundle_bytes=100_000).prepare(
+            definition.subsystems["validation"], target, base, verification
+        )
+
+
+@pytest.mark.parametrize("verification_id", [42, "", ".", "..", "up/one", r"up\one", "x:y"])
+def test_prepare_rejects_unsafe_verification_id(tmp_path, verification_id):
+    _, base, target, definition, reader = _builder(tmp_path)
+    verification = _verification()
+    verification[0]["id"] = verification_id
+
+    with pytest.raises(OXBundleError, match="verification ID"):
+        BundleBuilder(reader, max_bundle_bytes=100_000).prepare(
+            definition.subsystems["validation"], target, base, verification
+        )
+
+
+def test_prepare_rejects_duplicate_verification_ids(tmp_path):
+    _, base, target, definition, reader = _builder(tmp_path)
+    verification = _verification() * 2
+
+    with pytest.raises(OXBundleError, match="verification ID"):
+        BundleBuilder(reader, max_bundle_bytes=100_000).prepare(
+            definition.subsystems["validation"], target, base, verification
+        )
+
+
 @pytest.mark.parametrize(
     "contract", ["BundleArtifact", "ManifestEntry", "ReviewManifest", "PreparedBundle"]
 )
