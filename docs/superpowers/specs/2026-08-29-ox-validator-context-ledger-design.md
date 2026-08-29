@@ -2,13 +2,13 @@
 
 ## Status
 
-Approved in conversation; consolidated and self-reviewed design specification. Pending Nolan's written-spec acceptance before implementation planning.
+Approved conversational architecture; consolidated and self-reviewed design specification. Pending Nolan's written-spec acceptance before implementation planning.
 
 ## Date
 
 2026-08-29
 
-## Scope
+## Purpose and scope
 
 This document is the architectural authority for adding OX external validation and the Validator Context Ledger (VCL) as a bounded subsystem inside Byte-MCP.
 
@@ -16,6 +16,30 @@ The design has two purposes:
 
 1. establish a rigorous external validation loop in which Byte remains the engineering owner and OX remains an independent external validator; and
 2. later evaluate whether controlled access to historical engineering evidence improves OX validation without destroying the value of a memoryless reviewer.
+
+The permanent engineering loop is:
+
+```text
+Nolan
+  ↓ project direction / acceptance
+Byte implementation + deterministic verification
+  ↓
+deterministic review packaging
+  ↓
+OX external validation
+  ↓
+Byte evidence-based adjudication
+  ↓
+remediation + deterministic verification
+  ↓
+OX revalidation
+  ↓
+Byte technical recommendation
+  ↓
+Nolan stage acceptance
+```
+
+Nolan is not the technical compiler or adjudicator of code-review findings. Byte owns that process end-to-end; Nolan remains the human authority over project direction and stage acceptance.
 
 The system must preserve a permanent COLD review path even if historical context later proves useful.
 
@@ -90,7 +114,7 @@ Semantic/vector indexes, if later introduced, are derived indexes only and can n
 
 # 2. Authority and threat model
 
-## Actors
+## Principals
 
 The system models five internal authority principals:
 
@@ -165,17 +189,7 @@ META does not adjudicate or alter engineering conclusions.
 
 ### VCL system
 
-`VCL_SYSTEM` is deterministic internal machinery for:
-
-- migrations;
-- bundle freezing;
-- mode scheduling;
-- validity checks;
-- dependency propagation;
-- backups;
-- protected-state transitions.
-
-It is never a model-facing caller.
+`VCL_SYSTEM` is deterministic internal machinery for migrations, bundle freezing, scheduling, validity checks, dependency propagation, backups, and protected-state transitions. It is never a model-facing caller.
 
 ## Threats addressed
 
@@ -203,25 +217,41 @@ The V1 threat model does not claim Byzantine protection against a malicious loca
 The VCL models durable validation events rather than conversational transcripts.
 
 ```text
-Review
- ├── ReviewBundle
- ├── ModeAssignment
- ├── Finding*
- │    ├── Evidence*
- │    ├── ReproductionArtifact*
- │    └── Adjudication
- │         └── Remediation*
- │              └── Revalidation*
- ├── ContextExposure*
- ├── ProtocolEvent*
- └── Probe?            [protected]
+ReviewCandidate
+ ├── Review*
+ │    ├── ReviewBundle
+ │    ├── ModeAssignment
+ │    ├── Finding*
+ │    │    ├── Evidence*
+ │    │    ├── ReproductionArtifact*
+ │    │    └── Adjudication
+ │    │         └── Remediation*
+ │    │              └── Revalidation*
+ │    ├── ContextExposure*
+ │    └── ProtocolEvent*
+ └── TwinReviewPair?       [experimental]
 
 ContextRecord*
  ├── ValidityAnchor*
  └── ProvenanceEdge*
 
-MetaEvaluation*        [protected]
+Probe*                     [protected]
+MetaEvaluation*            [protected]
 ```
+
+## ReviewCandidate
+
+A `ReviewCandidate` identifies the immutable engineering object being reviewed independently of any one execution.
+
+Candidate identity is derived from stable engineering inputs such as:
+
+- repository ID;
+- subsystem ID;
+- target Git revision, or frozen candidate identity for uncommitted work;
+- normalized candidate diff/file hashes where required;
+- review objective class.
+
+Equivalent transport/review retries reuse the same candidate and do not resample review mode.
 
 ## Review lifecycle
 
@@ -253,6 +283,8 @@ FAILED
 DEFERRED
 ```
 
+Detailed failure/recovery conditions such as `INCOMPLETE_VALIDATOR_RESPONSE`, `BUNDLE_INTEGRITY_FAILURE`, or `VALIDATOR_TRANSPORT_FAILURE` are **typed failure reasons/execution states**, not additional undeclared review-status values.
+
 Once a review reaches `BUNDLE_FROZEN`, its mode, candidate identity, target revision, and frozen bundle identity are immutable.
 
 ## Review bundle
@@ -272,7 +304,32 @@ Each bundle records:
 - source revision/candidate identity;
 - raw deterministic verification artifacts.
 
+For an independent discovery review, the deterministic packager must include the protocol-required engineering evidence rather than allowing Byte to hand-curate only favorable files.
+
+The baseline mandatory review evidence is:
+
+- current source for the bounded subsystem;
+- tests materially exercising that subsystem;
+- public interfaces/contracts and acceptance criteria;
+- relevant diff/candidate change set;
+- caller/callee or boundary signatures needed to reason across the subsystem edge;
+- build/test invocation information;
+- sufficient repository layout to orient the reviewer;
+- raw deterministic verification output.
+
+Optional evidence such as relevant Git history, blame, commit messages, or open issues is governed by review protocol and mode.
+
+For blind independent discovery, the bundle must **not** inject Byte's design rationale, Byte self-assessment, Byte interpretation of test results, or prior OX review responses unless the protocol explicitly defines an INFORMED/TARGETED context where those records are intentionally relevant.
+
+The packager may record assumptions OX cannot independently verify, but those assumptions must be identifiable as assumptions rather than evidence.
+
+Exact automatic bundle-expansion thresholds remain empirical and unset until Phase 1 review evidence exists.
+
 Large immutable payloads may live in the private artifact store; SQLite stores authoritative identity, metadata, and hashes.
+
+Mode assignment and authoritative bundle freeze are committed atomically before OX receives review material.
+
+One review has one authoritative frozen discovery bundle. Different frozen material creates a new review identity; revalidation is represented through linked review/revalidation records rather than mutating the original bundle.
 
 ## Finding
 
@@ -419,6 +476,7 @@ Migration files are immutable once released. A historical migration hash mismatc
 The implementation should provide strongly constrained equivalents of:
 
 ```text
+review_candidates
 reviews
 review_bundles
 bundle_entries
@@ -438,10 +496,12 @@ validity_anchor_files
 provenance_edges
 context_retrievals
 context_retrieval_results
+context_exposures
 mode_assignments
 protocol_events
 validator_executions
 operation_journal
+twin_review_pairs          [dormant until experimental phase]
 ```
 
 Protected META storage includes equivalents of:
@@ -456,6 +516,8 @@ validator calibration / protected research records
 ```
 
 Exact physical table names may change during implementation if the resulting schema preserves this domain model and invariants.
+
+The adjudication persistence model must store `technical_outcome` and `disposition` separately. `ACCEPT_RISK` is not a technical truth state.
 
 ## Identifiers
 
@@ -502,6 +564,8 @@ META
 ```
 
 A review never transitions between modes. A follow-up under a different mode is a new linked review.
+
+Mode assignment happens before bundle exposure and is persisted/frozen with the authoritative review input.
 
 ## COLD
 
@@ -660,9 +724,11 @@ record was exposed
 record materially informed a finding
 ```
 
-Every context record exposed to OX is provenance-bearing.
+Every context record exposed to OX is provenance-bearing, whether exposure occurs through initial context construction, recall, lookup, or targeted INFORMED preparation.
 
 Findings that materially rely on VCL context declare the relevant context IDs and dependency strength.
+
+Retrieval is read-only with respect to substantive context meaning. Popularity, rank, or retrieval count cannot increase a record's authority.
 
 ---
 
@@ -702,6 +768,8 @@ Changed anchors make a proposition stale unless it is explicitly revalidated. Si
 Formal review candidates must have immutable identities. Uncommitted work must be frozen through an artifact/candidate identity such as base revision + normalized diff + file hashes rather than treated as a mutable directory state.
 
 Git validity access is read-only: resolve commit, read file at commit, list changed paths, diff revisions, inspect history. It does not require checkout/reset/merge/push.
+
+Renames are conservative in V1: a moved anchor becomes stale unless explicitly revalidated; rename heuristics cannot silently grant current status.
 
 ---
 
@@ -763,6 +831,8 @@ Remediation → HISTORICAL_BASIS_REVIEW_REQUIRED
 
 The graph expresses dependence, not automatic logical falsity.
 
+A finding closeout package must be reproducible from linked review metadata, frozen-bundle manifest, original finding, evidence, reproduction artifacts, adjudication, remediation attempts, revalidations, exposed context IDs, protocol events, and hashes.
+
 ---
 
 # 10. Actor-facing tools and API contracts
@@ -816,6 +886,8 @@ OX repository operations are review-scoped and read-only.
 
 A clean review must explicitly complete with `NO_FINDINGS`; silence is never interpreted as a clean review.
 
+Finding submission schema requires claim, affected scope, evidence references where available, reproduction recipe, disproof condition, category, severity, and confidence.
+
 ## META operations
 
 META operations are not registered in the normal Byte-facing MCP catalog. Protected operations may include:
@@ -844,6 +916,8 @@ Opaque IDs do not confer authority. Every operation checks:
 - lifecycle state.
 
 Effectful operations support idempotent retry through request/idempotency identifiers. Same key + same payload returns the original committed result; same key + different payload is an idempotency conflict.
+
+All model-facing failures use bounded typed error codes rather than raw Python tracebacks.
 
 ---
 
@@ -887,6 +961,8 @@ system()
 Engineering and validator connections deny protected META tables below the service layer where practical using SQLite connection authorization hooks/policies.
 
 Row-level review scope remains enforced in the application/service layer.
+
+No code outside the connection factory should scatter arbitrary `sqlite3.connect(...)` calls through VCL modules.
 
 ## Secrets
 
@@ -957,6 +1033,8 @@ A deliberately abandoned candidate before review execution does not automaticall
 
 A later policy may also set a maximum permitted gap between valid COLD observations; its empirical value is not fixed in this design.
 
+A valid completed COLD observation requires frozen bundle identity, actual OX exposure, explicit validator completion (`FINDINGS_SUBMITTED`, `NO_FINDINGS`, or `INCONCLUSIVE` as applicable), zero historical engineering exposure, and no disqualifying protocol contamination.
+
 ---
 
 # 13. Twin-review experiments
@@ -979,6 +1057,8 @@ The two arms run in separate OX sessions with no conversational continuity.
 Execution order may be scheduler-controlled to reduce first/second-run bias.
 
 Mode mapping is hidden from the meta-evaluator and from Byte during formal engineering adjudication until the pre-unblind result is frozen.
+
+An incomplete/failed arm does not produce a valid mode-comparison result. A retry retains the same frozen candidate, bundle, and assigned arm rather than resampling the experiment.
 
 ---
 
@@ -1028,6 +1108,10 @@ Incidental real findings are adjudicated normally and are not false positives me
 
 Canary scoring distinguishes validator detection from Byte adjudication correctness.
 
+Template definitions used in scored evaluation are immutable/versioned, may enter cooldown/retirement, and should cover diverse defect mechanisms rather than repeatedly training the system against one recognizable class.
+
+META-derived knowledge of OX weaknesses cannot be fed silently back into ordinary OX prompts. Any deliberate protocol improvement creates a new version/comparison regime.
+
 ---
 
 # 15. Blinded meta-evaluation
@@ -1072,6 +1156,8 @@ One-to-many and many-to-one clusters are permitted when sessions decompose one u
 
 Ambiguity remains explicit rather than being forced into whichever classification favors a mode.
 
+Mechanical/structured matching runs first where possible. A semantic evaluator is used only for unresolved candidates and is asked the narrow same-defect question rather than which arm is better.
+
 ## Metrics
 
 Primary dimensions include:
@@ -1092,6 +1178,8 @@ Phase 1/2 should not collapse performance into a single composite score.
 A formal comparison may eventually be summarized as `COLD superior`, `ASSISTED superior`, `NO MATERIAL DIFFERENCE`, `MIXED`, or `INCONCLUSIVE`, but only from pre-registered multidimensional rules.
 
 Adjudication inconsistencies across findings already matched as the same defect must be reconciled or explicitly remain unresolved **before** unblinding.
+
+Post-unblind analysis is append-only and cannot replace the pre-unblind frozen result.
 
 ---
 
@@ -1115,9 +1203,11 @@ Retry is not a permissive response to trust failures such as artifact mismatch, 
 
 If a mutation commits but the response is lost, retry with the same request ID returns the original authoritative result and does not create a duplicate.
 
-If OX submits findings and transport then fails before `review_complete`, committed findings remain evidence but the review is `INCOMPLETE_VALIDATOR_RESPONSE` and cannot count as a valid completed COLD/twin observation.
+If OX submits findings and transport then fails before `review_complete`, committed findings remain evidence but the review remains non-complete. Recovery either resumes the existing execution or records `status=FAILED` with a typed reason such as `INCOMPLETE_VALIDATOR_RESPONSE`; that token is not a separate review-status value. The incomplete review cannot count as a valid completed COLD/twin observation.
 
 No silence is interpreted as `NO_FINDINGS`.
+
+Durable `validator_executions` distinguish states such as created, submitted, response-in-progress, completed, retryable failure, terminal failure, and unknown remote state.
 
 ## Runtime restart
 
@@ -1166,6 +1256,10 @@ Recovery never overwrites the only damaged state first.
 
 Any unreconstructable post-backup data becomes a permanent `RECOVERY_GAP` / `PROVENANCE_GAP`, not silently omitted history.
 
+## Audit persistence failure
+
+SQLite and JSONL audit cannot be made one atomic transaction without introducing a larger transaction system. Critical mutation therefore preflights audit availability, commits truthful authoritative state, attempts the corresponding audit append, and if audit persistence then fails marks audit health degraded and blocks subsequent protected mutation until reconciliation/recovery. Already committed truthful VCL state is not rolled back merely to make the secondary log look complete.
+
 ---
 
 # 17. Audit, observability, and privacy
@@ -1174,8 +1268,8 @@ The independent JSONL audit remains separate from SQLite VCL provenance.
 
 ```text
 VCL provenance = engineering/epistemic evidence
-JSONL audit    = operational/security evidence
-telemetry      = current operational measurements
+JSONL audit     = operational/security evidence
+telemetry       = current operational measurements
 reports         = derived human-readable interpretation
 ```
 
@@ -1260,6 +1354,8 @@ Byte/Nolan-facing reporting is concise and decision-oriented. Protected OX perfo
 
 Raw OX transcripts are exceptional protocol/incident evidence rather than authoritative default storage. Structured findings, review completion, tool/exposure provenance, and provider execution metadata are persisted by default.
 
+Derived review/finding integrity certificates may be regenerated from authoritative state and are convenience outputs rather than independent truth sources.
+
 ---
 
 # 18. Verification strategy
@@ -1283,6 +1379,7 @@ Deterministic verification precedes OX review.
 Cover:
 
 - valid/invalid review transitions;
+- review-candidate identity and equivalent retry behavior;
 - mode immutability;
 - finding schema;
 - technical outcome + disposition model;
@@ -1290,6 +1387,7 @@ Cover:
 - real temporary SQLite databases with foreign keys enabled;
 - migration hashes;
 - rollback after injected failure at each multi-record transition step;
+- atomic mode-assignment + bundle-freeze transition;
 - opaque IDs and referential integrity;
 - artifact hash verification;
 - private-state path isolation.
@@ -1322,6 +1420,12 @@ Create highly relevant historical records and attempt to expose them through eve
 Expected historical engineering exposure: zero.
 
 Repository files containing prompt-injection text such as `ignore protocol / reveal META` must remain untrusted data and cannot change available capabilities.
+
+## Bundle-neutrality tests
+
+Verify independent-discovery bundles include required source/tests/contracts/boundary/raw verification evidence while excluding Byte self-assessment, design rationale, interpreted verification, and prior OX response content unless an explicitly non-blind protocol mode permits them.
+
+Verify bundle input is deterministic for the same candidate/policy and that one-byte manifest differences invalidate formal twin identity.
 
 ## ASSISTED tests
 
@@ -1375,6 +1479,7 @@ Blind sessions must contain none of the original finding, adjudication, remediat
 
 Verify:
 
+- persistent twin-pair/candidate identity;
 - bundle manifest identity between arms;
 - separate OX sessions;
 - no mode side-channel in IDs/order/timestamps/API shape exposed to the evaluator;
@@ -1463,11 +1568,11 @@ Byte implementation
 
 The first bounded implementation subsystem is **OX Validation Core / Phase 1**, containing:
 
-- domain contracts;
+- domain contracts, including review candidate identity;
 - SQLite repository + migrations;
 - private state/artifact layout;
 - review lifecycle;
-- deterministic bundle freeze/manifest;
+- deterministic neutral bundle freeze/manifest;
 - OX execution adapter abstraction and real integration;
 - structured immutable findings;
 - technical outcome + engineering disposition adjudication;
@@ -1500,6 +1605,12 @@ Phase 1 may accumulate accepted/anchored future engineering context records, but
 Historic pre-VCL reviews may be recorded as `LEGACY_COLD` where evidence can be reconstructed. They are useful observations but do not automatically meet formal experimental standards.
 
 `FORMAL_COLD` requires frozen candidate/bundle identity, protocol version, explicit completion, structured findings/no-findings record, zero historical exposure, audit reconciliation, and review-integrity evidence.
+
+### Phase 1 canary sequencing
+
+Phase 1A uses public/non-secret dry-run probes only to verify the canary framework.
+
+Phase 1B may begin a small protected scored corpus only after probe isolation, mechanical ground truth, metadata indistinguishability, protected access controls, and contamination detection pass their specific gate. Hidden scored probes are therefore part of Phase 1 calibration, but are not a blocker for the very first formal COLD OX review.
 
 ### First milestone
 
@@ -1593,7 +1704,7 @@ Hidden scored probes activate only after their own gate.
 
 The following invariants are architectural requirements. Implementation names may vary, but behavior may not weaken them without an explicitly approved design revision.
 
-1. **Validator state isolation:** no supported Byte-MCP filesystem capability may resolve, search, fetch, or expose the VCL DB, WAL/SHM, backups, protected artifacts, or live-data migrations/exports.
+1. **Validator state isolation:** no supported Byte-MCP filesystem capability may resolve, search, fetch, or expose the VCL DB, WAL/SHM, backups, protected artifacts, or protected live-data exports.
 2. **Authorization ambiguity fails closed.**
 3. **Historical evidentiary meaning is not edited in place; corrections create linked records.**
 4. **Frozen input identity:** frozen bundle, mode, target revision/candidate, and manifest cannot change.
@@ -1711,21 +1822,35 @@ The following invariants are architectural requirements. Implementation names ma
 
 ---
 
-# 23. Acceptance criteria for the written design
+# 23. Written-design self-review result
 
-Before implementation planning, this specification must be reviewed for:
+The consolidated specification has been checked against the approved conversational architecture and current Byte-MCP constraints.
 
-- consistency between domain model and schema model;
-- final corrected `technical_outcome` + `disposition` adjudication semantics;
-- no remaining `ACCEPTED_RISK` truth-state usage;
-- consistent mode names and lifecycle states;
-- clear Phase 1 versus Phase 2/3 boundaries;
-- no accidental requirement that Nolan perform technical adjudication;
-- no Basic Memory ingestion route;
-- no public OX/META capability leak through the ordinary Byte-facing MCP catalog;
-- no repository-local authoritative VCL state;
-- no hidden assumption that semantic/vector search is required in Phase 1;
-- no claim that SQLite provides distributed or Byzantine security;
-- explicit empirical parameters remaining unset.
+Self-review corrections incorporated before human review:
 
-After Nolan accepts the written design, the next action is to produce an implementation plan for **OX Validation Core / Phase 1**. Production code begins only from that approved plan.
+1. added explicit persistent `ReviewCandidate` identity and `twin_review_pairs`/`context_exposures` schema concepts so retry/scheduler/twin requirements have durable domain objects;
+2. normalized `INCOMPLETE_VALIDATOR_RESPONSE` as a typed failure reason/execution condition rather than an undeclared review lifecycle status;
+3. made independent-review bundle neutrality explicit: required raw source/test/contract/boundary evidence is packaged deterministically while Byte design rationale, self-assessment, interpreted verification, and prior OX responses are excluded unless an intentionally informed protocol stage permits them;
+4. made atomic mode-assignment + bundle-freeze ordering explicit;
+5. carried the final `technical_outcome` + `disposition` adjudication model through persistence and verification sections;
+6. restored explicit Phase 1A dry-run and Phase 1B protected-canary sequencing.
+
+No architectural reversal was required by self-review.
+
+## Acceptance checklist
+
+Before implementation planning, human review should confirm:
+
+- domain and persistence models are consistent;
+- `ACCEPT_RISK` appears only as engineering disposition, never technical truth;
+- mode names and review lifecycle states are consistent;
+- Phase 1 versus Phase 2/3 boundaries are explicit;
+- Nolan is not made responsible for technical adjudication;
+- Basic Memory has no VCL ingestion route;
+- OX/META capabilities are not exposed through the ordinary Byte-facing tool catalog;
+- authoritative VCL state is outside approved filesystem roots;
+- semantic/vector retrieval is not a Phase 1 requirement;
+- SQLite is not represented as distributed/Byzantine security;
+- empirical policy parameters remain explicitly unset.
+
+After Nolan accepts this written design, the next action is to produce the implementation plan for **OX Validation Core / Phase 1**. Production code begins only from that approved plan.
