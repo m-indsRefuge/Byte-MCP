@@ -70,3 +70,22 @@ Describe 'Launcher configuration contract' {
             Should -Throw '*Encrypted tunnel Runtime API key is missing*'
     }
 }
+
+Describe 'Launcher state contract' {
+    BeforeAll {
+        . "$PSScriptRoot/../../scripts/Launcher.Common.ps1"
+    }
+
+    It 'serializes state without secret-bearing fields' {
+        $state = New-LauncherState -RepoPath 'C:\repo' -Mode 'background' `
+            -ServerPid 100 -ServerExecutable 'C:\Python\python.exe' -ServerStartedAtUtc '2026-08-29T10:00:00Z' `
+            -TunnelPid 200 -TunnelExecutable 'C:\OpenAI\tunnel-client.exe' -TunnelStartedAtUtc '2026-08-29T10:00:01Z'
+
+        ($state | ConvertTo-Json -Depth 5) | Should -Not -Match 'API_KEY|credential|secret|content|query|reference'
+        $state.schema_version | Should -Be 1
+        $state.root_profile | Should -Be 'projects'
+        $state.tunnel_profile | Should -Be 'byte-mcp-local'
+        $state.server.pid | Should -Be 100
+        $state.tunnel.pid | Should -Be 200
+    }
+}
