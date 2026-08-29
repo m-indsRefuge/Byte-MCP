@@ -58,7 +58,7 @@ class WolframSettings:
         )
 
     @classmethod
-    def load(cls, repo_root: Path) -> "WolframSettings":
+    def load(cls, repo_root: Path) -> WolframSettings:
         app_id = os.getenv("WOLFRAM_APP_ID")
         if app_id is not None:
             app_id = app_id.strip() or None
