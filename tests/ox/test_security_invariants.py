@@ -15,7 +15,13 @@ from byte_mcp.ox.evidence import EvidenceStore
 from byte_mcp.ox.service import OXReviewService
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import commit_files, create_repository
-from tests.ox.test_review_service import FakeAudit, prepare, verification, write_registry
+from tests.ox.test_review_service import (
+    FakeAudit,
+    RecordingClient,
+    prepare,
+    verification,
+    write_registry,
+)
 
 SECRET = "SENTINEL-GATEWAY-KEY"
 
@@ -57,6 +63,16 @@ def make_security_service(
     store = EvidenceStore(settings.evidence_root)
     service = OXReviewService(settings, store, client, FakeAudit())
     return service, store, repository_path, base, target, registry_path
+
+
+def establish_review(tmp_path: Path):
+    client = RecordingClient()
+    service, store, repository_path, base, target, registry = make_security_service(
+        tmp_path, client
+    )
+    proposal = prepare(service, base, target)
+    service.transmit_review(proposal["review_id"])
+    return service, store, repository_path, base, target, registry, proposal["review_id"]
 
 
 def assert_secret_absent(root: Path, *values: object) -> None:
@@ -101,6 +117,78 @@ def test_configured_gateway_key_in_review_material_fails_closed_before_persisten
         )
 
     assert client.calls == 0
+    assert_secret_absent(store._root)
+
+
+def test_configured_gateway_key_in_continuation_fails_before_thread_or_provider(
+    tmp_path: Path,
+) -> None:
+    service, store, _, _, _, _, review_id = establish_review(tmp_path)
+    before = service.get_review(review_id, view="thread")
+    boundary = BoundaryClient()
+    service._client = boundary
+
+    with pytest.raises(OXBundleError):
+        service.continue_message(review_id, f"Do not persist this credential: {SECRET}")
+
+    assert boundary.calls == 0
+    assert service.get_review(review_id, view="thread") == before
+    assert_secret_absent(store._root)
+
+
+def test_configured_gateway_key_in_adjudication_fails_before_local_persistence(
+    tmp_path: Path,
+) -> None:
+    service, store, _, _, _, _, review_id = establish_review(tmp_path)
+    before = service.get_review(review_id, view="adjudication")
+
+    with pytest.raises(OXBundleError):
+        service.adjudicate(
+            review_id,
+            [
+                {
+                    "finding_id": f"{review_id}-F001",
+                    "status": "CONFIRMED",
+                    "evidence": f"Credential accidentally copied: {SECRET}",
+                    "reasoning_summary": "Do not persist the credential.",
+                }
+            ],
+        )
+
+    assert service.get_review(review_id, view="adjudication") == before
+    assert_secret_absent(store._root)
+
+
+@pytest.mark.parametrize("location", ["verification", "source"])
+def test_configured_gateway_key_in_revalidation_fails_before_revalidation_persistence(
+    tmp_path: Path,
+    location: str,
+) -> None:
+    service, store, repository_path, _, target, _, review_id = establish_review(tmp_path)
+    records = verification()
+    remediation = commit_files(
+        repository_path,
+        {"src/alpha.py": b"value = 'remediated'\n"},
+        b"remediation",
+    )
+    if location == "verification":
+        records[0]["stderr"] = f"credential={SECRET}\n"
+    else:
+        remediation = commit_files(
+            repository_path,
+            {"src/credential_leak.py": f"TOKEN = {SECRET!r}\n".encode()},
+            b"revalidation credential leak",
+        )
+
+    with pytest.raises(OXBundleError):
+        service.prepare_revalidation(
+            review_id,
+            target_commit=remediation,
+            base_commit=target,
+            verification=records,
+        )
+
+    assert service.get_review(review_id, view="revalidation")["revalidations"] == []
     assert_secret_absent(store._root)
 
 
@@ -226,13 +314,10 @@ def test_unknown_outcome_retry_and_revalidation_require_renewed_approval(tmp_pat
         service.retry_review(proposal["review_id"], renewed_approval=False)
     assert client.calls == 1
 
-    # Establish a reviewed parent using a separate deterministic service/evidence root.
     safe_client = BoundaryClient()
     second_root = tmp_path / "second"
     service2, _, repository2, base2, target2, _ = make_security_service(second_root, safe_client)
     proposal2 = prepare(service2, base2, target2)
-    # Revalidation cannot be prepared until the parent is reviewed, so an unapproved
-    # revalidation attempt must fail at the lifecycle boundary with zero provider calls.
     remediation = commit_files(
         repository2,
         {"src/alpha.py": b"value = 'remediated'\n"},
