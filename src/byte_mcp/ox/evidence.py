@@ -165,12 +165,11 @@ class EvidenceStore:
         if outcome_value not in {item.value for item in AttemptOutcome}:
             raise OXEvidenceError("attempt outcome is invalid")
         with self._lock_for(review_id):
-            review = self._reconstruct(review_id)
-            self._reject_recovered_review(review)
-            if not any(attempt["attempt_id"] == attempt_id for attempt in review["attempts"]):
-                raise OXEvidenceError("attempt identity is unknown")
-            if review["state"] != ReviewState.TRANSMITTING.value:
-                raise OXEvidenceError("review is not transmitting")
+            try:
+                review = self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to record attempt outcome") from None
+            self._require_current_transmitting_attempt(review, attempt_id)
             self._append_event(
                 review_id,
                 {
@@ -203,9 +202,10 @@ class EvidenceStore:
         self._require_attempt_id(review_id, attempt_id)
         with self._lock_for(review_id):
             try:
-                self._ensure_writable_review(review_id)
+                review = self._ensure_writable_review(review_id)
             except (OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to persist provider response") from None
+            self._require_current_transmitting_attempt(review, attempt_id)
             try:
                 self._write_immutable_json(
                     self._review_dir(review_id) / "responses" / f"{attempt_id}.json", response
@@ -395,8 +395,22 @@ class EvidenceStore:
         except (OSError, TypeError, ValueError):
             raise OXEvidenceError("unable to verify manifest digest") from None
 
-    def _ensure_writable_review(self, review_id: str) -> None:
-        self._reject_recovered_review(self._reconstruct(review_id))
+    def _ensure_writable_review(self, review_id: str) -> dict[str, object]:
+        review = self._reconstruct(review_id)
+        self._reject_recovered_review(review)
+        return review
+
+    @staticmethod
+    def _require_current_transmitting_attempt(
+        review: Mapping[str, object], attempt_id: str
+    ) -> None:
+        attempts = review["attempts"]
+        if not any(attempt["attempt_id"] == attempt_id for attempt in attempts):
+            raise OXEvidenceError("attempt identity is unknown")
+        if not attempts or attempts[-1]["attempt_id"] != attempt_id:
+            raise OXEvidenceError("attempt is not the current transmission")
+        if review["state"] != ReviewState.TRANSMITTING.value:
+            raise OXEvidenceError("attempt is not currently transmitting")
 
     @staticmethod
     def _reject_recovered_review(review: Mapping[str, object]) -> None:
