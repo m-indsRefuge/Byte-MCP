@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 from dulwich import patch
 from dulwich.errors import NotGitRepository
+from dulwich.object_store import iter_tree_contents
 from dulwich.objects import Commit
 from dulwich.repo import Repo
 
@@ -165,7 +166,7 @@ class GitRepository:
         return candidate
 
     def _tree_entries(self, commit: Commit):
-        return self.repo.object_store.iter_tree_contents(commit.tree)
+        return iter_tree_contents(self.repo.object_store, commit.tree)
 
     @staticmethod
     def _entry_path(entry) -> str:
