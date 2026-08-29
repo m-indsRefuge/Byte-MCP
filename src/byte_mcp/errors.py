@@ -1,8 +1,12 @@
 """Domain errors for Byte-MCP."""
 
 
-class ByteMCPError(RuntimeError):
+class ByteMCPError(Exception):
     """Base error for expected Byte-MCP failures."""
+
+
+class AuditError(ByteMCPError):
+    """Raised when the configured audit trail cannot be persisted."""
 
 
 class AccessDeniedError(ByteMCPError):
