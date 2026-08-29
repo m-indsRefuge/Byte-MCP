@@ -10,6 +10,7 @@ from byte_mcp.errors import (
     OXApprovalError,
     OXBundleError,
     OXEvidenceError,
+    OXFindingValidationError,
     OXRepositoryError,
     OXScopeError,
     OXTransportError,
@@ -79,6 +80,30 @@ class RecordingClient:
         return ProviderResult(
             content=content,
             usage=ProviderUsage(20, 10, 30, 4),
+            response_id=raw["id"],
+            model=raw["model"],
+            raw_response=raw,
+        )
+
+
+class MalformedClient(RecordingClient):
+    def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        self.calls.append(
+            {
+                "messages": [dict(message) for message in messages],
+                "json_mode": json_mode,
+                "attempt_id": attempt_id,
+            }
+        )
+        raw = {
+            "id": f"response-{attempt_id}",
+            "model": "zai/glm-5.3-flash",
+            "choices": [{"message": {"role": "assistant", "content": "not-json"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return ProviderResult(
+            content="not-json",
+            usage=ProviderUsage(1, 1, 2, 0),
             response_id=raw["id"],
             model=raw["model"],
             raw_response=raw,
@@ -186,6 +211,14 @@ def prepare(service: OXReviewService, base: str, target: str) -> dict[str, objec
     )
 
 
+def review_dir(store: EvidenceStore, review_id: str) -> Path:
+    return store._root / "reviews" / review_id
+
+
+def read_jsonl(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
 def test_prepare_persists_digest_bound_proposal_and_never_calls_provider(tmp_path) -> None:
     service, store, _, base, target, _ = make_service(tmp_path, FailIfCalledClient())
 
@@ -279,16 +312,38 @@ def test_transmit_persists_response_findings_and_usage(tmp_path) -> None:
     assert result["findings"][0]["finding_id"] == "OX-000001-F001"
     review = store.get_review("OX-000001")
     assert review["attempts"][-1]["outcome"] == "COMPLETED"
-    assert review["attempts"][-1]["usage"] == {
-        "input_tokens": 20,
-        "output_tokens": 10,
-        "total_tokens": 30,
-        "cached_input_tokens": 4,
-    }
-    thread = store.read_thread("OX-000001", "initial")
+    directory = review_dir(store, "OX-000001")
+    thread = read_jsonl(directory / "threads" / "initial.jsonl")
     assert [message["role"] for message in thread] == ["system", "user", "assistant"]
-    response = store.read_provider_response("OX-000001", "OX-000001-A001")
+    response = json.loads(
+        (directory / "responses" / "OX-000001-A001.json").read_text(encoding="utf-8")
+    )
     assert response["id"] == "response-OX-000001-A001"
+    assert response["usage"] == {
+        "prompt_tokens": 20,
+        "completion_tokens": 10,
+        "total_tokens": 30,
+        "prompt_tokens_details": {"cached_tokens": 4},
+    }
+    attempt = json.loads(
+        (directory / "attempts" / "OX-000001-A001.json").read_text(encoding="utf-8")
+    )
+    assert attempt["manifest_sha256"] == proposal["manifest_sha256"]
+    assert len(attempt["history_sha256"]) == 64
+
+
+def test_malformed_findings_fail_only_after_raw_response_is_durable(tmp_path) -> None:
+    client = MalformedClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    with pytest.raises(OXFindingValidationError):
+        service.transmit_review(proposal["review_id"])
+
+    directory = review_dir(store, "OX-000001")
+    assert (directory / "responses" / "OX-000001-A001.json").is_file()
+    assert (directory / "findings" / "FINDINGS_INVALID-OX-000001-A001.json").is_file()
+    assert store.get_review("OX-000001")["state"] == ReviewState.REVIEWED.value
 
 
 def test_changed_scope_invalidates_approval_before_provider(tmp_path) -> None:
@@ -297,7 +352,7 @@ def test_changed_scope_invalidates_approval_before_provider(tmp_path) -> None:
     proposal = prepare(service, base, target)
     write_registry(registry_path, repository_path, extra_context="missing-new-context.md")
 
-    with pytest.raises((OXScopeError, OXBundleError, OXRepositoryError)):
+    with pytest.raises((OXScopeError, OXBundleError, OXRepositoryError, OXApprovalError)):
         service.transmit_review(proposal["review_id"])
 
     assert client.calls == []
