@@ -41,8 +41,8 @@ Each findings array item must contain exactly these fields:
 "disproof_condition":"string","recommended_investigation":"string"}
 
 confidence must be a JSON number from 0 through 1. Every other finding value must be one non-empty
-JSON string; evidence must be one JSON string, not an array. Do not add IDs, titles, summaries,
-kinds, uncertainty fields, repository metadata, or any other top-level or finding fields.
+JSON string; evidence must be one JSON string, not an array.
+Do not add IDs, titles, summaries, kinds, uncertainty fields, repository metadata, or other fields.
 Return {"protocol_version":"ox-findings-v1","findings":[]} when there are no findings.
 Do not request tools, execution, hidden reasoning, filesystem access, or material outside the
 supplied review packet."""
