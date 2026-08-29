@@ -4,6 +4,15 @@ All notable Byte-MCP changes are documented here.
 
 ## Unreleased
 
+### Wolfram LLM co-engineer — implementation in validation
+
+- Added a separately governed `wolfram_query` capability backed by the fixed Wolfram|Alpha LLM API route.
+- Added bounded input/output handling, deny-first secret screening, machine-path sanitization, typed provider failures, and zero automatic retries.
+- Added metadata-only audit and conservative UTC-month quota accounting without caching provider result content.
+- Added optional Windows user-bound DPAPI storage for the Wolfram AppID and child-only launcher injection; missing Wolfram credentials do not block Byte-MCP core startup.
+- Added a fixed 30-task qualification campaign and score-only harness. Broad Wolfram review tooling remains disabled until live evidence justifies a separate approved implementation cycle.
+- Preserved the invariant that OX and Wolfram never communicate directly; Byte remains the only mediator.
+
 ### External review hardening
 
 - Hardened secret denial so secret/credential stems and sensitive suffixes remain blocked through ordinary and multi-suffix filenames.

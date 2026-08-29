@@ -46,10 +46,7 @@ def _read_scores(path: Path, fixture_hash: str) -> list[QualificationScore]:
         record = json.loads(line)
         if record.get("fixture_sha256") != fixture_hash or record.get("follow_up") is True:
             continue
-        score_fields = {
-            key: record.get(key)
-            for key in QualificationScore.__dataclass_fields__
-        }
+        score_fields = {key: record.get(key) for key in QualificationScore.__dataclass_fields__}
         scores.append(QualificationScore(**score_fields))
     return scores
 
@@ -132,16 +129,21 @@ def command_summary(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Score the fixed Wolfram LLM API campaign.")
+def _add_common_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--campaign", default=str(DEFAULT_CAMPAIGN))
     parser.add_argument("--scores", default=str(_default_scores()))
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Score the fixed Wolfram LLM API campaign.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     listing = sub.add_parser("list")
+    _add_common_paths(listing)
     listing.set_defaults(func=command_list)
 
     record = sub.add_parser("record")
+    _add_common_paths(record)
     record.add_argument("task_id")
     for name in (
         "correctness",
@@ -167,6 +169,7 @@ def _parser() -> argparse.ArgumentParser:
     record.set_defaults(func=command_record)
 
     summary = sub.add_parser("summary")
+    _add_common_paths(summary)
     summary.add_argument("--byte-plus-wolfram-improved", action="store_true")
     summary.set_defaults(func=command_summary)
     return parser
