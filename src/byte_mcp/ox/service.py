@@ -3,9 +3,9 @@
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import asdict
 from datetime import UTC, datetime
-from pathlib import Path
 
 from byte_mcp.errors import (
     OXApprovalError,
@@ -28,7 +28,7 @@ from byte_mcp.errors import (
 
 from .bundles import BundleBuilder, PreparedBundle
 from .evidence import EvidenceStore
-from .models import AttemptOutcome, Finding, ProviderResult, ReviewState
+from .models import AttemptOutcome, ProviderResult, ReviewState
 from .protocol import build_initial_messages, parse_findings
 from .repositories import GitRepository, validate_ox_local_config
 from .settings import OXSettings
@@ -398,14 +398,12 @@ class OXReviewService:
         self._audit_attempt(review_id, attempt_id, manifest_sha256, outcome)
 
     def _record_not_sent(self, review_id: str, attempt_id: str) -> None:
-        try:
+        with suppress(OXEvidenceError):
             self._evidence.record_attempt_outcome(
                 review_id,
                 attempt_id,
                 AttemptOutcome.NOT_SENT,
             )
-        except OXEvidenceError:
-            pass
 
     def _audit_attempt(
         self,
