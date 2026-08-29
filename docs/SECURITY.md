@@ -234,6 +234,8 @@ Detailed OX evidence is separate from the reviewed repository and from the compa
 
 The location may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`.
 
+The OX `EvidenceStore` is intentionally single-process. Its in-process locks make concurrent calls deterministic within one Byte-MCP process; multi-process use of the same evidence root is unsupported and separate processes must use separate evidence roots.
+
 OX evidence records prepared review identity, manifest, bundle, attempt identity, native conversation messages, provider responses, validated findings, adjudication events, and revalidation evidence. OX statements are never rewritten into Byte conclusions; adjudication is stored separately so provenance remains explicit.
 
 The public retrieval surface is bounded to seven views: `summary`, `findings`, `thread`, `manifest`, `adjudication`, `attempts`, and `revalidation`. Returned material passes through the configured-credential guard before crossing the MCP boundary.
