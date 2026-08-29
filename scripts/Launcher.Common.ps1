@@ -623,7 +623,7 @@ function Start-ByteMcpBackgroundStack {
         Remove-Item -LiteralPath $Paths.StateFile -Force
     }
 
-    $conflicts = Get-LauncherPortConflicts
+    $conflicts = @(Get-LauncherPortConflicts)
     if ($conflicts.Count -gt 0) {
         $ports = ($conflicts | ForEach-Object { $_.LocalPort } | Sort-Object -Unique) -join ', '
         throw "Unmanaged launcher port conflict detected on port(s): $ports."
