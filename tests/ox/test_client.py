@@ -79,7 +79,12 @@ def test_complete_posts_one_fixed_request_and_preserves_safe_response_evidence()
     assert result.content == "The packet is reviewable."
     assert result.response_id == "chatcmpl-123"
     assert result.model == "zai/glm-5.3-flash"
-    assert result.usage == ProviderUsage(input_tokens=7, output_tokens=3)
+    assert result.usage == ProviderUsage(
+        input_tokens=7,
+        output_tokens=3,
+        total_tokens=10,
+        cached_input_tokens=1,
+    )
     assert result.raw_response == SUCCESS_BODY
     assert SECRET not in repr(client)
     assert SECRET not in repr(result)
