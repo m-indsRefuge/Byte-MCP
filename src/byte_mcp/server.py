@@ -268,6 +268,8 @@ def ox_get_review(
         "thread",
         "manifest",
         "adjudication",
+        "attempts",
+        "revalidation",
     }:
         _invalid_ox_mode()
     return _ox_service().get_review(review_id, view=view)
