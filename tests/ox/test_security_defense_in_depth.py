@@ -66,7 +66,7 @@ def test_get_review_rejects_configured_credential_from_tampered_local_evidence(t
     service, store, _, _, _, _, review_id = establish_review(tmp_path)
     review_path = store._root / "reviews" / review_id / "review.json"
     review = json.loads(review_path.read_text(encoding="utf-8"))
-    review["identity"]["objective"] = f"legacy credential leak: {SECRET}"
+    review["objective"] = f"legacy credential leak: {SECRET}"
     review_path.write_text(json.dumps(review), encoding="utf-8")
 
     with pytest.raises(OXBundleError):
