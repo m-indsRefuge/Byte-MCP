@@ -1,5 +1,10 @@
 Describe 'Launcher configuration contract' {
-    BeforeAll { . "$PSScriptRoot/../../scripts/Launcher.Common.ps1" }
+    BeforeAll {
+        $commonScript = Join-Path $PSScriptRoot '../../scripts/Launcher.Common.ps1'
+        if (Test-Path -LiteralPath $commonScript -PathType Leaf) {
+            . $commonScript
+        }
+    }
 
     It 'uses the machine-local .byte-mcp runtime area' {
         $paths = Get-ByteMcpLauncherPaths -RepoRoot 'C:\repo' -UserProfile 'C:\Users\test'
