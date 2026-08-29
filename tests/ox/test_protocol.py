@@ -1,10 +1,10 @@
 import json
 
 import pytest
-from byte_mcp.ox.protocol import build_initial_messages, parse_findings
 
 from byte_mcp.errors import OXFindingValidationError
 from byte_mcp.ox.models import FindingStatus
+from byte_mcp.ox.protocol import build_initial_messages, parse_findings
 
 
 def valid_payload() -> dict[str, object]:
