@@ -23,11 +23,20 @@ def test_settings_selects_platform_evidence_root(monkeypatch, tmp_path):
     assert OXSettings.load(tmp_path).evidence_root == tmp_path / "local" / "Byte-MCP" / "ox"
 
 
+def test_settings_default_output_budget_leaves_room_for_reasoning(monkeypatch, tmp_path):
+    monkeypatch.delenv("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", raising=False)
+    assert OXSettings.load(tmp_path).max_output_tokens == 65_536
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("BYTE_MCP_OX_MAX_BUNDLE_BYTES", "16383"), ("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", "1023")],
+    [
+        ("BYTE_MCP_OX_MAX_BUNDLE_BYTES", "16383"),
+        ("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", "1023"),
+        ("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", "131073"),
+    ],
 )
-def test_settings_rejects_values_below_integer_bounds(monkeypatch, tmp_path, name, value):
+def test_settings_rejects_values_outside_integer_bounds(monkeypatch, tmp_path, name, value):
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError):
         OXSettings.load(tmp_path)
