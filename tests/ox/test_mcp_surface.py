@@ -4,7 +4,9 @@ from typing import Any
 import pytest
 
 from byte_mcp import server
-from byte_mcp.errors import OXProtocolError
+from byte_mcp.errors import OXProtocolError, OXUnavailableError
+from byte_mcp.ox.models import OXAvailability
+from byte_mcp.ox.runtime import OXRuntime
 
 _OX_TOOL_NAMES = {"ox_review", "ox_continue", "ox_revalidate", "ox_get_review"}
 
@@ -238,3 +240,18 @@ def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeyp
     assert server.ox_get_review("OX-000001", "findings")["operation"] == "get_review"
     with pytest.raises(OXProtocolError):
         server.ox_get_review("OX-000001", "source")
+
+
+def test_disabled_ox_review_fails_at_runtime_boundary(monkeypatch) -> None:
+    runtime = OXRuntime(OXAvailability.DISABLED)
+    monkeypatch.setattr(server, "ox_runtime", lambda: runtime)
+
+    with pytest.raises(OXUnavailableError):
+        server.ox_review(
+            repository="fixture",
+            subsystem="validation",
+            target_commit="a" * 40,
+            base_commit="b" * 40,
+            objective="Review it.",
+            verification=[{"id": "v1"}],
+        )
