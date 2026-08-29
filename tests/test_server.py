@@ -9,11 +9,20 @@ def test_main_initializes_service_before_binding_server(monkeypatch: Any) -> Non
     def fake_service() -> None:
         events.append("service")
 
+    def fake_wolfram_runtime() -> None:
+        events.append("wolfram")
+
     def fake_run(*, transport: str) -> None:
         assert transport == server.SETTINGS.transport
         events.append("run")
 
     monkeypatch.setattr(server, "service", fake_service)
+    monkeypatch.setattr(
+        server,
+        "wolfram_runtime",
+        fake_wolfram_runtime,
+        raising=False,
+    )
     monkeypatch.setattr(server.mcp, "run", fake_run)
 
     server.main()
