@@ -2,6 +2,32 @@
 
 All notable Byte-MCP changes are documented here.
 
+## Unreleased
+
+### External review hardening
+
+- Hardened secret denial so secret/credential stems and sensitive suffixes remain blocked through ordinary and multi-suffix filenames.
+- Normalized strict path-resolution, roots-configuration, and document-extraction failures into Byte-MCP domain errors.
+- Changed `ByteMCPError` to inherit directly from `Exception`, preventing broad `RuntimeError` catches from silently consuming domain failures.
+- Added extractor-level input limits as defense-in-depth while retaining the existing configured fetch and content-search byte ceilings.
+- Repaired text decoding to require a UTF-16 BOM before UTF-16 decoding and otherwise prefer UTF-8 with a cp1252 fallback.
+- Made service initialization eager at server startup so invalid root configuration fails before the MCP listener binds.
+- Made search and directory truncation flags report actual omitted eligible results rather than merely reaching the requested bound.
+- Added `max_chars_applied` to fetch responses when the service clamps a client request.
+- Hardened directory/search handling for files that disappear or become uninspectable during enumeration.
+- Chose fail-closed audit semantics: audit persistence failures now raise a Byte-MCP `AuditError` instead of leaking raw filesystem errors or returning an unaudited access result.
+- Added defensive audit serialization with `default=str` and documented the V1 single-process/no-rotation audit contract.
+- Documented that opaque refs are identifiers rather than authentication tokens; decoded paths are always revalidated against approved roots.
+- Added adversarial regression coverage for the external-review findings and a characterization test proving the configured fetch-size limit.
+
+### Deferred after review
+
+- Same-handle extraction/hash consistency for concurrently modified files.
+- A separate PDF page-count limit in addition to byte limits.
+- Complete extraction of PPTX grouped shapes/tables.
+- Multi-process audit locking and log rotation.
+- Standalone wheel-layout support for default config-path discovery.
+
 ## [0.1.1] - 2026-08-06
 
 ### Completed
