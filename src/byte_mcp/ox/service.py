@@ -649,6 +649,7 @@ class OXReviewService:
                 "and the selected prior finding/adjudication evidence."
             ),
         )
+        self._reject_configured_credential(messages)
         self._enforce_message_bound(messages)
         try:
             attempt = self._evidence.claim_revalidation_transmission(
@@ -684,39 +685,45 @@ class OXReviewService:
     def get_review(self, review_id: str, *, view: str = "summary") -> dict[str, object]:
         if view == "summary":
             review = self._evidence.get_review(review_id)
-            return {
+            result = {
                 **review,
                 "revalidations": [
                     self._effective_revalidation(item)
                     for item in self._evidence.list_revalidations(review_id)
                 ],
             }
-        if view == "findings":
-            return {"review_id": review_id, **self._evidence.read_findings(review_id)}
-        if view == "thread":
-            return {
+        elif view == "findings":
+            result = {"review_id": review_id, **self._evidence.read_findings(review_id)}
+        elif view == "thread":
+            result = {
                 "review_id": review_id,
                 "messages": self._evidence.read_thread(review_id, "initial"),
             }
-        if view == "manifest":
-            return {"review_id": review_id, "manifest": self._evidence.read_manifest(review_id)}
-        if view == "adjudication":
-            return {
+        elif view == "manifest":
+            result = {
+                "review_id": review_id,
+                "manifest": self._evidence.read_manifest(review_id),
+            }
+        elif view == "adjudication":
+            result = {
                 "review_id": review_id,
                 "adjudications": self._evidence.read_adjudications(review_id),
             }
-        if view == "attempts":
+        elif view == "attempts":
             review = self._evidence.get_review(review_id)
-            return {"review_id": review_id, "attempts": review["attempts"]}
-        if view == "revalidation":
-            return {
+            result = {"review_id": review_id, "attempts": review["attempts"]}
+        elif view == "revalidation":
+            result = {
                 "review_id": review_id,
                 "revalidations": [
                     self._effective_revalidation(item)
                     for item in self._evidence.list_revalidations(review_id)
                 ],
             }
-        raise OXProtocolError(attempt_outcome="NOT_SENT")
+        else:
+            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        self._reject_configured_credential(result)
+        return result
 
     def _load_prepared_review(
         self,
