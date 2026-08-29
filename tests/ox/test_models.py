@@ -69,8 +69,8 @@ def test_ox_contracts_are_immutable_dataclasses(contract):
     assert "__slots__" in contract.__dict__
 
 
-def test_provider_result_keeps_legacy_shape_and_supports_safe_response_evidence():
-    usage = ProviderUsage(input_tokens=7, output_tokens=3)
+def test_provider_result_preserves_complete_usage_and_safe_response_evidence():
+    usage = ProviderUsage(input_tokens=7, output_tokens=3, total_tokens=10, cached_input_tokens=1)
     legacy = ProviderResult("answer", usage)
     result = ProviderResult(
         "answer",
@@ -87,7 +87,12 @@ def test_provider_result_keeps_legacy_shape_and_supports_safe_response_evidence(
     assert result.model == "zai/glm-5.3-flash"
     assert json.loads(json.dumps(asdict(result))) == {
         "content": "answer",
-        "usage": {"input_tokens": 7, "output_tokens": 3},
+        "usage": {
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "total_tokens": 10,
+            "cached_input_tokens": 1,
+        },
         "response_id": "resp-123",
         "model": "zai/glm-5.3-flash",
         "raw_response": {"id": "resp-123", "choices": []},
