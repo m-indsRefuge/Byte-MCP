@@ -1,4 +1,5 @@
-from dataclasses import is_dataclass
+import json
+from dataclasses import FrozenInstanceError, asdict, is_dataclass
 
 import pytest
 
@@ -66,3 +67,30 @@ def test_ox_contracts_are_immutable_dataclasses(contract):
     assert is_dataclass(contract)
     assert contract.__dataclass_params__.frozen
     assert "__slots__" in contract.__dict__
+
+
+def test_provider_result_keeps_legacy_shape_and_supports_safe_response_evidence():
+    usage = ProviderUsage(input_tokens=7, output_tokens=3)
+    legacy = ProviderResult("answer", usage)
+    result = ProviderResult(
+        "answer",
+        usage,
+        response_id="resp-123",
+        model="zai/glm-5.3-flash",
+        raw_response={"id": "resp-123", "choices": []},
+    )
+
+    assert legacy.response_id is None
+    assert legacy.model is None
+    assert legacy.raw_response is None
+    assert result.response_id == "resp-123"
+    assert result.model == "zai/glm-5.3-flash"
+    assert json.loads(json.dumps(asdict(result))) == {
+        "content": "answer",
+        "usage": {"input_tokens": 7, "output_tokens": 3},
+        "response_id": "resp-123",
+        "model": "zai/glm-5.3-flash",
+        "raw_response": {"id": "resp-123", "choices": []},
+    }
+    with pytest.raises(FrozenInstanceError):
+        result.response_id = "other"

@@ -53,6 +53,9 @@ class ProviderUsage:
 class ProviderResult:
     content: str
     usage: ProviderUsage | None = None
+    response_id: str | None = None
+    model: str | None = None
+    raw_response: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
