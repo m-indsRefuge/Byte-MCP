@@ -1,4 +1,9 @@
-"""Opaque, versioned file references returned by search results."""
+"""Opaque, versioned file references returned by search results.
+
+References are identifiers, not authentication tokens or a security boundary.
+Every decoded root/path pair is revalidated by FileService against the approved
+root and filesystem containment policy before any file is accessed.
+"""
 from __future__ import annotations
 
 import base64
