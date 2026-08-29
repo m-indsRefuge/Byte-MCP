@@ -17,6 +17,7 @@ EXPECTED_TOOLS = frozenset(
         "list_directory",
         "search",
         "fetch",
+        "wolfram_query",
     }
 )
 
