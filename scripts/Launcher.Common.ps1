@@ -90,3 +90,46 @@ function Assert-ByteMcpLauncherPrerequisites {
         throw 'Encrypted tunnel Runtime API key is missing. Run Setup-ByteMCP.ps1.'
     }
 }
+
+function Assert-CredentialWriteAllowed {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [bool] $ReplaceCredential
+    )
+
+    if ((Test-Path -LiteralPath $Path -PathType Leaf) -and -not $ReplaceCredential) {
+        throw 'Encrypted Runtime API key already exists. Use -ReplaceCredential to rotate it.'
+    }
+}
+
+function Protect-ByteMcpCredential {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [SecureString] $Credential,
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    $parent = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $protected = ConvertFrom-SecureString -SecureString $Credential
+    [System.IO.File]::WriteAllText(
+        $Path,
+        $protected,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+}
+
+function Unprotect-ByteMcpCredential {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw 'Encrypted Runtime API key is missing.'
+    }
+
+    $protected = [System.IO.File]::ReadAllText($Path).Trim()
+    ConvertTo-SecureString -String $protected
+}
