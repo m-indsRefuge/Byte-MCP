@@ -26,7 +26,7 @@ from .settings import OXSettings
 _GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
 _MODEL = "zai/glm-5.3-flash"
 _PROVIDER_OPTIONS = {"gateway": {"only": ["zai"]}}
-_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+_TIMEOUT = httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=10.0)
 _ATTEMPT_ID_PATTERN = re.compile(r"^OX-\d{6}-A\d{3}$")
 _SAFE_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
