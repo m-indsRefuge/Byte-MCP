@@ -67,7 +67,7 @@ class OXAuthenticationError(_ProviderCallError):
     pass
 
 
-class OXPermissionError(ByteMCPError):
+class OXPermissionError(_ProviderCallError):
     pass
 
 
