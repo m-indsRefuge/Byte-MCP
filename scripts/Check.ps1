@@ -18,7 +18,7 @@ try {
     & $Python -m pip check
 
     Write-Host "`n=== COMPILE ==="
-    & $Python -m compileall -q src tests scripts\mcp_smoke_test.py
+    & $Python -m compileall -q src tests scripts\mcp_smoke_test.py scripts\wolfram_qualification.py
 
     Write-Host "`n=== RUFF ==="
     & $Python -m ruff check .
