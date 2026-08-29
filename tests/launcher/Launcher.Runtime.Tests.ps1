@@ -375,11 +375,21 @@ Describe 'Launcher verified and idempotent shutdown' {
         Test-Path -LiteralPath $statePath | Should -BeFalse
     }
 
-    It 'refuses shutdown when launcher state is malformed or stale' -ForEach @('malformed', 'stale') {
-        Mock Get-LauncherStateClassification { $_ }
+    It 'refuses shutdown when launcher state is malformed' {
+        Mock Get-LauncherStateClassification { 'malformed' }
         Mock Stop-Process {}
 
-        { Stop-ByteMcpManagedStack -StatePath 'C:\state.json' } | Should -Throw
+        { Stop-ByteMcpManagedStack -StatePath 'C:\state.json' } |
+            Should -Throw '*Launcher state is malformed*'
+        Should -Invoke Stop-Process -Times 0
+    }
+
+    It 'refuses shutdown when launcher state is stale' {
+        Mock Get-LauncherStateClassification { 'stale' }
+        Mock Stop-Process {}
+
+        { Stop-ByteMcpManagedStack -StatePath 'C:\state.json' } |
+            Should -Throw '*Launcher state is stale*'
         Should -Invoke Stop-Process -Times 0
     }
 
