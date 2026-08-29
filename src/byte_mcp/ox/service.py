@@ -289,6 +289,7 @@ class OXReviewService:
         messages = self._evidence.read_thread(review_id, "initial")
         if prior_identity.get("history_sha256") != _history_sha256(messages):
             raise OXApprovalError("continuation history no longer matches failed attempt")
+        self._reject_configured_credential(messages)
         manifest_sha256 = _manifest_digest(review)
         try:
             attempt = self._evidence.claim_continuation_retry(
@@ -566,6 +567,7 @@ class OXReviewService:
             or prior_identity.get("history_sha256") != _history_sha256(messages)
         ):
             raise OXApprovalError("revalidation history no longer matches failed attempt")
+        self._reject_configured_credential(messages)
         try:
             attempt = self._evidence.claim_revalidation_retry(
                 revalidation_id,
