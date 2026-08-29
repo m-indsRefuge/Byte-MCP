@@ -270,7 +270,14 @@ class BundleBuilder:
                             "__ox__/repository-tree.json", ("repository-tree",), repository_tree
                         ),
                         *(
-                            [_json_manifest_entry("__ox__/base-to-target.diff", ("diff",), diff)]
+                            [
+                                ManifestEntry(
+                                    diff.logical_path,
+                                    diff.categories,
+                                    diff.byte_length,
+                                    diff.sha256,
+                                )
+                            ]
                             if diff is not None
                             else []
                         ),
