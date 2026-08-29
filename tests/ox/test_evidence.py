@@ -164,3 +164,142 @@ def test_immutable_files_contain_canonical_json(tmp_path):
 
     assert review["review_id"] == review_id
     assert review["state"] == "PREPARED"
+
+
+@pytest.mark.parametrize("operation", ["thread", "adjudication"])
+def test_jsonl_mutation_failures_are_sanitized(tmp_path, monkeypatch, operation):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("secret filesystem path")
+
+    monkeypatch.setattr(EvidenceStore, "_append_jsonl", staticmethod(fail))
+    with pytest.raises(OXEvidenceError) as raised:
+        if operation == "thread":
+            store.append_thread_message(review_id, "initial", {"role": "user"})
+        else:
+            store.append_adjudication(review_id, {"finding_id": "F1", "status": "CONFIRMED"})
+
+    expected = (
+        ("unable to append thread message",)
+        if operation == "thread"
+        else ("unable to append adjudication",)
+    )
+    assert raised.value.args == expected
+    assert "secret filesystem path" not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+def test_manifest_verification_failure_is_sanitized(tmp_path, monkeypatch):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("secret serialized manifest")
+
+    monkeypatch.setattr(EvidenceStore, "_read_json", staticmethod(fail))
+    with pytest.raises(OXEvidenceError) as raised:
+        store._verify_manifest_digest(review_id, MANIFEST_SHA256)
+
+    assert raised.value.args == ("unable to verify manifest digest",)
+    assert "secret serialized manifest" not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+def test_failed_preparation_leaves_no_incomplete_review(tmp_path, monkeypatch):
+    store = EvidenceStore(tmp_path)
+    original_append = EvidenceStore._append_jsonl
+
+    def fail_events(path, value):
+        if path.name == "events.jsonl":
+            raise OSError("disk full")
+        return original_append(path, value)
+
+    monkeypatch.setattr(EvidenceStore, "_append_jsonl", staticmethod(fail_events))
+    with pytest.raises(OXEvidenceError):
+        _prepare(store)
+
+    assert not (tmp_path / "reviews" / "OX-000001").exists()
+    assert not (tmp_path / "reviews" / ".OX-000001.reserve").exists()
+
+    monkeypatch.setattr(EvidenceStore, "_append_jsonl", staticmethod(original_append))
+    assert _prepare(EvidenceStore(tmp_path)) == "OX-000001"
+
+
+def test_concurrent_preparations_reserve_distinct_review_ids(tmp_path, monkeypatch):
+    store = EvidenceStore(tmp_path)
+    original_allocate = EvidenceStore._allocate_review_id
+    allocation_barrier = threading.Barrier(2, timeout=5)
+    results = []
+    errors = []
+
+    def delayed_allocate(current_store):
+        review_id = original_allocate(current_store)
+        allocation_barrier.wait()
+        return review_id
+
+    monkeypatch.setattr(EvidenceStore, "_allocate_review_id", delayed_allocate)
+
+    def prepare() -> None:
+        try:
+            results.append(_prepare(store))
+        except Exception as error:  # pragma: no cover - assertion below reports unexpected errors
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=prepare, daemon=True),
+        threading.Thread(target=prepare, daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads), (results, errors)
+    assert errors == []
+    assert sorted(results) == ["OX-000001", "OX-000002"]
+    monkeypatch.undo()
+    assert _prepare(EvidenceStore(tmp_path)) == "OX-000003"
+
+
+def test_recovered_event_log_blocks_later_mutation(tmp_path):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    events_path = tmp_path / "reviews" / review_id / "events.jsonl"
+    with events_path.open("ab") as handle:
+        handle.write(b'{"event_type":"TRANSMISSION_INTENT"')
+    original = events_path.read_bytes()
+
+    with pytest.raises(OXEvidenceError, match="recovery"):
+        store.append_thread_message(review_id, "initial", {"role": "user"})
+
+    assert events_path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {
+            "event_type": "TRANSMISSION_INTENT",
+            "attempt_id": "OX-000002-A001",
+            "manifest_sha256": MANIFEST_SHA256,
+        },
+        {
+            "event_type": "TRANSMISSION_INTENT",
+            "attempt_id": "OX-000001-A001",
+            "manifest_sha256": "b" * 64,
+        },
+    ],
+)
+def test_reconstruction_rejects_unbound_transmission_events(tmp_path, event):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    events_path = tmp_path / "reviews" / review_id / "events.jsonl"
+    with events_path.open("ab") as handle:
+        handle.write(
+            json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8") + b"\n"
+        )
+
+    with pytest.raises(OXEvidenceError, match="malformed|manifest|attempt"):
+        store.get_review(review_id)
