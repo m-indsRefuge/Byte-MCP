@@ -32,7 +32,7 @@ byte-mcp = "byte_mcp.server:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "-q --strict-markers --disable-warnings --basetemp=.pytest-tmp"
+addopts = "-q --strict-markers --basetemp=.pytest-tmp"
 testpaths = ["tests"]
 
 [tool.ruff]
