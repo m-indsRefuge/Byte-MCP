@@ -6,8 +6,8 @@ from dataclasses import asdict
 from byte_mcp.errors import OXProtocolError
 
 from .models import AttemptOutcome, ProviderResult, ReviewState
-from .service import OXReviewService as BaseOXReviewService
 from .service import _PROVIDER_ERRORS
+from .service import OXReviewService as BaseOXReviewService
 
 
 class OXReviewService(BaseOXReviewService):
