@@ -28,14 +28,16 @@ def derived_finding() -> dict[str, object]:
 
 
 def make_natural_service(tmp_path, client: RecordingClient):
-    base_service, store, audit, base, target, repo = make_service(tmp_path, client)
+    base_service, store, repository_path, base, target, registry_path = make_service(
+        tmp_path, client
+    )
     service = OXReviewService(
         base_service._settings,
         store,
         client,
         base_service._audit,
     )
-    return service, store, audit, base, target, repo
+    return service, store, repository_path, base, target, registry_path
 
 
 def test_initial_prompt_requests_natural_engineering_review() -> None:
@@ -109,7 +111,7 @@ def test_record_findings_rejects_malformed_local_interpretation_without_provider
 
 def test_natural_blind_and_targeted_revalidation_preserve_byte_provenance(tmp_path) -> None:
     client = RecordingClient()
-    service, _, _, base, target, repository_path = make_natural_service(tmp_path, client)
+    service, _, repository_path, base, target, _ = make_natural_service(tmp_path, client)
     proposal = prepare(service, base, target)
     review_id = proposal["review_id"]
     service.transmit_review(review_id)
@@ -156,7 +158,7 @@ def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blin
     tmp_path,
 ) -> None:
     client = RecordingClient()
-    service, _, _, base, target, repository_path = make_natural_service(tmp_path, client)
+    service, _, repository_path, base, target, _ = make_natural_service(tmp_path, client)
     proposal = prepare(service, base, target)
     review_id = proposal["review_id"]
     service.transmit_review(review_id)
