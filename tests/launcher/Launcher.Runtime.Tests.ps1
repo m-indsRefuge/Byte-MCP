@@ -88,12 +88,11 @@ Describe 'Launcher process ownership and state classification' {
         Write-LauncherState -State (New-RuntimeTestState) -Path $path
 
         Mock Get-Process {
-            $requestedId = [int]$PesterBoundParameters['Id']
-            if ($requestedId -eq 101) {
-                return [PSCustomObject]@{ Id = 101; Path = 'C:\Wrong\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
-            }
+            [PSCustomObject]@{ Id = 101; Path = 'C:\Wrong\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
+        } -ParameterFilter { $Id -eq 101 }
+        Mock Get-Process {
             [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
-        }
+        } -ParameterFilter { $Id -eq 202 }
 
         Get-LauncherStateClassification -StatePath $path | Should -Be 'stale'
     }
@@ -103,12 +102,11 @@ Describe 'Launcher process ownership and state classification' {
         Write-LauncherState -State (New-RuntimeTestState) -Path $path
 
         Mock Get-Process {
-            $requestedId = [int]$PesterBoundParameters['Id']
-            if ($requestedId -eq 101) {
-                return [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
-            }
+            [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
+        } -ParameterFilter { $Id -eq 101 }
+        Mock Get-Process {
             [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
-        }
+        } -ParameterFilter { $Id -eq 202 }
 
         Get-LauncherStateClassification -StatePath $path | Should -Be 'active'
     }
@@ -253,7 +251,7 @@ Describe 'Launcher transactional background startup' {
     It 'rolls back both children in reverse order when tunnel readiness fails' {
         Mock Assert-ByteMcpLauncherPrerequisites {}
         Mock Get-LauncherStateClassification { 'absent' }
-        Mock Get-NetTCPConnection { $null }
+        Mock Get-LauncherPortConflicts { @() }
         Mock Rotate-LauncherLog {}
         Mock Start-LauncherServerProcess { [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = Get-Date } }
         Mock Wait-ByteMcpEndpoint { $true }
@@ -273,7 +271,7 @@ Describe 'Launcher transactional background startup' {
     It 'writes managed state only after MCP, tunnel health, and tunnel readiness all succeed' {
         Mock Assert-ByteMcpLauncherPrerequisites {}
         Mock Get-LauncherStateClassification { 'absent' }
-        Mock Get-NetTCPConnection { $null }
+        Mock Get-LauncherPortConflicts { @() }
         Mock Rotate-LauncherLog {}
         Mock Start-LauncherServerProcess { [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' } }
         Mock Wait-ByteMcpEndpoint { $true }
@@ -351,16 +349,14 @@ Describe 'Launcher verified and idempotent shutdown' {
         Mock Get-LauncherStateClassification { 'active' }
         Mock Read-LauncherState { $script:managedState }
         Mock Get-Process {
-            $requestedId = [int]$PesterBoundParameters['Id']
-            if ($requestedId -eq 202) {
-                return [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
-            }
+            [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
+        } -ParameterFilter { $Id -eq 202 }
+        Mock Get-Process {
             [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
-        }
+        } -ParameterFilter { $Id -eq 101 }
         Mock Test-LauncherProcessIdentity { $true }
-        Mock Stop-Process {
-            $script:stopOrder += [int]$PesterBoundParameters['Id']
-        }
+        Mock Stop-Process { $script:stopOrder += 202 } -ParameterFilter { $Id -eq 202 }
+        Mock Stop-Process { $script:stopOrder += 101 } -ParameterFilter { $Id -eq 101 }
         Mock Wait-Process {}
         Mock Confirm-LauncherListenersStopped { $true }
 
