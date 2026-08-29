@@ -88,8 +88,8 @@ Describe 'Launcher process ownership and state classification' {
         Write-LauncherState -State (New-RuntimeTestState) -Path $path
 
         Mock Get-Process {
-            param($Id)
-            if ([int]$Id -eq 101) {
+            $requestedId = [int]$PesterBoundParameters['Id']
+            if ($requestedId -eq 101) {
                 return [PSCustomObject]@{ Id = 101; Path = 'C:\Wrong\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
             }
             [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
@@ -103,8 +103,8 @@ Describe 'Launcher process ownership and state classification' {
         Write-LauncherState -State (New-RuntimeTestState) -Path $path
 
         Mock Get-Process {
-            param($Id)
-            if ([int]$Id -eq 101) {
+            $requestedId = [int]$PesterBoundParameters['Id']
+            if ($requestedId -eq 101) {
                 return [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
             }
             [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
@@ -125,8 +125,8 @@ Describe 'Launcher health probes and read-only status' {
 
     It 'requires exact tunnel health and readiness responses' {
         Mock Invoke-LauncherHttpProbe {
-            param($Uri)
-            if ($Uri -like '*/healthz') {
+            $uri = [string]$PesterBoundParameters['Uri']
+            if ($uri -like '*/healthz') {
                 return [PSCustomObject]@{ reachable = $true; status_code = 200; body = 'live' }
             }
             [PSCustomObject]@{ reachable = $true; status_code = 200; body = 'ready' }
@@ -160,11 +160,9 @@ Describe 'Launcher health probes and read-only status' {
         $statusScript = Join-Path $PSScriptRoot '../../scripts/Status-ByteMCP.ps1'
         Test-Path -LiteralPath $statusScript -PathType Leaf | Should -BeTrue
 
-        if (Test-Path -LiteralPath $statusScript -PathType Leaf) {
-            $content = Get-Content -LiteralPath $statusScript -Raw
-            $content | Should -Not -Match 'Write-LauncherState'
-            $content | Should -Not -Match 'Remove-Item[^\r\n]*StateFile'
-        }
+        $content = Get-Content -LiteralPath $statusScript -Raw
+        $content | Should -Not -Match 'Write-LauncherState'
+        $content | Should -Not -Match 'Remove-Item[^\r\n]*StateFile'
     }
 }
 
@@ -297,11 +295,9 @@ Describe 'Launcher transactional background startup' {
         $startScript = Join-Path $PSScriptRoot '../../scripts/Start-ByteMCP.ps1'
         Test-Path -LiteralPath $startScript -PathType Leaf | Should -BeTrue
 
-        if (Test-Path -LiteralPath $startScript -PathType Leaf) {
-            $command = Get-Command -Name $startScript -ErrorAction Stop
-            $command.Parameters.Keys | Should -Contain 'Foreground'
-            $command.Parameters.Keys | Should -Contain 'StartupTimeoutSeconds'
-        }
+        $command = Get-Command -Name $startScript -ErrorAction Stop
+        $command.Parameters.Keys | Should -Contain 'Foreground'
+        $command.Parameters.Keys | Should -Contain 'StartupTimeoutSeconds'
     }
 }
 
@@ -331,11 +327,11 @@ Describe 'Launcher verified and idempotent shutdown' {
 
     It 'never stops a process whose recorded identity cannot be verified' {
         $statePath = Join-Path $TestDrive 'active.json'
-        $state = New-RuntimeTestState
-        Write-LauncherState -State $state -Path $statePath
+        $script:managedState = New-RuntimeTestState
+        Write-LauncherState -State $script:managedState -Path $statePath
 
         Mock Get-LauncherStateClassification { 'active' }
-        Mock Read-LauncherState { $state }
+        Mock Read-LauncherState { $script:managedState }
         Mock Get-Process {
             [PSCustomObject]@{ Id = 202; Path = 'C:\Other\tunnel-client.exe'; StartTime = Get-Date }
         }
@@ -348,23 +344,22 @@ Describe 'Launcher verified and idempotent shutdown' {
 
     It 'stops verified tunnel then server and removes state only after listeners are gone' {
         $statePath = Join-Path $TestDrive 'verified.json'
-        $state = New-RuntimeTestState
-        Write-LauncherState -State $state -Path $statePath
+        $script:managedState = New-RuntimeTestState
+        Write-LauncherState -State $script:managedState -Path $statePath
         $script:stopOrder = @()
 
         Mock Get-LauncherStateClassification { 'active' }
-        Mock Read-LauncherState { $state }
+        Mock Read-LauncherState { $script:managedState }
         Mock Get-Process {
-            param($Id)
-            if ([int]$Id -eq 202) {
+            $requestedId = [int]$PesterBoundParameters['Id']
+            if ($requestedId -eq 202) {
                 return [PSCustomObject]@{ Id = 202; Path = 'C:\OpenAI\tunnel-client.exe'; StartTime = [datetime]'2026-08-29T10:00:01Z' }
             }
             [PSCustomObject]@{ Id = 101; Path = 'C:\Python\python.exe'; StartTime = [datetime]'2026-08-29T10:00:00Z' }
         }
         Mock Test-LauncherProcessIdentity { $true }
         Mock Stop-Process {
-            param($Id)
-            $script:stopOrder += [int]$Id
+            $script:stopOrder += [int]$PesterBoundParameters['Id']
         }
         Mock Wait-Process {}
         Mock Confirm-LauncherListenersStopped { $true }
@@ -397,9 +392,7 @@ Describe 'Launcher verified and idempotent shutdown' {
         $stopScript = Join-Path $PSScriptRoot '../../scripts/Stop-ByteMCP.ps1'
         Test-Path -LiteralPath $stopScript -PathType Leaf | Should -BeTrue
 
-        if (Test-Path -LiteralPath $stopScript -PathType Leaf) {
-            $content = Get-Content -LiteralPath $stopScript -Raw
-            $content | Should -Not -Match 'Stop-Process\s+-Name'
-        }
+        $content = Get-Content -LiteralPath $stopScript -Raw
+        $content | Should -Not -Match 'Stop-Process\s+-Name'
     }
 }
