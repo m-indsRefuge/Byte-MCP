@@ -32,3 +32,37 @@ Describe 'Byte-MCP credential lifecycle' {
             Should -Not -Throw
     }
 }
+
+Describe 'Setup-ByteMCP command contract' {
+    BeforeAll {
+        $setupScript = Join-Path $PSScriptRoot '../../scripts/Setup-ByteMCP.ps1'
+    }
+
+    It 'exists as the launcher setup entry point' {
+        Test-Path -LiteralPath $setupScript -PathType Leaf | Should -BeTrue
+    }
+
+    It 'exposes ReplaceCredential without accepting an API key parameter' {
+        $command = Get-Command -Name $setupScript -ErrorAction Stop
+
+        $command.Parameters.Keys | Should -Contain 'ReplaceCredential'
+        $command.Parameters.Keys | Should -Not -Contain 'ApiKey'
+        $command.Parameters.Keys | Should -Not -Contain 'RuntimeApiKey'
+        $command.Parameters.Keys | Should -Not -Contain 'Credential'
+    }
+
+    It 'collects the Runtime API key only through a secure prompt' {
+        $content = Get-Content -LiteralPath $setupScript -Raw
+
+        $content | Should -Match "Read-Host\s+'Paste the restricted Runtime API key'\s+-AsSecureString"
+    }
+
+    It 'checks prerequisites, replacement authority, protection, and round-trip validation' {
+        $content = Get-Content -LiteralPath $setupScript -Raw
+
+        $content | Should -Match 'Assert-ByteMcpLauncherPrerequisites\s+-Paths\s+\$paths\s+-SkipCredentialCheck'
+        $content | Should -Match 'Assert-CredentialWriteAllowed\s+-Path\s+\$paths\.CredentialFile\s+-ReplaceCredential:\$ReplaceCredential'
+        $content | Should -Match 'Protect-ByteMcpCredential\s+-Credential\s+\$credential\s+-Path\s+\$paths\.CredentialFile'
+        $content | Should -Match '\$null\s*=\s*Unprotect-ByteMcpCredential\s+-Path\s+\$paths\.CredentialFile'
+    }
+}
