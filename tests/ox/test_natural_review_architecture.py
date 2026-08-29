@@ -1,12 +1,14 @@
 import hashlib
+import json
 
 import pytest
 
-from byte_mcp.errors import OXEvidenceError, OXFindingValidationError
+from byte_mcp.errors import OXApprovalError, OXEvidenceError, OXFindingValidationError
 from byte_mcp.ox.models import ReviewState
 from byte_mcp.ox.natural_service import OXReviewService
 from byte_mcp.ox.protocol import build_initial_messages
-from tests.ox.test_review_service import RecordingClient, make_service, prepare
+from tests.ox.helpers import commit_files
+from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
 
 
 def derived_finding() -> dict[str, object]:
@@ -101,5 +103,80 @@ def test_record_findings_rejects_malformed_local_interpretation_without_provider
 
     with pytest.raises(OXFindingValidationError):
         service.record_findings(proposal["review_id"], [malformed])
+
+    assert len(client.calls) == calls_before
+
+
+def test_natural_blind_and_targeted_revalidation_preserve_byte_provenance(tmp_path) -> None:
+    client = RecordingClient()
+    service, _, _, base, target, repository_path = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review_id = proposal["review_id"]
+    service.transmit_review(review_id)
+    service.record_findings(review_id, [derived_finding()])
+    remediation = commit_files(
+        repository_path,
+        {"src/alpha.py": b"value = 'remediated'\n"},
+        b"remediation",
+    )
+    revalidation = service.prepare_revalidation(
+        review_id,
+        target_commit=remediation,
+        base_commit=target,
+        verification=verification(),
+    )
+
+    with pytest.raises(OXApprovalError):
+        service.run_targeted_revalidation(
+            revalidation["revalidation_id"], [f"{review_id}-F001"]
+        )
+
+    blind = service.transmit_blind_revalidation(revalidation["revalidation_id"])
+    blind_call = client.calls[-1]
+    assert blind_call["json_mode"] is False
+    assert blind["state"] == ReviewState.BLIND_REVALIDATED.value
+    assert blind["response"]
+    assert "findings" not in blind
+    assert "derived-from-ox-natural-review" not in json.dumps(blind_call["messages"])
+
+    targeted = service.run_targeted_revalidation(
+        revalidation["revalidation_id"], [f"{review_id}-F001"]
+    )
+    targeted_call = client.calls[-1]
+    targeted_serialized = json.dumps(targeted_call["messages"])
+    assert targeted_call["json_mode"] is False
+    assert targeted["state"] == ReviewState.REVALIDATED.value
+    assert targeted["response"]
+    assert "findings" not in targeted
+    assert "derived-from-ox-natural-review" in targeted_serialized
+    assert '"derivation_authority":"byte"' in targeted_serialized
+
+
+def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blind(
+    tmp_path,
+) -> None:
+    client = RecordingClient()
+    service, _, _, base, target, repository_path = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review_id = proposal["review_id"]
+    service.transmit_review(review_id)
+    remediation = commit_files(
+        repository_path,
+        {"src/alpha.py": b"value = 'remediated'\n"},
+        b"remediation",
+    )
+    revalidation = service.prepare_revalidation(
+        review_id,
+        target_commit=remediation,
+        base_commit=target,
+        verification=verification(),
+    )
+    service.transmit_blind_revalidation(revalidation["revalidation_id"])
+    calls_before = len(client.calls)
+
+    with pytest.raises(OXApprovalError):
+        service.run_targeted_revalidation(
+            revalidation["revalidation_id"], [f"{review_id}-F001"]
+        )
 
     assert len(client.calls) == calls_before
