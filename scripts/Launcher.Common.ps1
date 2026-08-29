@@ -133,3 +133,43 @@ function Unprotect-ByteMcpCredential {
     $protected = [System.IO.File]::ReadAllText($Path).Trim()
     ConvertTo-SecureString -String $protected
 }
+
+function New-LauncherChildRecord {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [int] $Pid,
+        [Parameter(Mandatory)] [string] $ExecutablePath,
+        [Parameter(Mandatory)] [string] $StartedAtUtc
+    )
+
+    [PSCustomObject]@{
+        pid = $Pid
+        executable_path = [System.IO.Path]::GetFullPath($ExecutablePath)
+        started_at_utc = ([datetime] $StartedAtUtc).ToUniversalTime().ToString('o')
+    }
+}
+
+function New-LauncherState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $RepoPath,
+        [Parameter(Mandatory)] [string] $Mode,
+        [Parameter(Mandatory)] [int] $ServerPid,
+        [Parameter(Mandatory)] [string] $ServerExecutable,
+        [Parameter(Mandatory)] [string] $ServerStartedAtUtc,
+        [Parameter(Mandatory)] [int] $TunnelPid,
+        [Parameter(Mandatory)] [string] $TunnelExecutable,
+        [Parameter(Mandatory)] [string] $TunnelStartedAtUtc
+    )
+
+    [PSCustomObject]@{
+        schema_version = 1
+        started_at_utc = [datetime]::UtcNow.ToString('o')
+        mode = $Mode
+        repo_path = $RepoPath
+        root_profile = 'projects'
+        tunnel_profile = 'byte-mcp-local'
+        server = New-LauncherChildRecord -Pid $ServerPid -ExecutablePath $ServerExecutable -StartedAtUtc $ServerStartedAtUtc
+        tunnel = New-LauncherChildRecord -Pid $TunnelPid -ExecutablePath $TunnelExecutable -StartedAtUtc $TunnelStartedAtUtc
+    }
+}
