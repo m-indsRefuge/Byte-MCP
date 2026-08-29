@@ -232,6 +232,7 @@ class OXReviewService:
         manifest_sha256 = _manifest_digest(review)
         history = self._evidence.read_thread(review_id, "initial")
         messages = [*history, {"role": "user", "content": message.strip()}]
+        self._reject_configured_credential(messages)
         self._enforce_message_bound(messages)
         try:
             attempt = self._evidence.claim_continuation_transmission(
@@ -326,6 +327,7 @@ class OXReviewService:
             or not events
         ):
             raise OXProtocolError(attempt_outcome="NOT_SENT")
+        self._reject_configured_credential(list(events))
         findings_payload = self._evidence.read_findings(review_id)
         raw_findings = findings_payload.get("findings")
         if not isinstance(raw_findings, list):
