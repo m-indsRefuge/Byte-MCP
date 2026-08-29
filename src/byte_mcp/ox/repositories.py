@@ -67,7 +67,7 @@ class RepositoryRegistry:
     @classmethod
     def load(cls, path: Path) -> "RepositoryRegistry":
         try:
-            document = json.loads(path.read_text(encoding="utf-8"))
+            document = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"unable to load repository registry: {path}") from error
         if not isinstance(document, dict) or document.get("version") != 1:
