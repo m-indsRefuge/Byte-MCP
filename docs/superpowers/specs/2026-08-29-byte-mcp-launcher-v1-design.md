@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved design checkpoint pending implementation-plan review.
+Approved in conversation; pending written-spec review before implementation planning.
 
 ## Date
 
@@ -10,23 +10,21 @@ Approved design checkpoint pending implementation-plan review.
 
 ## Purpose
 
-Byte-MCP Launcher V1 provides one reliable operational entry point for bringing the accepted Byte-MCP read-only remote stack online on Windows.
+Byte-MCP Launcher V1 provides one reliable Windows entry point for bringing the accepted Byte-MCP remote stack online.
 
-The launcher does not expand MCP authority. Byte-MCP remains the accepted read-only baseline during this work. The launcher only manages local runtime configuration, process lifecycle, secure tunnel credential loading, health verification, state, logs, and recovery.
+The launcher does **not** expand MCP authority. Byte-MCP remains the accepted read-only baseline during this subsystem. The launcher manages only local runtime configuration, secure tunnel credential loading, process lifecycle, readiness checks, state, logs, shutdown, and recovery.
 
-The intended normal operator experience is:
+Normal operation should become:
 
 ```powershell
 .\scripts\Start-ByteMCP.ps1
 ```
 
-After successful startup, ChatGPT Web can use the existing private Byte-MCP plugin without the operator manually recreating the server environment or starting the tunnel in separate terminals.
+After successful startup, ChatGPT Web can invoke the existing private Byte-MCP plugin without manually rebuilding environment variables or starting the server and tunnel in separate terminals.
 
 ## Authoritative baseline
 
-Implementation begins from the current `main` branch after successful Byte-MCP V1 remote acceptance.
-
-The accepted runtime architecture remains:
+Implementation begins from the accepted Byte-MCP V1 `main` baseline after successful ChatGPT remote acceptance.
 
 ```text
 ChatGPT Web
@@ -43,24 +41,11 @@ Byte-MCP
 projects -> %USERPROFILE%\AIProjects
 ```
 
-The current MCP authority remains read-only while the launcher is built.
+The MCP authority remains read-only for this subsystem.
 
-## Design classification
+## Architecture decision
 
-This is an operational subsystem, not a bounded edit to `Run-Server.ps1`.
-
-The launcher owns four concerns that do not belong inside the Python MCP server:
-
-1. secure local credential persistence;
-2. Byte-MCP and tunnel process lifecycle;
-3. readiness and state classification;
-4. operational logs and recovery.
-
-Windows-specific launcher behavior therefore remains in PowerShell rather than being embedded into Byte-MCP's Python service layer.
-
-## Chosen approach
-
-Use a repository-native PowerShell launcher suite with machine-local runtime data stored outside Git.
+Launcher V1 is a repository-native PowerShell operational subsystem. Windows-specific process, credential, and health-management concerns stay outside the Python MCP service.
 
 Repository scripts:
 
@@ -84,10 +69,11 @@ Machine-local runtime area:
     ├── byte-mcp-server.log
     ├── byte-mcp-server.err.log
     ├── tunnel-client.log
-    └── tunnel-client.err.log
+    ├── tunnel-client.err.log
+    └── *.previous.log
 ```
 
-The launcher must not persist secrets, fetched content, search terms, opaque MCP references, or arbitrary MCP payloads in launcher state or launcher logs.
+No credential, fetched content, search term, opaque MCP reference, or arbitrary MCP payload may be persisted in launcher state or deliberately emitted by launcher logging.
 
 ## Process model
 
@@ -99,9 +85,9 @@ Default invocation:
 .\scripts\Start-ByteMCP.ps1
 ```
 
-The launcher starts Byte-MCP and `tunnel-client` as managed background processes, verifies readiness, records operational state, and returns control to the PowerShell prompt.
+The launcher starts Byte-MCP and `tunnel-client` as managed background child processes, verifies the complete stack, records verified process state, reports readiness, and returns control to the PowerShell prompt.
 
-Successful output should be concise and equivalent to:
+Successful output should be equivalent to:
 
 ```text
 BYTE-MCP READY
@@ -120,23 +106,23 @@ Troubleshooting invocation:
 .\scripts\Start-ByteMCP.ps1 -Foreground
 ```
 
-Foreground mode uses the same validated configuration and credential path but keeps relevant process output visible for diagnosis.
+Foreground mode uses the same roots profile, tunnel profile, credential path, ownership checks, startup ordering, and readiness gates as background mode. It starts the two child executables with visible console output instead of redirecting their stdout/stderr to launcher log files.
 
-Foreground mode is an operator/debugging convenience, not a separate deployment profile.
+The launcher still records the actual child PIDs and verifies readiness before reporting success. Foreground mode changes observability only; it is not a different deployment or authority profile.
 
 ## Setup contract
 
 `Setup-ByteMCP.ps1` is a one-time configuration action. It must not start Byte-MCP or `tunnel-client`.
 
-The script validates the required local infrastructure:
+It validates that:
 
-- Byte-MCP repository structure is present;
+- the Byte-MCP repository structure is present;
 - `.venv\Scripts\python.exe` exists;
 - `%USERPROFILE%\.byte-mcp\roots.web.json` exists;
 - `tunnel-client` is installed and resolvable;
 - the `byte-mcp-local` tunnel profile exists;
-- the credential storage directory can be created;
-- the DPAPI credential can be written and read by the current Windows user.
+- the local credential/runtime/log directories can be created;
+- the DPAPI credential can be encrypted and decrypted by the current Windows user.
 
 Normal invocation:
 
@@ -144,27 +130,29 @@ Normal invocation:
 .\scripts\Setup-ByteMCP.ps1
 ```
 
-Credential replacement is explicit:
+Explicit credential replacement:
 
 ```powershell
 .\scripts\Setup-ByteMCP.ps1 -ReplaceCredential
 ```
 
-If an encrypted credential already exists, setup must refuse to overwrite it unless `-ReplaceCredential` is supplied.
+If an encrypted credential already exists, setup refuses to overwrite it unless `-ReplaceCredential` is supplied.
 
 ## Credential lifecycle
 
-The restricted OpenAI tunnel Runtime API key is entered only through an interactive secure prompt.
+The restricted OpenAI tunnel Runtime API key is entered only through an interactive secure prompt such as `Read-Host -AsSecureString`.
 
 The setup script must not accept the key as a normal command-line parameter.
 
-The credential is encrypted with Windows Data Protection API semantics bound to the current Windows user and persisted only as:
+On Windows, the implementation uses PowerShell secure-string persistence backed by the current user's Windows DPAPI context (`ConvertFrom-SecureString` without a supplied key, and the corresponding `ConvertTo-SecureString` restore path).
+
+The encrypted representation is stored only at:
 
 ```text
 %USERPROFILE%\.byte-mcp\credentials\tunnel-runtime-key.dpapi
 ```
 
-The plaintext API key must never be written to:
+The plaintext key must never be written to:
 
 - Git;
 - repository files;
@@ -176,17 +164,15 @@ The plaintext API key must never be written to:
 - Byte-MCP audit logs;
 - console diagnostics.
 
-At startup, `Start-ByteMCP.ps1` decrypts the credential in memory and supplies it only to the `tunnel-client` child process as `CONTROL_PLANE_API_KEY`.
+At startup, `Start-ByteMCP.ps1` decrypts the secret in memory only long enough to populate `CONTROL_PLANE_API_KEY` in the `tunnel-client` child process environment. The launcher then releases its plaintext representation as soon as practical.
 
-The launcher must release its plaintext representation as soon as practical after process creation.
+The live tunnel process necessarily retains access to its own environment while running.
 
-The key necessarily remains available to the live tunnel process through that process's environment while the tunnel is running.
+The encrypted credential is intentionally Windows-user bound. Copying the repository or encrypted blob to another user account or computer is not a supported credential migration; setup must be run again there.
 
-The encrypted credential is intentionally machine/user-bound. Moving the repository or encrypted blob to another Windows account or computer does not constitute a supported credential migration. Setup must be run again on the new environment.
+## Fixed runtime profile
 
-## Fixed Byte-MCP runtime profile
-
-The launcher starts Byte-MCP with the accepted AIProjects-only remote profile:
+The launcher starts Byte-MCP with the accepted AIProjects-only remote environment:
 
 ```text
 BYTE_MCP_ROOTS_FILE=%USERPROFILE%\.byte-mcp\roots.web.json
@@ -200,15 +186,15 @@ BYTE_MCP_MAX_SEARCH_FILES=20000
 BYTE_MCP_CONTENT_SEARCH_MAX_BYTES=250000
 ```
 
-The launcher must not silently broaden roots or switch Byte-MCP to a non-loopback listener.
+The launcher must never broaden roots or switch Byte-MCP to a non-loopback listener.
 
-The tunnel profile remains:
+Tunnel profile:
 
 ```text
 byte-mcp-local
 ```
 
-with target:
+Tunnel target:
 
 ```text
 http://127.0.0.1:8000/mcp
@@ -216,50 +202,46 @@ http://127.0.0.1:8000/mcp
 
 ## Startup sequence
 
-`Start-ByteMCP.ps1` performs the following sequence:
+`Start-ByteMCP.ps1` performs this sequence:
 
-1. Validate repository, Python environment, roots profile, audit path parent, tunnel profile, tunnel-client executable, and encrypted credential.
-2. Inspect existing launcher state.
-3. If an existing healthy launcher-managed instance is already running, report it and do not start duplicate processes.
-4. If launcher state is stale, classify and clean the stale state without killing unrelated processes.
-5. Decrypt the tunnel Runtime API key in memory.
+1. Validate repository, Python environment, roots profile, audit directory, tunnel profile, tunnel-client executable, encrypted credential, and local runtime directories.
+2. Inspect any existing launcher state.
+3. If a healthy launcher-owned instance is already running, report it and do not create duplicates.
+4. If state is stale, classify it and clean only the stale state record; never kill an unverified process.
+5. Decrypt the Runtime API key in memory.
 6. Start Byte-MCP with the fixed remote environment.
-7. Wait for the MCP listener/endpoint on `127.0.0.1:8000` to become reachable.
-8. If Byte-MCP fails to become ready within the configured startup timeout, stop any process created by this invocation, report failure, and do not start the tunnel.
-9. Start `tunnel-client run --profile byte-mcp-local` with `CONTROL_PLANE_API_KEY` supplied in the child process environment.
-10. Wait for `http://127.0.0.1:8080/healthz` to return healthy.
-11. Wait for `http://127.0.0.1:8080/readyz` to return ready.
-12. If tunnel health/readiness fails, stop the tunnel process and the Byte-MCP process created by this invocation and report the failed layer.
-13. Persist verified process metadata to launcher state.
-14. Report `READY` and return control to the operator in background mode.
+7. Wait for `127.0.0.1:8000` and `/mcp` to respond. A raw HTTP response such as the expected MCP `406` is sufficient to prove the HTTP MCP endpoint is live; process existence alone is not.
+8. If the MCP endpoint does not become live within the startup timeout, stop any server process created by this invocation, report the server-layer failure, and do not start the tunnel.
+9. Start `tunnel-client run --profile byte-mcp-local` with `CONTROL_PLANE_API_KEY` supplied only in that child environment.
+10. Wait for `http://127.0.0.1:8080/healthz` to return `200` and `live`.
+11. Wait for `http://127.0.0.1:8080/readyz` to return `200` and `ready`.
+12. If tunnel health/readiness fails, stop both launcher-created processes and report the tunnel-layer failure.
+13. Persist verified process ownership metadata.
+14. Report `READY`.
 
-The launcher must not report success solely because child processes exist.
+The launcher must never report readiness solely because child PIDs exist.
 
-## Transactional startup behavior
+## Transactional startup
 
-Startup is transactional where practical.
+Startup is transactional where practical:
 
-The launcher must not intentionally leave a half-started stack after a startup failure.
-
-Required rollback rules:
-
-- Byte-MCP startup failure -> no tunnel process is started.
-- Tunnel start failure -> stop the Byte-MCP process created by this invocation.
-- Tunnel health timeout -> stop both processes created by this invocation.
-- Tunnel readiness timeout -> stop both processes created by this invocation.
-- State persistence failure after successful child startup -> report failure and stop both launcher-created processes unless state can be safely reconstructed immediately.
+- Byte-MCP start/readiness failure -> no tunnel is started.
+- Tunnel process creation failure -> stop the Byte-MCP process created by this invocation.
+- Tunnel health timeout -> stop both launcher-created processes.
+- Tunnel readiness timeout -> stop both launcher-created processes.
+- State-write failure after successful child startup -> stop both launcher-created processes unless state can be reconstructed and persisted immediately.
 
 Rollback applies only to processes created and verified as belonging to the current launcher operation.
 
-## State management
+## State and process ownership
 
-Launcher state lives at:
+State lives at:
 
 ```text
 %USERPROFILE%\.byte-mcp\runtime\launcher-state.json
 ```
 
-It contains only operational metadata required to identify and manage the launcher instance, for example:
+It contains non-secret operational metadata such as:
 
 ```json
 {
@@ -271,37 +253,44 @@ It contains only operational metadata required to identify and manage the launch
   "tunnel_profile": "byte-mcp-local",
   "server": {
     "pid": 12345,
-    "executable": "python.exe"
+    "executable_path": "C:\\...\\.venv\\Scripts\\python.exe",
+    "process_start_utc": "2026-08-29T00:00:00Z"
   },
   "tunnel": {
     "pid": 23456,
-    "executable": "tunnel-client.exe"
+    "executable_path": "C:\\...\\tunnel-client.exe",
+    "process_start_utc": "2026-08-29T00:00:01Z"
   }
 }
 ```
 
-The actual implementation may include additional non-secret ownership metadata where needed to make PID reuse checks reliable.
+A PID is never sufficient proof of ownership because Windows may reuse PIDs.
 
-A PID by itself is never sufficient proof of ownership because Windows may reuse process IDs.
+Before trusting or stopping a recorded process, the launcher verifies at minimum:
 
-Before stopping or trusting a recorded process, the launcher must verify that the process still exists and corresponds to the expected process role/executable.
+- PID exists;
+- executable path matches the expected executable;
+- process start time matches the recorded launcher instance within a small implementation-defined timestamp tolerance.
 
-If state is malformed or stale, the launcher must report that condition and avoid killing an unverified process.
+If ownership cannot be proven, the launcher reports the mismatch and does not kill the process.
 
 ## Status contract
 
-`Status-ByteMCP.ps1` is read-only with respect to the running services except that it may safely remove a state file proven to be stale if the implementation contract explicitly classifies that cleanup as benign maintenance. If cleanup introduces ambiguity, status should instead report stale state and leave cleanup to `Start` or `Stop`.
+`Status-ByteMCP.ps1` is observational and does not mutate launcher state.
 
-Status must distinguish:
+It distinguishes:
 
 - no launcher state;
+- malformed launcher state;
 - stale launcher state;
 - process absent;
-- process present but endpoint unhealthy;
-- tunnel healthy but not ready;
+- ownership mismatch;
+- server process running but MCP endpoint unhealthy;
+- tunnel process running but `/healthz` unhealthy;
+- tunnel healthy but `/readyz` not ready;
 - complete readiness.
 
-A healthy result should be equivalent to:
+Healthy output should be equivalent to:
 
 ```text
 BYTE-MCP STATUS
@@ -315,14 +304,14 @@ Root profile   : projects
 Overall        : READY
 ```
 
-A degraded result must name the failed layer, for example:
+A degraded result names the failed layer, for example:
 
 ```text
 Overall        : DEGRADED
 Reason         : tunnel process running but /readyz failed
 ```
 
-`Status-ByteMCP.ps1` must never display any part of the Runtime API key.
+Status never prints any part of the Runtime API key.
 
 ## Stop contract
 
@@ -332,29 +321,31 @@ Normal invocation:
 .\scripts\Stop-ByteMCP.ps1
 ```
 
-Stop performs the following:
+Stop:
 
-1. Read and validate launcher state.
-2. Verify recorded process identities before acting.
-3. Stop the verified tunnel process.
-4. Stop the verified Byte-MCP process.
-5. Confirm the relevant processes/listeners are no longer live.
-6. Remove launcher state only after successful or safely classified shutdown.
-7. Report any process that could not be verified or stopped.
+1. reads and validates launcher state;
+2. verifies recorded process ownership;
+3. stops the verified tunnel child first;
+4. stops the verified Byte-MCP child;
+5. confirms the processes and relevant listeners are gone;
+6. removes launcher state only after successful or safely classified shutdown;
+7. reports anything it could not verify or stop.
 
-Stop must never kill arbitrary `python.exe` or `tunnel-client.exe` processes merely by executable name.
+Stop must never kill arbitrary `python.exe` or `tunnel-client.exe` processes by executable name.
 
-Repeated invocation must be safe. If no launcher-managed instance is running, stop reports that state without failure.
+Repeated stop is idempotent from the operator's perspective: if no launcher-managed instance is running, it reports that state without treating it as an error.
+
+`Start` and `Stop` may remove a state file after conclusively proving it is stale. `Status` does not.
 
 ## Logging
 
-Operational logs live outside the repository:
+Background operational logs live at:
 
 ```text
 %USERPROFILE%\.byte-mcp\logs\
 ```
 
-Background mode uses separate standard-output and standard-error logs:
+Current-session files:
 
 ```text
 byte-mcp-server.log
@@ -363,25 +354,27 @@ tunnel-client.log
 tunnel-client.err.log
 ```
 
-The exact rotation policy for V1 should remain minimal. The implementation may truncate/recreate logs on each launcher start or use bounded simple rollover, but it must avoid unbounded accidental growth during routine operation.
+Launcher V1 uses a one-session bounded rollover. Before a new background start, each existing current log is moved to a matching `.previous.log` file, replacing the older previous file. Only the current and immediately previous launcher sessions are retained by this subsystem.
 
-Launcher logs are distinct from the Byte-MCP audit ledger:
+Foreground mode displays child output directly instead of redirecting to these current-session logs.
 
-- launcher logs explain infrastructure startup/runtime problems;
-- `audit.web.jsonl` records MCP operations and authorization outcomes.
+Launcher logs and the Byte-MCP audit ledger remain separate:
+
+- launcher logs diagnose infrastructure startup/runtime behavior;
+- `%USERPROFILE%\.byte-mcp\audit.web.jsonl` records MCP operations and authorization outcomes.
 
 The launcher must never deliberately log the decrypted Runtime API key.
 
 ## Error reporting
 
-Failures must identify the layer that failed rather than returning a generic startup error.
+Failures identify their layer rather than returning a generic error.
 
-Relevant classes include:
+Required classes include:
 
-- configuration missing/invalid;
+- missing/invalid configuration;
 - DPAPI credential missing/unreadable;
 - Byte-MCP process creation failure;
-- Byte-MCP readiness timeout;
+- Byte-MCP endpoint timeout;
 - tunnel process creation failure;
 - tunnel `/healthz` failure;
 - tunnel `/readyz` failure;
@@ -389,15 +382,15 @@ Relevant classes include:
 - state persistence failure;
 - shutdown verification failure.
 
-Diagnostics may point the operator to the relevant local log file but must not print secrets.
+Diagnostics may point to a relevant local log path but never expose secrets.
 
 ## Testing strategy
 
-This subsystem must be developed using TDD where practical.
+Launcher V1 is developed with TDD where practical. Decision logic should be isolated from operating-system side effects so that configuration, state, ownership, classification, and rollback behavior can be tested deterministically.
 
-The implementation should isolate pure decision logic from process-launch side effects so that most behavior can be verified without repeatedly launching real background processes.
+PowerShell launcher tests use **Pester 5 or later**. Pester is a development/CI dependency only; normal launcher operation must not require Pester to be installed.
 
-Tests should cover at least:
+Tests cover at least:
 
 - required-path/configuration validation;
 - existing-credential refusal;
@@ -406,38 +399,37 @@ Tests should cover at least:
 - state serialization/deserialization;
 - malformed-state classification;
 - stale-state classification;
-- process-role/ownership verification;
+- PID/executable/start-time ownership verification;
 - duplicate-start prevention;
 - status classification;
-- rollback decision behavior;
+- rollback decisions;
 - repeated-stop behavior;
 - no-secret fields in persisted state;
-- expected environment construction for Byte-MCP;
-- expected environment construction for tunnel-client without logging the secret.
+- exact Byte-MCP environment construction;
+- tunnel environment construction without secret logging;
+- bounded log rollover.
 
-PowerShell-specific tests should use Pester if introducing Pester remains lightweight and reproducible. If adding Pester would materially complicate repository bootstrap or CI, the implementation plan must define an equally deterministic Windows-native test harness before production code is written.
-
-The existing Python validation remains required:
+The existing Python validation remains mandatory:
 
 ```powershell
 .\scripts\Check.ps1
 ```
 
-Launcher work must not regress the accepted Python MCP suite.
+Launcher work must not regress the accepted MCP suite.
 
 ## CI strategy
 
-The current Windows and Ubuntu Python jobs remain intact.
+The existing Windows and Ubuntu Python jobs remain intact.
 
-Windows-specific launcher tests belong in a Windows CI job because DPAPI and Windows process behavior are not meaningfully portable to Ubuntu.
+A Windows launcher-test job installs Pester 5+, runs the launcher unit/integration tests that do not require a live OpenAI credential, and validates PowerShell syntax.
 
 CI must never require a real tunnel Runtime API key and must never open a real OpenAI Secure MCP Tunnel.
 
-Remote/tunnel acceptance remains a human-controlled live validation step.
+DPAPI tests run only on Windows. Live OpenAI tunnel acceptance remains a human-controlled local validation gate.
 
 ## Live acceptance sequence
 
-After automated tests pass, perform the following controlled Windows acceptance sequence:
+After automated verification passes:
 
 ```text
 Setup once
@@ -446,37 +438,37 @@ Setup once
 → invoke Byte-MCP from ChatGPT Web
 → run status
 → stop
-→ prove ports/listeners disappeared
+→ prove both listeners disappeared
 → start again without re-entering the Runtime API key
-→ verify ChatGPT reconnects through Byte-MCP
+→ verify ChatGPT reconnects
 → stop
 → run foreground troubleshooting-mode smoke test
 ```
 
 Acceptance requires:
 
-1. setup stores only an encrypted credential outside the repository;
-2. normal start requires one command and no credential re-entry;
+1. setup stores only a DPAPI-encrypted credential outside the repository;
+2. normal startup requires one command and no credential re-entry;
 3. only the AIProjects `projects` profile is launched;
 4. Byte-MCP remains loopback-only;
-5. tunnel health and readiness both pass before `READY` is reported;
+5. MCP liveness and tunnel health/readiness pass before `READY` is reported;
 6. ChatGPT can invoke the accepted Byte-MCP tools after launcher startup;
 7. status reports process and endpoint state accurately;
 8. stop terminates only launcher-owned processes;
 9. no Byte-MCP or tunnel listeners remain after successful stop;
 10. restart succeeds without rerunning setup;
-11. foreground mode provides usable troubleshooting output;
-12. no secret is written to Git, state, launcher logs, or console output.
+11. foreground mode provides visible troubleshooting output;
+12. no Runtime API secret is written to Git, state, logs, or console output.
 
 ## Non-goals
 
 Launcher V1 does not:
 
-- add write authority to Byte-MCP;
-- add new MCP tools;
+- add write authority;
+- add MCP tools;
 - alter the accepted four-tool read-only contract;
 - expose Downloads or Documents;
-- expose Byte-MCP on `0.0.0.0`;
+- bind Byte-MCP to `0.0.0.0`;
 - install a Windows service;
 - create a Scheduled Task;
 - auto-start at Windows login;
@@ -484,33 +476,22 @@ Launcher V1 does not:
 - run tests or arbitrary shell commands on behalf of ChatGPT;
 - manage unrelated Python or tunnel-client processes.
 
-Full AIProjects write authority is separate follow-on subsystem work after the launcher is accepted.
+Full AIProjects write authority is separate follow-on subsystem work after Launcher V1 acceptance.
 
 ## Future expansion
 
-After Launcher V1 is stable, possible later work includes:
-
-- optional Windows-login startup;
-- Windows service or Scheduled Task integration;
-- bounded log rotation;
-- richer local status UI;
-- controlled self-recovery after unexpected child-process exit;
-- additional explicitly authorized Byte-MCP profiles.
-
-These are not required for Launcher V1 acceptance.
+Possible later additions include Windows-login startup, Windows service/Scheduled Task integration, richer local status UI, controlled self-recovery after unexpected child exit, and additional explicitly authorized Byte-MCP profiles. None is required for Launcher V1.
 
 ## Security invariants
 
-The following invariants are mandatory:
-
 1. Byte-MCP remains bound to loopback.
 2. The launcher uses only the approved AIProjects remote profile.
-3. The OpenAI Runtime API key is never stored in plaintext.
+3. The OpenAI Runtime API key is never persisted in plaintext.
 4. The key is never accepted as a normal command-line argument.
 5. The key is never printed or logged.
 6. Launcher state contains no secrets or MCP content.
-7. Stop never kills a process that it cannot verify as launcher-owned.
-8. Startup never reports ready until both Byte-MCP and the tunnel are actually ready.
+7. Stop never kills a process that cannot be verified as launcher-owned.
+8. Startup never reports ready until Byte-MCP and the tunnel are actually ready.
 9. Failed startup rolls back processes created by that invocation where safely possible.
 10. The launcher does not alter Byte-MCP's filesystem authority.
 
@@ -518,11 +499,11 @@ The following invariants are mandatory:
 
 Byte-MCP Launcher V1 is complete only when:
 
-- the four launcher scripts are implemented;
-- automated Windows launcher tests pass;
+- all four launcher scripts are implemented;
+- Pester launcher tests pass on Windows;
 - the existing Python Byte-MCP validation still passes;
 - live background startup passes;
-- ChatGPT invocation through the launched stack passes;
+- ChatGPT invocation through the launcher-started stack passes;
 - status and stop behavior pass;
 - restart without credential re-entry passes;
 - foreground troubleshooting mode passes;
