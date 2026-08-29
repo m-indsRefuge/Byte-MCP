@@ -2,6 +2,27 @@
 
 All notable Byte-MCP changes are documented here.
 
+## [Unreleased] - Launcher V1
+
+### Added
+
+- Added repository-native PowerShell launcher commands for one-time setup, background start, observational status, verified stop, and foreground troubleshooting.
+- Added Windows user-bound DPAPI storage for the restricted Secure MCP Tunnel Runtime API key outside the repository.
+- Added launcher state with PID, executable path, and process start-time identity for both managed children.
+- Added MCP endpoint, tunnel health, and tunnel readiness gates before a background stack is recorded as ready.
+- Added transactional startup rollback so only processes created by the failed launcher invocation are stopped, in reverse order.
+- Added duplicate-start prevention and unmanaged port-conflict refusal for ports 8000 and 8080.
+- Added one-generation launcher log rotation beneath `%USERPROFILE%\.byte-mcp\logs`.
+- Added verified, idempotent shutdown that refuses to kill processes whose recorded identity cannot be proven.
+- Added foreground troubleshooting mode without managed launcher-state persistence.
+- Added Pester launcher validation and a Windows GitHub Actions launcher job.
+
+### Security boundary
+
+- Launcher V1 does not add MCP tools, filesystem mutation authority, new remote roots, shell access, or non-loopback binding.
+- The accepted ChatGPT remote profile remains `projects -> %USERPROFILE%\AIProjects` only.
+- The Runtime API key is never accepted as a launcher command-line parameter and is only exposed through process-scope environment during tunnel child creation.
+
 ## [0.1.1] - 2026-08-06
 
 ### Completed
