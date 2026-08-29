@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from byte_mcp.ox.service import OXReviewService
 
 from byte_mcp.errors import (
     OXApprovalError,
@@ -17,6 +16,7 @@ from byte_mcp.errors import (
 )
 from byte_mcp.ox.evidence import EvidenceStore
 from byte_mcp.ox.models import ProviderResult, ProviderUsage, ReviewState
+from byte_mcp.ox.service import OXReviewService
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import create_repository
 
