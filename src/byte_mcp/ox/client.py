@@ -1,5 +1,8 @@
 """Fixed, single-attempt HTTP client for the OX validation provider."""
 
+import json
+import math
+import re
 from collections.abc import Mapping, Sequence
 
 import httpx
@@ -25,6 +28,8 @@ _MODEL = "zai/glm-5.3-flash"
 _PROVIDER_OPTIONS = {"gateway": {"only": ["zai"]}}
 _MAX_TOKENS = 16_384
 _TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+_ATTEMPT_ID_PATTERN = re.compile(r"OX-(\d{6,})-A(\d{3,})")
+_SAFE_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
 _CONTEXT_ERROR_CODES = frozenset(
     {
@@ -62,12 +67,13 @@ class OXClient:
         json_mode: bool,
         attempt_id: str,
     ) -> ProviderResult:
-        del attempt_id
+        _validate_attempt_id(attempt_id)
+        validated_messages = _validate_messages(messages)
         if not self._api_key:
-            raise OXConfigurationError("AI gateway API key is not configured")
+            raise OXConfigurationError()
 
         body: dict[str, object] = {
-            "messages": list(messages),
+            "messages": validated_messages,
             "model": _MODEL,
             "stream": False,
             "max_tokens": _MAX_TOKENS,
@@ -76,37 +82,55 @@ class OXClient:
         if json_mode:
             body["response_format"] = {"type": "json_object"}
 
+        _validate_json(body)
         headers = {"Authorization": f"Bearer {self._api_key}"}
+        request_error = None
         try:
             with httpx.Client(
                 transport=self._transport, timeout=_TIMEOUT, follow_redirects=False
             ) as client:
                 response = client.post(_GATEWAY_URL, headers=headers, json=body)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as error:
-            raise OXTransportError(attempt_outcome="NOT_SENT") from error
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            request_error = OXTransportError(attempt_outcome="NOT_SENT")
         except (
             httpx.WriteTimeout,
             httpx.ReadTimeout,
             httpx.ReadError,
             httpx.WriteError,
             httpx.RemoteProtocolError,
-        ) as error:
-            raise OXTransportError(attempt_outcome="OUTCOME_UNKNOWN") from error
-        except httpx.HTTPError as error:
-            raise OXTransportError(attempt_outcome="OUTCOME_UNKNOWN") from error
+        ):
+            request_error = OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
+        except httpx.HTTPError:
+            request_error = OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
+        except (TypeError, ValueError, OverflowError, RecursionError):
+            request_error = OXRequestError(attempt_outcome="NOT_SENT")
+        if request_error is not None:
+            raise request_error
 
         if response.status_code >= 400:
             self._raise_http_error(response)
 
+        protocol_error = None
         try:
             raw_response = response.json()
-        except (UnicodeError, ValueError) as error:
-            raise OXProtocolError(attempt_outcome="COMPLETED") from error
+        except Exception:
+            protocol_error = OXProtocolError(attempt_outcome="COMPLETED")
+        if protocol_error is not None:
+            raise protocol_error
         if not isinstance(raw_response, dict):
             raise OXProtocolError(attempt_outcome="COMPLETED")
 
-        safe_response = _redact_secret(raw_response, self._api_key)
-        return _parse_response(safe_response)
+        parse_error = None
+        try:
+            safe_response = _redact_secret(raw_response, self._api_key)
+            result = _parse_response(safe_response)
+        except OXProtocolError as error:
+            parse_error = error
+        except Exception:
+            parse_error = OXProtocolError(attempt_outcome="COMPLETED")
+        if parse_error is not None:
+            raise parse_error
+        return result
 
     @staticmethod
     def _raise_http_error(response: httpx.Response) -> None:
@@ -137,7 +161,7 @@ class OXClient:
 def _safe_error_code(response: httpx.Response) -> str | None:
     try:
         payload = response.json()
-    except (UnicodeError, ValueError):
+    except Exception:
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -208,3 +232,68 @@ def _redact_secret(value: object, secret: str) -> object:
     if isinstance(value, list):
         return [_redact_secret(item, secret) for item in value]
     return value
+
+
+def _validate_attempt_id(attempt_id: object) -> None:
+    if not isinstance(attempt_id, str) or _ATTEMPT_ID_PATTERN.fullmatch(attempt_id) is None:
+        raise OXRequestError(attempt_outcome="NOT_SENT")
+
+
+def _validate_messages(messages: object) -> list[dict[str, object]]:
+    if isinstance(messages, str | bytes | bytearray) or not isinstance(messages, Sequence):
+        raise OXRequestError(attempt_outcome="NOT_SENT")
+    invalid = False
+    try:
+        if len(messages) == 0:
+            raise ValueError
+        validated = []
+        for message in messages:
+            if not isinstance(message, Mapping):
+                raise ValueError
+            prepared = dict(message)
+            role = prepared.get("role")
+            content = prepared.get("content")
+            if not isinstance(role, str) or role not in _SAFE_MESSAGE_ROLES:
+                raise ValueError
+            if not isinstance(content, str):
+                raise ValueError
+            safe_message = _json_safe_copy(prepared)
+            if not isinstance(safe_message, dict):
+                raise ValueError
+            validated.append(safe_message)
+        _validate_json(validated)
+    except Exception:
+        invalid = True
+    if invalid:
+        raise OXRequestError(attempt_outcome="NOT_SENT")
+    return validated
+
+
+def _validate_json(value: object) -> None:
+    try:
+        json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        invalid = True
+    else:
+        return
+    if invalid:
+        raise OXRequestError(attempt_outcome="NOT_SENT")
+
+
+def _json_safe_copy(value: object) -> object:
+    if value is None or isinstance(value, str | int | bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError
+        return value
+    if isinstance(value, Mapping):
+        copied: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError
+            copied[key] = _json_safe_copy(item)
+        return copied
+    if isinstance(value, list | tuple):
+        return [_json_safe_copy(item) for item in value]
+    raise TypeError

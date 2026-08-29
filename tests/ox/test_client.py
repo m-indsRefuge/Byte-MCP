@@ -125,6 +125,8 @@ def test_complete_maps_provider_status_to_safe_domain_error(status, payload, err
     assert calls == 1
     assert raised.value.attempt_outcome == "REJECTED"
     assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
     assert SECRET not in str(raised.value)
     assert SECRET not in repr(raised.value)
 
@@ -156,6 +158,9 @@ def test_complete_maps_transport_failure_without_retry(exception_type, outcome):
     assert calls == 1
     assert raised.value.attempt_outcome == outcome
     assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert SECRET not in repr(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -198,6 +203,26 @@ def test_complete_rejects_malformed_success_response(malformed):
     assert calls == 1
     assert raised.value.attempt_outcome == "COMPLETED"
     assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert SECRET not in repr(raised.value)
+
+
+def test_complete_suppresses_response_json_failure_details():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=f'{{"content":"{SECRET}"'.encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    with pytest.raises(OXProtocolError) as raised:
+        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+
+    assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert SECRET not in repr(raised.value)
 
 
 @pytest.mark.parametrize("field", ["id", "model"])
@@ -209,3 +234,65 @@ def test_complete_rejects_unsafe_response_metadata_shape(field):
 
     with pytest.raises(OXProtocolError):
         make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+
+
+@pytest.mark.parametrize(
+    "attempt_id",
+    [
+        "OX-000001",
+        "OX-00001-A001",
+        "OX-000001-A01",
+        "OX-000001-A001-extra",
+        "HEAD",
+        None,
+    ],
+)
+def test_complete_rejects_invalid_attempt_id_before_http_call(attempt_id):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=SUCCESS_BODY)
+
+    with pytest.raises(OXRequestError) as raised:
+        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=attempt_id)
+
+    assert calls == 0
+    assert raised.value.attempt_outcome == "NOT_SENT"
+    assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert SECRET not in repr(raised.value)
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        "not a message sequence",
+        ({"role": "user", "content": "x"} for _ in range(1)),
+        ["not a mapping"],
+        [{"role": "developer", "content": "x"}],
+        [{"role": "user"}],
+        [{"content": "x"}],
+        [{"role": "user", "content": None}],
+        [{"role": "user", "content": "x", "extra": object()}],
+    ],
+)
+def test_complete_rejects_invalid_messages_before_http_call(messages):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=SUCCESS_BODY)
+
+    with pytest.raises(OXRequestError) as raised:
+        make_client(handler).complete(messages, json_mode=False, attempt_id=ATTEMPT_ID)
+
+    assert calls == 0
+    assert raised.value.attempt_outcome == "NOT_SENT"
+    assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert SECRET not in repr(raised.value)
