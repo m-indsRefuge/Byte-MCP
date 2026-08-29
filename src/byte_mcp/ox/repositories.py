@@ -46,12 +46,11 @@ def _validate_identifier(value: object, label: str) -> str:
 def _validate_logical_git_path(value: object) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("logical Git path must not be empty")
-    if "\x00" in value or value.startswith("/") or _DRIVE_PREFIX.match(value):
+    if "\x00" in value or "\\" in value or value.startswith("/") or _DRIVE_PREFIX.match(value):
         raise ValueError(f"invalid logical Git path: {value!r}")
-    normalized = value.replace("\\", "/")
-    if any(segment in {"", ".", ".."} for segment in normalized.split("/")):
+    if any(segment in {"", ".", ".."} for segment in value.split("/")):
         raise ValueError(f"invalid logical Git path: {value!r}")
-    return normalized
+    return value
 
 
 def _path_list(value: object, label: str) -> tuple[str, ...]:

@@ -73,7 +73,9 @@ def test_registry_rejects_non_git_directory(tmp_path):
         RepositoryRegistry.load(registry_path)
 
 
-@pytest.mark.parametrize("logical_path", ["src/../secret", "tests\\..\\secret", "C:/drive", ""])
+@pytest.mark.parametrize(
+    "logical_path", ["src\\nested", "src/../secret", "tests\\..\\secret", "C:/drive", ""]
+)
 def test_registry_rejects_invalid_logical_paths(tmp_path, logical_path):
     repository_path, _, _ = create_repository(tmp_path)
     registry_path = tmp_path / "repositories.json"
