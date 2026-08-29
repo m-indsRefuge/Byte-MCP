@@ -88,4 +88,30 @@ Describe 'Launcher state contract' {
         $state.server.pid | Should -Be 100
         $state.tunnel.pid | Should -Be 200
     }
+
+    It 'writes and reads schema version 1 state' {
+        $path = Join-Path $TestDrive 'runtime\launcher-state.json'
+        $state = New-LauncherState -RepoPath 'C:\repo' -Mode 'background' `
+            -ServerPid 100 -ServerExecutable 'C:\Python\python.exe' -ServerStartedAtUtc '2026-08-29T10:00:00Z' `
+            -TunnelPid 200 -TunnelExecutable 'C:\OpenAI\tunnel-client.exe' -TunnelStartedAtUtc '2026-08-29T10:00:01Z'
+
+        Write-LauncherState -State $state -Path $path
+        $roundTrip = Read-LauncherState -Path $path
+
+        $roundTrip.schema_version | Should -Be 1
+        $roundTrip.mode | Should -Be 'background'
+        $roundTrip.server.pid | Should -Be 100
+        $roundTrip.tunnel.pid | Should -Be 200
+        Test-Path -LiteralPath "$path.tmp" | Should -BeFalse
+    }
+
+    It 'rejects malformed or unsupported launcher state' {
+        $malformedPath = Join-Path $TestDrive 'malformed.json'
+        $unsupportedPath = Join-Path $TestDrive 'unsupported.json'
+        Set-Content -LiteralPath $malformedPath -Value '{not-json'
+        Set-Content -LiteralPath $unsupportedPath -Value '{"schema_version":2}'
+
+        { Read-LauncherState -Path $malformedPath } | Should -Throw '*Malformed launcher state*'
+        { Read-LauncherState -Path $unsupportedPath } | Should -Throw '*Unsupported launcher state schema*'
+    }
 }
