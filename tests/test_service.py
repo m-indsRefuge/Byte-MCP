@@ -94,6 +94,56 @@ def test_list_directory_excludes_blocked_material(tmp_path: Path) -> None:
     assert names == {"visible.txt"}
 
 
+def test_list_roots_does_not_expose_absolute_paths(tmp_path: Path) -> None:
+    approved = tmp_path / "projects"
+    approved.mkdir()
+
+    service = FileService(
+        make_settings(tmp_path),
+        {"projects": approved.resolve()},
+    )
+
+    result = service.list_roots()
+
+    assert result["roots"] == [{"alias": "projects"}]
+
+
+def test_search_metadata_does_not_expose_absolute_paths(tmp_path: Path) -> None:
+    approved = tmp_path / "projects"
+    approved.mkdir()
+    report = approved / "status.txt"
+    report.write_text("ok", encoding="utf-8")
+
+    service = FileService(
+        make_settings(tmp_path),
+        {"projects": approved.resolve()},
+    )
+
+    result = service.search("status", root="projects")
+    metadata = result["results"][0]
+
+    assert "absolute_path" not in metadata
+    assert metadata["relative_path"] == "status.txt"
+
+
+def test_fetch_metadata_does_not_expose_absolute_paths(tmp_path: Path) -> None:
+    approved = tmp_path / "projects"
+    approved.mkdir()
+    report = approved / "status.txt"
+    report.write_text("ok", encoding="utf-8")
+
+    service = FileService(
+        make_settings(tmp_path),
+        {"projects": approved.resolve()},
+    )
+
+    search_result = service.search("status", root="projects")
+    fetched = service.fetch(search_result["results"][0]["ref"])
+
+    assert "absolute_path" not in fetched
+    assert fetched["relative_path"] == "status.txt"
+
+
 def test_unknown_root_is_denied_and_audited(tmp_path: Path) -> None:
     approved = tmp_path / "downloads"
     approved.mkdir()
