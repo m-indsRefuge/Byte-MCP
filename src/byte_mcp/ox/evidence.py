@@ -271,10 +271,13 @@ class EvidenceStore:
         with self._lock_for(review_id):
             try:
                 self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to append thread message") from None
+            try:
                 self._append_jsonl(
                     self._review_dir(review_id) / "threads" / f"{thread_name}.jsonl", message
                 )
-            except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
+            except (OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to append thread message") from None
 
     def persist_provider_response(
