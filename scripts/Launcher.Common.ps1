@@ -137,13 +137,13 @@ function Unprotect-ByteMcpCredential {
 function New-LauncherChildRecord {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)] [int] $Pid,
+        [Parameter(Mandatory)] [int] $ProcessId,
         [Parameter(Mandatory)] [string] $ExecutablePath,
         [Parameter(Mandatory)] [string] $StartedAtUtc
     )
 
     [PSCustomObject]@{
-        pid = $Pid
+        pid = $ProcessId
         executable_path = [System.IO.Path]::GetFullPath($ExecutablePath)
         started_at_utc = ([datetime] $StartedAtUtc).ToUniversalTime().ToString('o')
     }
@@ -169,7 +169,7 @@ function New-LauncherState {
         repo_path = $RepoPath
         root_profile = 'projects'
         tunnel_profile = 'byte-mcp-local'
-        server = New-LauncherChildRecord -Pid $ServerPid -ExecutablePath $ServerExecutable -StartedAtUtc $ServerStartedAtUtc
-        tunnel = New-LauncherChildRecord -Pid $TunnelPid -ExecutablePath $TunnelExecutable -StartedAtUtc $TunnelStartedAtUtc
+        server = New-LauncherChildRecord -ProcessId $ServerPid -ExecutablePath $ServerExecutable -StartedAtUtc $ServerStartedAtUtc
+        tunnel = New-LauncherChildRecord -ProcessId $TunnelPid -ExecutablePath $TunnelExecutable -StartedAtUtc $TunnelStartedAtUtc
     }
 }
