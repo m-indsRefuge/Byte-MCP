@@ -10,7 +10,7 @@ class OXSettings:
     repositories_file: Path
     evidence_root: Path
     max_bundle_bytes: int = 4_000_000
-    max_output_tokens: int = 16_384
+    max_output_tokens: int = 65_536
     gateway_url: str = "https://ai-gateway.vercel.sh/v1/chat/completions"
     model: str = "zai/glm-5.3-flash"
     provider_slug: str = "zai"
@@ -48,5 +48,5 @@ class OXSettings:
             repositories,
             evidence_root,
             bounded("BYTE_MCP_OX_MAX_BUNDLE_BYTES", 4_000_000, 16_384, 16_000_000),
-            bounded("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", 16_384, 1_024, 65_536),
+            bounded("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", 65_536, 1_024, 131_072),
         )
