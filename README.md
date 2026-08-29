@@ -4,17 +4,18 @@ Byte-MCP is an extensible, permissioned Model Context Protocol server for connec
 
 ## Project status
 
-Byte-MCP V1.1 remains the accepted local read-only baseline. Its original closeout is preserved as historical evidence, while a bounded remote-integration validation increment is now active using OpenAI Secure MCP Tunnel.
+Byte-MCP V1.1 remains the accepted read-only capability baseline. The ChatGPT Web integration through OpenAI Secure MCP Tunnel has been validated, and Launcher V1 now provides a bounded Windows control plane for starting, inspecting, and stopping that accepted stack.
 
 ```text
 Release baseline:     0.1.1
 Local implementation: successful_validation
 Remote transport:     OpenAI Secure MCP Tunnel
-ChatGPT validation:   in_progress
+ChatGPT validation:   accepted
+Launcher:             V1 validation in progress
 Authority:            read_only
 ```
 
-The current deployment work does not add tools or mutation authority. It hardens MCP-facing responses so local absolute filesystem paths are not disclosed and validates the existing four-tool server through the first-party tunnel path.
+Launcher V1 does not add tools, roots, or mutation authority. It automates only the already accepted local server and tunnel runtime while preserving the AIProjects-only remote root profile and existing read-only security boundary.
 
 Authoritative records:
 
@@ -36,7 +37,7 @@ V1 is deliberately read-only:
 - append every operation to a local audit ledger
 - block path traversal, symlinks, junctions, common secret locations, and sensitive key formats
 
-No write, rename, delete, execute, shell, process-control, or unrestricted-path tools exist in V1.
+No write, rename, delete, execute, shell, process-control MCP tool, or unrestricted-path tool exists in V1.
 
 ## V1.1 hardening
 
@@ -52,35 +53,86 @@ V1.1 preserves the four-tool V1 contract while adding:
 
 ## Remote-integration hardening
 
-Before the first ChatGPT tunnel connection, the MCP response contract is hardened so:
+The MCP response contract is hardened so:
 
 - `list_roots` exposes approved aliases, not backing local filesystem paths;
 - search and fetch metadata expose root aliases and relative paths, not `absolute_path`;
 - regression tests enforce those response boundaries.
 
-This is a deployment-security increment over the V1.1 baseline, not an expansion of authority.
-
-## Approved local roots
-
-Machine-specific roots live in:
-
-```text
-config/roots.local.json
-```
-
-That file is excluded from Git. The local scaffold creates these aliases:
-
-- `downloads`
-- `documents`
-- `projects`
-
-For the resumed ChatGPT tunnel validation, a separate profile outside the repository exposes exactly one root:
+The accepted ChatGPT remote profile exposes exactly one root:
 
 ```text
 projects -> %USERPROFILE%\AIProjects
 ```
 
-Downloads, Documents, drive roots, and other local locations are not part of the first accepted remote profile. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
+Downloads, Documents, drive roots, and other local locations are not exposed through the accepted remote profile.
+
+## Launcher V1
+
+Launcher V1 is a repository-native PowerShell control layer for the accepted Byte-MCP + Secure MCP Tunnel stack.
+
+One-time setup stores the restricted tunnel Runtime API key using Windows user-bound DPAPI:
+
+```powershell
+.\scripts\Setup-ByteMCP.ps1
+```
+
+Start the managed background stack:
+
+```powershell
+.\scripts\Start-ByteMCP.ps1
+```
+
+Inspect launcher state and health without mutating it:
+
+```powershell
+.\scripts\Status-ByteMCP.ps1
+```
+
+Stop only launcher-owned processes whose PID, executable path, and process start time still match recorded state:
+
+```powershell
+.\scripts\Stop-ByteMCP.ps1
+```
+
+Run foreground troubleshooting mode when direct server and tunnel diagnostics are needed:
+
+```powershell
+.\scripts\Start-ByteMCP.ps1 -Foreground
+```
+
+Launcher machine-local data lives beneath:
+
+```text
+%USERPROFILE%\.byte-mcp\
+```
+
+Key locations include:
+
+```text
+credentials\tunnel-runtime-key.dpapi
+runtime\launcher-state.json
+logs\byte-mcp-server.log
+logs\byte-mcp-server.err.log
+logs\tunnel-client.log
+logs\tunnel-client.err.log
+roots.web.json
+audit.web.jsonl
+```
+
+The encrypted credential is bound to the current Windows user. The Runtime API key is never accepted as a launcher command-line parameter and is injected into the tunnel child process only during process creation. Current and previous log generations are bounded by one `.previous` rotation.
+
+ChatGPT can invoke the local Byte-MCP tools only while both the local MCP server and Secure MCP Tunnel are running and healthy. Launcher V1 remains runtime orchestration only; it does not grant filesystem write authority.
+
+## Approved local roots
+
+Machine-specific roots for manual/local profiles may live in:
+
+```text
+config/roots.local.json
+```
+
+That file is excluded from Git. The accepted ChatGPT profile is separate and remains AIProjects-only as described above.
 
 ## Supported V1 extraction
 
@@ -88,7 +140,9 @@ Text/source/config formats, PDF, DOCX, XLSX, PPTX, and ZIP metadata listings.
 
 ZIP archives are listed only. Byte-MCP does not execute files or automatically extract archive contents.
 
-## Run
+## Manual server run
+
+The launcher is the preferred operational path. For direct development use, the server can still be run manually:
 
 ```powershell
 .\scripts\Run-Server.ps1
@@ -118,8 +172,16 @@ http://127.0.0.1:8000/mcp
 
 ## Validate the repository
 
+Run the aggregate repository gate:
+
 ```powershell
 .\scripts\Check.ps1
+```
+
+On Windows this includes the launcher Pester suite. The launcher-only gate is:
+
+```powershell
+.\scripts\Check-Launcher.ps1
 ```
 
 ## Validate the live MCP protocol
@@ -143,28 +205,26 @@ The smoke test emits structured JSON with either `successful_validation` or `fai
 
 ## Audit ledger
 
-Runtime audit records are stored locally in:
+Runtime audit records are stored at the location configured by `BYTE_MCP_AUDIT_FILE`. The accepted ChatGPT profile uses:
 
 ```text
-data/audit.jsonl
+%USERPROFILE%\.byte-mcp\audit.web.jsonl
 ```
-
-A remote validation profile may override that location through `BYTE_MCP_AUDIT_FILE`.
 
 Fetched content is never written to the ledger. Search terms and opaque references are fingerprinted before audit storage.
 
 ## Architecture
 
 ```text
-ChatGPT Web                                   validation in progress
+ChatGPT Web                                  accepted integration
     |
     | OpenAI Secure MCP Tunnel
     v
-OpenAI tunnel-client                         local outbound-only runtime
+OpenAI tunnel-client                        launcher-managed child process
     |
     | http://127.0.0.1:8000/mcp
     v
-Byte-MCP Streamable HTTP server              validated local baseline
+Byte-MCP Streamable HTTP server             launcher-managed child process
     |
     +-- explicit loopback network boundary
     +-- approved root aliases
@@ -175,20 +235,18 @@ Byte-MCP Streamable HTTP server              validated local baseline
     +-- append-only local audit ledger
 ```
 
-No remote deployment is accepted until every gate in the remote-integration resumption document passes.
-
 ## Release boundary
 
 The V1.1 capability boundary remains frozen. Any of the following requires a new version and separate security review:
 
-- write, rename, move, delete, or rollback tools
-- shell, process, registry, application-control, or arbitrary HTTP tools
+- write, rename, move, delete, or rollback MCP tools
+- shell, registry, application-control, or arbitrary HTTP MCP tools
 - non-loopback binding
 - additional remotely exposed roots
 - materially different authentication authority
 - integration with B87 Chess Arena or another Byte-Nolan system
 
-The separate chess-capability work remains isolated from this release line.
+Launcher process control is local operator infrastructure only; it does not alter the MCP tool authority exposed to ChatGPT.
 
 ## Planned expansion
 

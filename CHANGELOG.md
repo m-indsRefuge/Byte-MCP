@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable Byte-MCP changes are documented here.
 
@@ -72,3 +72,4 @@ Lifecycle state:     complete_and_frozen
 - SHA-256 calculation for fetched files.
 - Basic local audit ledger.
 - Traversal, symlink, junction, secret-location, and sensitive-suffix denial.
+
