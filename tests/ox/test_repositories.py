@@ -49,6 +49,17 @@ def test_registry_returns_configured_definition_and_denies_unknown_alias(tmp_pat
         registry.get("unconfigured")
 
 
+def test_registry_accepts_utf8_bom_from_windows_json_writer(tmp_path):
+    repository_path, _, _ = create_repository(tmp_path)
+    registry_path = tmp_path / "repositories.json"
+    write_registry(registry_path, repository_path)
+    registry_path.write_bytes(b"\xef\xbb\xbf" + registry_path.read_bytes())
+
+    registry = RepositoryRegistry.load(registry_path)
+
+    assert registry.get("fixture").path == repository_path
+
+
 @pytest.mark.parametrize(
     "repository_path", [Path("relative-repository"), Path("missing-repository")]
 )
