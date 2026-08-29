@@ -36,6 +36,11 @@ Describe 'Launcher configuration contract' {
         Get-TunnelClientPath | Should -Be 'C:\Tools\tunnel-client.exe'
     }
 
+    It 'does not depend on the PowerShell 7 IsWindows automatic variable' {
+        $source = Get-Content -LiteralPath $commonScript -Raw
+        $source | Should -Not -Match '\$IsWindows\b'
+    }
+
     It 'accepts complete prerequisites when credential checking is skipped' {
         $paths = [PSCustomObject]@{
             RepoRoot          = 'C:\repo'
