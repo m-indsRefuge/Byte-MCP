@@ -6,6 +6,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'Launcher.Platform.ps1')
 . (Join-Path $PSScriptRoot 'Launcher.Common.ps1')
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
