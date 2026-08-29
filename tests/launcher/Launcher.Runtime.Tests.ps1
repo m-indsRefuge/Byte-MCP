@@ -199,6 +199,33 @@ Describe 'Launcher transactional background startup' {
         }
     }
 
+    It 'restores previously absent server environment variables as absent' {
+        $map = Get-ByteMcpServerEnvironment -UserProfile 'C:\Users\test'
+        $prior = @{}
+
+        foreach ($name in $map.Keys) {
+            $prior[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        }
+
+        try {
+            Mock Start-Process {
+                [PSCustomObject]@{ Id = 101; Path = 'C:\repo\.venv\Scripts\python.exe'; StartTime = Get-Date }
+            }
+
+            $null = Start-LauncherServerProcess -Paths $script:runtimePaths
+
+            foreach ($name in $map.Keys) {
+                Test-Path -LiteralPath "Env:$name" | Should -BeFalse
+            }
+        }
+        finally {
+            foreach ($name in $map.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $prior[$name], 'Process')
+            }
+        }
+    }
+
     It 'injects the decrypted Runtime API key only during tunnel child creation and restores the parent value' {
         $priorKey = [Environment]::GetEnvironmentVariable('CONTROL_PLANE_API_KEY', 'Process')
         [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', 'parent-sentinel', 'Process')
