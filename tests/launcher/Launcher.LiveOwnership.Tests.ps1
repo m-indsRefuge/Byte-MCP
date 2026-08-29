@@ -21,21 +21,7 @@ BeforeAll {
 }
 
 Describe 'Launcher live server ownership' {
-    It 'records the actual port 8000 listener process instead of the venv redirector' {
-        $script:writtenState = $null
-
-        Mock Assert-ByteMcpLauncherPrerequisites {}
-        Mock Get-LauncherStateClassification { 'absent' }
-        Mock Get-LauncherPortConflicts { @() }
-        Mock Rotate-LauncherLog {}
-        Mock Start-LauncherServerProcess {
-            [PSCustomObject]@{
-                Id = 38800
-                Path = 'C:\repo\.venv\Scripts\python.exe'
-                StartTime = [datetime]'2026-08-29T13:26:34Z'
-            }
-        }
-        Mock Wait-ByteMcpEndpoint { $true }
+    BeforeEach {
         Mock Get-NetTCPConnection {
             [PSCustomObject]@{
                 LocalAddress = '127.0.0.1'
@@ -58,6 +44,23 @@ Describe 'Launcher live server ownership' {
                 ExecutablePath = 'C:\Python312\python.exe'
             }
         }
+    }
+
+    It 'records the actual port 8000 listener process instead of the venv redirector' {
+        $script:writtenState = $null
+
+        Mock Assert-ByteMcpLauncherPrerequisites {}
+        Mock Get-LauncherStateClassification { 'absent' }
+        Mock Get-LauncherPortConflicts { @() }
+        Mock Rotate-LauncherLog {}
+        Mock Start-LauncherServerProcess {
+            [PSCustomObject]@{
+                Id = 38800
+                Path = 'C:\repo\.venv\Scripts\python.exe'
+                StartTime = [datetime]'2026-08-29T13:26:34Z'
+            }
+        }
+        Mock Wait-ByteMcpEndpoint { $true }
         Mock Start-LauncherTunnelProcess {
             [PSCustomObject]@{
                 Id = 40508
@@ -74,5 +77,33 @@ Describe 'Launcher live server ownership' {
         $script:writtenState | Should -Not -BeNullOrEmpty
         $script:writtenState.server.pid | Should -Be 25520
         $script:writtenState.server.executable_path | Should -Be 'C:\Python312\python.exe'
+    }
+
+    It 'stops the actual foreground listener as well as the venv redirector' {
+        Mock Assert-ByteMcpLauncherPrerequisites {}
+        Mock Start-LauncherForegroundServer {
+            [PSCustomObject]@{
+                Id = 38800
+                Path = 'C:\repo\.venv\Scripts\python.exe'
+                StartTime = [datetime]'2026-08-29T13:26:34Z'
+            }
+        }
+        Mock Wait-ByteMcpEndpoint { $true }
+        Mock Start-LauncherForegroundTunnel {
+            [PSCustomObject]@{
+                Id = 40508
+                Path = 'C:\OpenAI\tunnel-client.exe'
+                StartTime = [datetime]'2026-08-29T13:26:36Z'
+            }
+        }
+        Mock Wait-TunnelHealth { $true }
+        Mock Wait-TunnelReady { $true }
+        Mock Wait-Process {}
+        Mock Stop-LauncherCreatedProcess {}
+
+        Start-ByteMcpForegroundStack -Paths $script:ownershipPaths -StartupTimeoutSeconds 5
+
+        Should -Invoke Stop-LauncherCreatedProcess -ParameterFilter { $Process.Id -eq 25520 } -Times 1
+        Should -Invoke Stop-LauncherCreatedProcess -ParameterFilter { $Process.Id -eq 38800 } -Times 1
     }
 }
