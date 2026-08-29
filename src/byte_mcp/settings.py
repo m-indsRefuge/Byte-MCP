@@ -131,7 +131,18 @@ def load_roots(settings: Settings) -> dict[str, Path]:
         raise ByteMCPError(f"Roots configuration is missing: {settings.roots_file}")
 
     try:
-        payload = json.loads(settings.roots_file.read_text(encoding="utf-8"))
+        raw = settings.roots_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ByteMCPError(
+            f"Roots configuration cannot be read as UTF-8: {settings.roots_file}"
+        ) from exc
+    except OSError as exc:
+        raise ByteMCPError(
+            f"Roots configuration cannot be read: {settings.roots_file}"
+        ) from exc
+
+    try:
+        payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ByteMCPError(
             f"Roots configuration contains invalid JSON: {settings.roots_file}"
@@ -150,7 +161,13 @@ def load_roots(settings: Settings) -> dict[str, Path]:
         if not isinstance(raw_path, str):
             raise ByteMCPError(f"Root path for {alias!r} must be a string.")
 
-        path = Path(os.path.expandvars(raw_path)).expanduser().resolve(strict=True)
+        try:
+            path = Path(os.path.expandvars(raw_path)).expanduser().resolve(strict=True)
+        except OSError as exc:
+            raise ByteMCPError(
+                f"Approved root cannot be resolved for {alias!r}: {raw_path}"
+            ) from exc
+
         if not path.is_dir():
             raise ByteMCPError(f"Approved root is not a directory: {path}")
         roots[alias] = path
