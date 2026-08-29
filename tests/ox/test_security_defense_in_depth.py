@@ -2,9 +2,11 @@ import json
 
 import pytest
 
-from byte_mcp.errors import OXBundleError
+from byte_mcp.errors import OXBundleError, OXTransportError
+from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import commit_files
-from tests.ox.test_review_service import verification
+from tests.ox.test_review_followup import UnknownContinuationClient, UnknownTargetedClient
+from tests.ox.test_review_service import make_service, prepare, verification
 from tests.ox.test_security_invariants import (
     SECRET,
     BoundaryClient,
@@ -71,3 +73,79 @@ def test_get_review_rejects_configured_credential_from_tampered_local_evidence(t
 
     with pytest.raises(OXBundleError):
         service.get_review(review_id, view="summary")
+
+
+def test_continuation_retry_rejects_credential_from_authentic_legacy_failed_history(
+    tmp_path,
+) -> None:
+    client = UnknownContinuationClient()
+    service, store, _, base, target, registry_path = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    service.transmit_review(proposal["review_id"])
+
+    with pytest.raises(OXTransportError):
+        service.continue_message(
+            proposal["review_id"], f"legacy continuation contained {SECRET}"
+        )
+    failed_attempt = client.calls[-1]["attempt_id"]
+
+    service._settings = OXSettings(SECRET, registry_path, store._root)
+    boundary = BoundaryClient()
+    service._client = boundary
+
+    with pytest.raises(OXBundleError):
+        service.retry_continuation(
+            proposal["review_id"], failed_attempt, renewed_approval=True
+        )
+
+    assert boundary.calls == 0
+
+
+def test_targeted_retry_rejects_credential_from_authentic_legacy_failed_history(
+    tmp_path,
+) -> None:
+    client = UnknownTargetedClient()
+    service, store, repository_path, base, target, registry_path = make_service(
+        tmp_path, client
+    )
+    proposal = prepare(service, base, target)
+    service.transmit_review(proposal["review_id"])
+    service.adjudicate(
+        proposal["review_id"],
+        [
+            {
+                "finding_id": f"{proposal['review_id']}-F001",
+                "status": "CONFIRMED",
+                "evidence": f"legacy adjudication contained {SECRET}",
+                "reasoning_summary": "Needs remediation.",
+            }
+        ],
+    )
+    remediation = commit_files(
+        repository_path,
+        {"src/alpha.py": b"value = 'remediated'\n"},
+        b"remediation",
+    )
+    revalidation = service.prepare_revalidation(
+        proposal["review_id"],
+        target_commit=remediation,
+        base_commit=target,
+        verification=verification(),
+    )
+    service.transmit_blind_revalidation(revalidation["revalidation_id"])
+
+    with pytest.raises(OXTransportError):
+        service.run_targeted_revalidation(
+            revalidation["revalidation_id"], [f"{proposal['review_id']}-F001"]
+        )
+
+    service._settings = OXSettings(SECRET, registry_path, store._root)
+    boundary = BoundaryClient()
+    service._client = boundary
+
+    with pytest.raises(OXBundleError):
+        service.retry_revalidation(
+            revalidation["revalidation_id"], renewed_approval=True
+        )
+
+    assert boundary.calls == 0
