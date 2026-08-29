@@ -5,6 +5,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
+. (Join-Path $PSScriptRoot 'Launcher.Platform.ps1')
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 
