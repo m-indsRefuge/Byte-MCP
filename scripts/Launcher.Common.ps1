@@ -173,3 +173,43 @@ function New-LauncherState {
         tunnel = New-LauncherChildRecord -ProcessId $TunnelPid -ExecutablePath $TunnelExecutable -StartedAtUtc $TunnelStartedAtUtc
     }
 }
+
+function Write-LauncherState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [pscustomobject] $State,
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    $parent = Split-Path -Parent $Path
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+
+    $tempPath = "$Path.tmp"
+    $json = $State | ConvertTo-Json -Depth 6
+    [System.IO.File]::WriteAllText(
+        $tempPath,
+        $json,
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Move-Item -LiteralPath $tempPath -Destination $Path -Force
+}
+
+function Read-LauncherState {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path
+    )
+
+    try {
+        $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Malformed launcher state: $($_.Exception.Message)"
+    }
+
+    if ($state.schema_version -ne 1) {
+        throw 'Unsupported launcher state schema.'
+    }
+
+    $state
+}
