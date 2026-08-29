@@ -7,7 +7,7 @@
 
 ## 1. Purpose
 
-Byte-MCP will gain a dedicated OX external-validation capability inside the existing MCP server. The capability exists to let Byte/ChatGPT submit bounded, immutable engineering review packets to OX (GLM-5.3-Flash), conduct evidence-backed follow-up discussion, adjudicate OX findings independently, and perform blind and targeted revalidation after remediation.
+Byte-MCP will gain a dedicated OX external-validation capability inside the existing MCP server. The capability lets Byte/ChatGPT submit bounded, immutable engineering review packets to OX (GLM-5.3-Flash), conduct evidence-backed follow-up discussion, adjudicate findings independently, and perform blind and targeted revalidation after remediation.
 
 The integration is intentionally **OX-specific**. V1 is not a provider-agnostic model gateway, agent framework, autonomous coding system, or arbitrary remote-execution service.
 
@@ -15,24 +15,24 @@ The engineering loop is:
 
 **Nolan → Byte implementation and deterministic verification → OX external validation → Byte evidence-based adjudication → remediation → deterministic regression gate → OX revalidation → Byte final technical recommendation → Nolan acceptance.**
 
-Nolan retains final human authority over project direction, outbound code-transmission approval, and milestone acceptance. Byte owns technical review scope, evidence assembly under the deterministic protocol, finding adjudication, remediation, and technical recommendation. OX independently attempts to prove the implementation wrong.
+Nolan retains final human authority over project direction, outbound repository transmission, and milestone acceptance. Byte owns technical review scope, evidence assembly under the deterministic protocol, finding adjudication, remediation, and technical recommendation. OX independently attempts to prove the implementation wrong.
 
-## 2. Design principles
-
-V1 follows these principles:
+## 2. V1 design principles
 
 1. **One MCP server.** OX is a capability within Byte-MCP, not a separate server or repository.
 2. **OX-specific implementation.** The integration is hardcoded for OX / GLM-5.3-Flash. No provider interfaces or multi-model abstraction are introduced.
 3. **Hosted API only.** No local GLM inference path exists in V1.
-4. **Read-only target repositories.** OX-MCP operations may inspect approved Git repositories but never write, patch, commit, delete, execute, or otherwise mutate them.
-5. **Committed states only.** Reviews target exact Git commit SHAs, never a mutable working-tree snapshot.
+4. **Read-only target repositories.** OX operations may inspect approved Git repositories but never write, patch, commit, delete, execute, or otherwise mutate them.
+5. **Committed states only.** Reviews target exact Git commit SHAs, never mutable working-tree snapshots.
 6. **Deterministic evidence.** Byte declares a bounded subsystem; Byte-MCP mechanically builds the mandatory review packet from a predeclared subsystem definition.
-7. **Human approval before external transmission.** Repository content cannot leave the machine on a preparation call. Approval is bound to an exact manifest digest.
-8. **Append-only provenance.** Requests, responses, manifests, messages, findings, adjudications, and revalidations are preserved as evidence rather than rewritten.
-9. **No autonomous loops.** Each outbound MCP operation produces at most one provider response.
+7. **Human approval before external repository transmission.** A preparation call cannot send repository content. Approval is bound to an exact manifest digest.
+8. **Append-only canonical provenance.** Requests, responses, messages, lifecycle events, findings, adjudications, and revalidations remain historically inspectable.
+9. **No autonomous loops.** Each outbound MCP action produces at most one provider response.
 10. **No execution.** The OX subsystem runs no repository code, tests, builds, package managers, shells, or arbitrary subprocesses.
 11. **Fail closed at the evidence boundary.** If required provenance cannot be persisted before transmission, nothing is sent.
 12. **Existing Byte-MCP remains available without OX.** Missing or broken OX configuration must not disable the existing local read capability.
+13. **No silent provider failover.** The model and provider route remain fixed to Z.AI-hosted GLM-5.3-Flash through Vercel AI Gateway.
+14. **No silent retries.** Every additional provider attempt is explicit and evidenced.
 
 ## 3. Deployment architecture
 
@@ -82,7 +82,7 @@ ChatGPT / Byte
 
 ### 3.1 Capability isolation
 
-The existing `FileService` remains responsible for Byte-MCP's current local filesystem tools. OX logic does not get added to `service.py` as a general catch-all.
+The existing `FileService` remains responsible for Byte-MCP's current local filesystem tools. OX logic does not get added to the existing `service.py` as a catch-all.
 
 The OX implementation lives under a dedicated package, approximately:
 
@@ -107,78 +107,56 @@ src/byte_mcp/
     └── service.py
 ```
 
-Exact filenames may be adjusted during implementation planning if a smaller decomposition is clearer, but the separation between existing local file access and OX validation remains mandatory.
+Exact filenames may be reduced during implementation planning if a smaller decomposition is clearer. The service boundary is mandatory; the exact file count is not.
 
 ### 3.2 Optional OX lifecycle
 
 Byte-MCP has two capability lifecycles:
 
-- **Core local capability — required.** Existing Byte-MCP configuration and `FileService` must validate before the server binds.
-- **OX capability — optional/fail-isolated.** OX configuration may produce `AVAILABLE`, `DISABLED`, or `MISCONFIGURED` without taking down the existing Byte-MCP tools.
+- **Core local capability — required.** Existing Byte-MCP configuration and `FileService` validate before the server binds.
+- **OX capability — optional/fail-isolated.** OX configuration may produce `AVAILABLE`, `DISABLED`, or `MISCONFIGURED` without taking down existing Byte-MCP tools.
 
 `DISABLED` represents an intentionally absent `AI_GATEWAY_API_KEY`. `MISCONFIGURED` represents invalid OX repository/evidence configuration. Existing `list_roots`, `list_directory`, `search`, and `fetch` remain usable in either OX-unavailable state.
 
-Startup validates only local OX structure and the presence/non-emptiness of the credential. It does not make a network request merely to prove that the key is accepted. Real authentication occurs on the first outbound OX operation.
+Startup validates local OX structure and credential presence/non-emptiness only. It does not call the provider just to validate the key. Real authentication occurs on the first outbound OX operation.
 
-## 4. Provider and credential boundary
+## 4. Fixed provider and credential boundary
 
-### 4.1 Fixed provider route
+### 4.1 Provider route
 
-V1 uses Vercel AI Gateway only as the transport path to the fixed OX model:
+V1 uses Vercel AI Gateway only as the transport path to OX:
 
-- OpenAI-compatible AI Gateway endpoint.
-- Fixed model: `zai/glm-5.3-flash`.
-- Provider routing restricted to Z.AI only.
-- No automatic fallback to a different model host.
-- No user-selectable model/provider parameter in the MCP tool surface.
+- OpenAI-compatible AI Gateway endpoint;
+- fixed model `zai/glm-5.3-flash`;
+- provider routing restricted to Z.AI only;
+- no fallback to a different host;
+- no model/provider parameter exposed through MCP.
 
-If Z.AI is unavailable through the approved route, the OX operation fails explicitly.
+If the approved Z.AI route is unavailable, the OX operation fails explicitly.
 
-### 4.2 API key
+### 4.2 Credential
 
-The credential is supplied as `AI_GATEWAY_API_KEY` through the process environment.
+`AI_GATEWAY_API_KEY` is supplied only through the process environment.
 
-It must never be:
+It must never be committed, written to OX configuration, written to review evidence, written to Byte-MCP audit logs, returned through MCP, included in exception text, or included in serialized request/debug snapshots.
 
-- committed to Git;
-- written to an OX config file;
-- written to review evidence;
-- written to Byte-MCP audit logs;
-- returned through MCP;
-- included in exception text;
-- included in debug representations or serialized request snapshots.
-
-The authorization header is constructed only inside the narrow outbound client immediately before the HTTPS call. Automated tests use sentinel fake credentials and assert that those values never appear in persisted or returned data.
+The authorization header is created only inside the narrow outbound client immediately before the HTTPS request. Automated tests use sentinel fake secrets and assert that those values never appear in persisted or returned data.
 
 ## 5. Approved repositories and immutable Git states
 
-### 5.1 Repository allowlist
+OX may inspect only explicitly configured local Git repositories. Public OX tools accept a repository alias, not an arbitrary filesystem path. Repository paths are validated independently of Byte-MCP's existing general roots.
 
-OX may inspect only explicitly configured local Git repositories. There is no general filesystem browser exposed to OX and no arbitrary path parameter accepted by the public OX tools.
+Every review records an exact target commit SHA. Change reviews also record an explicit base commit SHA. Review artifacts are read from Git objects belonging to those commits, not from current working-tree contents.
 
-Each repository has a stable alias that resolves to a configured local Git repository path. Repository paths are validated and constrained independently of the existing Byte-MCP general root aliases.
-
-### 5.2 Committed states only
-
-Every review records an exact target commit SHA. Where change review is required, it also records an explicit base commit SHA.
-
-Review artifacts are read from the Git object state belonging to those commits, not from the current working-tree contents. Uncommitted changes therefore cannot silently replace the material approved for review.
-
-V1 must not execute Git commands through an arbitrary subprocess interface. The implementation plan should choose the smallest dependable, constrained Git-reading approach that can read commits, trees, blobs, and diffs without enabling repository code execution or mutation.
+V1 must not expose arbitrary Git subprocess execution. The implementation plan will choose the smallest constrained Git-reading approach that can read commits, trees, blobs, and diffs without enabling repository execution or mutation.
 
 ## 6. Deterministic subsystem definitions
 
-A review caller may not supply an arbitrary hand-picked list of files.
+A review caller may not hand-pick files at review time.
 
-Each allowlisted repository has a predeclared, versioned subsystem registry. A subsystem definition identifies deterministic categories such as:
+Each allowlisted repository has a predeclared, versioned subsystem registry identifying deterministic categories such as source roots/files, associated tests, boundary contracts/interfaces, required project/build/config context, and required contextual documentation.
 
-- source roots/files;
-- associated test roots/files;
-- boundary/interfaces/contracts;
-- required project/build/config context;
-- required contextual documentation.
-
-Example shape:
+Illustrative shape:
 
 ```json
 {
@@ -197,58 +175,47 @@ Example shape:
 }
 ```
 
-The example does not lock the final Byte-MCP subsystem taxonomy; the implementation plan will define the initial registry based on the live repository.
+This example does not lock the final subsystem taxonomy. The implementation plan will define the initial registry from the live repository.
 
-Every prepared review records the subsystem ID, subsystem-definition version, and SHA-256 of the exact definition used. Changing the definition after preparation invalidates the prior approval.
+Every prepared review records the subsystem ID, definition version, and SHA-256 of the exact definition used. Changing the definition after preparation invalidates prior approval.
 
 V1 performs no AI-based scope inference, fuzzy test association, symbol-graph inference, or heuristic evidence trimming.
 
 ## 7. Mandatory review bundle
 
-For the declared repository/subsystem/base/target state, Byte-MCP mechanically constructs a packet containing all mandatory protocol categories:
+For the declared repository/subsystem/base/target state, Byte-MCP mechanically constructs all mandatory protocol categories:
 
-1. Repository identity and exact target/base commits.
-2. Exact subsystem definition and its version/hash.
-3. Every source artifact required by the subsystem definition.
-4. Every associated test artifact required by the definition.
-5. Declared boundary/interface/configuration context.
-6. A bounded deterministic repository tree for structural context.
-7. Exact base-to-target change evidence where a base commit is supplied.
-8. Caller-supplied deterministic verification evidence, with provenance and hashes.
-9. A manifest containing every transmitted artifact's logical path, category, byte length, and SHA-256.
+1. repository identity and exact target/base commits;
+2. exact subsystem definition and version/hash;
+3. every source artifact required by that definition;
+4. every associated test artifact required by that definition;
+5. declared boundary/interface/configuration context;
+6. a bounded deterministic repository tree;
+7. exact base-to-target change evidence where a base commit exists;
+8. caller-supplied deterministic verification evidence with provenance and hashes;
+9. a manifest containing every transmitted artifact's logical path, category, byte length, and SHA-256.
 
 If a mandatory artifact/category cannot be produced, preparation fails.
 
-If a complete deterministic bundle exceeds the configured V1 bundle/context limit, Byte-MCP fails explicitly with a `BundleTooLarge`-class domain error and useful size diagnostics. It must never silently omit, summarize, truncate, rank, or discard evidence to fit a provider limit.
+If the complete bundle exceeds the configured V1 bundle/context limit, Byte-MCP fails explicitly with size diagnostics. It never silently omits, summarizes, truncates, ranks, or discards required evidence.
 
-If OX later requests a file outside the approved scope, `ox_continue` cannot attach it. A justified scope expansion requires a newly prepared bundle and new human approval.
+If OX later requests source outside the approved scope, `ox_continue` cannot attach it. A justified scope expansion requires a newly prepared bundle and new human approval.
 
 ## 8. Deterministic verification evidence
 
-OX-MCP does not execute tests or builds. Byte supplies deterministic verification evidence explicitly during review/revalidation preparation.
+Byte supplies verification evidence explicitly during review/revalidation preparation because OX-MCP itself does not execute tests/builds.
 
-A verification record contains fields such as:
-
-- verification ID;
-- kind (`pytest`, `ruff`, build, custom, etc.);
-- command description;
-- exit code;
-- exact stdout/stderr or attached raw evidence artifact;
-- recorded timestamp;
-- caller-supplied provenance;
-- SHA-256.
+A verification record includes a stable ID, kind, command description, exit code, exact stdout/stderr or attached raw artifact, recorded timestamp, caller-supplied provenance, and SHA-256.
 
 Byte-MCP preserves and hashes this evidence but never claims that it generated or independently verified it. Required evidence may not be fabricated, inferred, or silently omitted.
 
-## 9. Evidence storage and provenance
+## 9. Evidence storage, append-only provenance, and concurrency
 
-### 9.1 Evidence must live outside reviewed repositories
+### 9.1 Storage location
 
-OX evidence must be stored in a dedicated local application-data location that is **outside every allowlisted reviewed repository**. This is mandatory because Byte-MCP itself is expected to be a review target; storing evidence under `Byte-MCP/data/ox/` would mutate the repository being reviewed.
+OX evidence lives in a dedicated local application-data location **outside every allowlisted reviewed repository**. This is mandatory because Byte-MCP itself is expected to be a review target; conducting a review must not dirty or modify the target repository.
 
-A platform-appropriate default should be chosen during implementation (for example, a Byte-MCP application-data directory under the user's profile) and may be overridden by a bounded configuration value.
-
-No review operation may modify its target repository merely by occurring.
+The implementation plan will choose a platform-appropriate user-data default and bounded override setting.
 
 ### 9.2 Evidence layout
 
@@ -258,9 +225,10 @@ Conceptually:
 <OX_EVIDENCE_ROOT>/
 └── reviews/
     └── OX-000001/
-        ├── review.json
-        ├── manifest.json
-        ├── verification.json
+        ├── review.json             # immutable review identity/preparation metadata
+        ├── events.jsonl            # canonical append-only lifecycle events
+        ├── manifest.json           # immutable approved packet manifest
+        ├── verification/
         ├── bundles/
         ├── threads/
         │   ├── initial.jsonl
@@ -268,27 +236,35 @@ Conceptually:
         │   └── targeted-revalidation.jsonl
         ├── responses/
         ├── findings/
-        ├── adjudication/
+        ├── adjudication.jsonl      # append-only Byte adjudication events
         └── revalidations/
 ```
 
-V1 uses transparent JSON/JSONL filesystem evidence rather than a database. A database is deferred until there is demonstrated indexing/query pressure.
+Canonical history is append-only. A derived/materialized summary cache may be rewritten atomically for efficient reads, but it is never canonical and must be reconstructible from immutable records plus `events.jsonl`.
+
+V1 uses filesystem JSON/JSONL rather than a database.
 
 ### 9.3 Stable identities
 
-Reviews receive stable identifiers such as `OX-000001`; findings derive from the review (`OX-000001-F001`); revalidations derive from the review (`OX-000001-RV001`). These identifiers are references, not authentication tokens.
+Reviews receive stable IDs such as `OX-000001`; findings derive from a review (`OX-000001-F001`); revalidations derive from a review (`OX-000001-RV001`). IDs are references, not authentication tokens.
 
-### 9.4 Append-only records
+### 9.4 What remains immutable
 
-Provider messages and raw responses are never rewritten. Byte adjudication is stored separately from OX's original claim.
-
-The evidence model preserves three independent facts:
+Provider messages and raw responses are never rewritten. Byte adjudication is separate from OX's original claim. The evidence model preserves independently:
 
 - what OX said;
 - what evidence existed;
 - what Byte concluded.
 
-The evidence store should be append-oriented. V1 may use atomic write/rename where needed to prevent torn records. Recovery behavior for malformed/torn local records must be explicit in the implementation plan.
+Atomic write/rename is used where needed to avoid torn immutable artifacts. Malformed/torn-record recovery must be explicit and conservative.
+
+### 9.5 Single-process V1 and concurrent-call safety
+
+V1 supports one Byte-MCP process owning a given OX evidence root. Multi-process shared-store operation is explicitly unsupported.
+
+Within that process, evidence mutations and state transitions are serialized per review. ID allocation and the `PREPARED -> TRANSMITTING` claim must be atomic under the process lock. Two concurrent approval calls for the same prepared review cannot both reach the network: the first durable transition claims the attempt; the second sees a non-`PREPARED` state and fails.
+
+This concurrency invariant is mandatory because duplicate approval races could otherwise duplicate code transmission and API spend.
 
 ## 10. Human approval and two-phase transmission
 
@@ -296,109 +272,112 @@ The evidence store should be append-oriented. V1 may use atomic write/rename whe
 
 ### 10.1 Prepare phase
 
-The first call validates the repository, immutable commits, subsystem, required verification evidence, and bundle limits; constructs the full packet locally; persists the prepared evidence; calculates the manifest digest; and returns a proposal.
+The first call validates repository, commits, subsystem, verification evidence, and size limits; constructs the packet locally; persists prepared evidence; computes the manifest digest; and returns a proposal.
 
 It makes **zero provider/network calls**.
 
-The proposal contains at least:
-
-- review/revalidation ID;
-- repository and subsystem;
-- target/base commit;
-- review objective;
-- artifact count and total bytes;
-- manifest SHA-256;
-- fixed provider/model route;
-- `transmitted = false`.
+The proposal includes review/revalidation ID, repository/subsystem, target/base commit, objective, artifact count, total bytes, manifest SHA-256, fixed provider/model route, and `transmitted=false`.
 
 ### 10.2 Approval phase
 
-After Nolan explicitly approves the exact prepared proposal in the ChatGPT conversation, Byte calls the same high-level operation with the prepared ID and approval flag.
+After Nolan explicitly approves the exact proposal in ChatGPT, Byte calls the same high-level operation with the prepared ID and approval flag.
 
-Before transmission, Byte-MCP re-verifies the persisted manifest/digest and immutable target state. If anything differs, approval is invalidated and transmission is refused.
+An approval-phase invocation must identify the existing prepared object; it may not simultaneously redefine repository, scope, commits, verification evidence, or other bundle-producing parameters.
 
-There is no supported one-call path that both prepares and transmits a new repository bundle.
+Before transmission, Byte-MCP re-verifies the persisted manifest/digest and immutable target state. Any mismatch invalidates approval.
 
-The server cannot cryptographically prove the physical identity of the human behind the MCP client. Therefore the enforcement is layered:
+There is no one-call path that both prepares and transmits a new repository bundle.
 
-- Byte-MCP guarantees no first preparation call can transmit repository content;
-- Byte-MCP guarantees the second call can transmit only the exact digest-bound prepared packet;
-- the Byte/Nolan operating protocol requires the second call only after Nolan's explicit approval;
-- any ChatGPT/MCP UI confirmation is an additional safeguard, not the sole enforcement mechanism.
+The server cannot cryptographically prove the physical identity behind the MCP client. Enforcement is therefore layered:
+
+- preparation can never transmit repository content;
+- approval can transmit only the exact digest-bound prepared packet;
+- the Byte/Nolan operating protocol permits that call only after Nolan's explicit approval;
+- ChatGPT/MCP UI confirmation, when presented, is an additional safeguard rather than the sole gate.
+
+### 10.3 What the approval covers
+
+Approval covers the exact prepared repository bundle for that review/revalidation thread. Because the provider API may be stateless, subsequent `ox_continue` calls may need to resend the already-approved historical message context, including the original approved bundle. That retransmission is within the original scope approval.
+
+`ox_continue` may not introduce any new repository artifact or expanded subsystem scope. New repository content requires a new preparation and approval.
+
+A retry after `OUTCOME_UNKNOWN`, or any other explicit retry that would resend a repository bundle after an unsuccessful provider attempt, must be surfaced to Nolan and explicitly re-approved before the new attempt. There are no automatic retries.
 
 ## 11. MCP tool surface
 
-V1 exposes exactly four high-level OX operations.
+V1 exposes exactly four OX tools.
 
 ### 11.1 `ox_review`
 
-Starts a new review.
+Starts or transmits a new review.
 
-- New-review invocation: local prepare only; zero network calls.
-- Approved invocation using an existing prepared review ID: verifies approval binding and sends exactly the prepared bundle.
-- `approve=true` without a valid prepared review is rejected.
+- New invocation: prepare only; zero network calls.
+- Approval invocation: references an existing prepared review and sends exactly that packet.
+- `approve=true` without a valid `PREPARED` review is rejected.
 
 ### 11.2 `ox_continue`
 
-Continues an already transmitted review thread.
+Continues the technical review process for an already transmitted review and has two explicit modes while remaining one MCP tool:
 
-- Loads the exact provider-native message history.
-- Appends one Byte message.
-- Performs at most one provider request and records at most one provider response.
-- Cannot add arbitrary repository files or expand the approved scope.
-- Fails for reviews that have never been transmitted.
+- **`message` mode:** append one Byte message, perform at most one provider request, preserve exactly one returned provider response, and maintain provider-native message order. The request may replay already-approved historical context as required by the API but cannot add new repository artifacts.
+- **`adjudicate` mode:** append one or more structured Byte adjudication events locally, with zero provider calls. This records finding state/evidence/rationale without inventing a fifth public MCP tool.
+
+The two modes are mutually exclusive in a single invocation. `adjudicate` records an engineering decision but does not alter or rewrite OX's original response.
 
 ### 11.3 `ox_revalidate`
 
-Creates a revalidation against a new committed remediation state.
+Creates and conducts revalidation against a new committed remediation state.
 
-- First call prepares only and returns a new digest-bound revalidation proposal.
-- Second approved call transmits that exact prepared state.
-- `blind` mode starts a genuinely fresh OX conversation with no original findings/remediation narrative foregrounded.
-- Targeted completeness review explicitly receives the relevant original finding and remediation evidence only after the blind pass.
+- First invocation prepares only and returns a new digest-bound revalidation proposal.
+- Approved invocation transmits that exact prepared state.
+- Blind mode starts a genuinely fresh OX conversation with no original findings/remediation narrative foregrounded.
+- After the blind pass, a targeted completeness pass may use the same already-approved remediation bundle and explicitly add the relevant original finding and Byte adjudication/remediation evidence. It does not silently add new repository files.
+- If targeted completeness requires repository material outside the approved revalidation bundle, a new preparation/approval is required.
 
 ### 11.4 `ox_get_review`
 
-Reads local review state and never contacts the provider.
-
-It may support bounded views such as summary, findings, thread, manifest, adjudication, and revalidation, without multiplying the public MCP tool count.
+Reads local review state and never contacts the provider. It may expose bounded views such as summary, findings, thread, manifest, adjudication, attempts, and revalidation without multiplying the public tool count.
 
 ## 12. MCP annotations
 
-The existing local tools retain their existing read-only/idempotent/local semantics.
+Existing local tools retain their current read-only/idempotent/local semantics.
 
-OX tools must not inherit the same annotation object blindly:
+OX tools do not inherit that annotation object blindly:
 
-- `ox_get_review` is read-only and has no external side effect.
-- `ox_review`, `ox_continue`, and `ox_revalidate` can create local evidence, consume external API service, and transmit approved data. Their annotations must truthfully describe those side effects.
+- `ox_get_review` is read-only and has no external side effect;
+- `ox_continue` in adjudication mode has a local evidence side effect;
+- `ox_review`, `ox_continue` in message mode, and `ox_revalidate` may consume API service and transmit already-approved data.
 
-The exact supported annotation fields will be confirmed against the pinned MCP SDK during implementation.
+The exact annotation representation will be confirmed against the pinned MCP SDK during implementation planning. If one static annotation set must cover all modes of a tool, it must describe the most consequential supported behavior rather than understate it.
 
-## 13. Review and finding state machines
+## 13. Review, attempt, revalidation, and finding states
 
-Review lifecycle and finding lifecycle are distinct.
+Review lifecycle and finding lifecycle remain distinct.
 
-### 13.1 Review lifecycle
+### 13.1 Review/attempt lifecycle
 
-Core states include:
+Core progression:
 
 ```text
 PREPARED
   -> TRANSMITTING
-      -> REVIEWED
-      -> FAILED / OUTCOME_UNKNOWN as appropriate
+      -> REVIEWED              (attempt COMPLETED)
+      -> FAILED                (attempt NOT_SENT or REJECTED)
+      -> OUTCOME_UNKNOWN       (delivery/processing cannot be known)
 
 REVIEWED
-  -> continuation turns (state remains REVIEWED)
+  -> continuation turns (review remains REVIEWED)
   -> REVALIDATION_PREPARED
       -> REVALIDATION_TRANSMITTING
-          -> REVALIDATED
-          -> FAILED / OUTCOME_UNKNOWN as appropriate
+          -> BLIND_REVALIDATED
+              -> targeted completeness when required
+                  -> REVALIDATED
+          -> FAILED / OUTCOME_UNKNOWN
 ```
 
-Impossible transitions are rejected explicitly.
+A blind pass may be sufficient only when the protocol marks targeted completeness unnecessary. Otherwise final `REVALIDATED` requires the targeted completeness step.
 
-Provider failure must not erase previously persisted prepared evidence. Retry is never automatic; a later retry is an explicit MCP operation with its own attempt evidence.
+Impossible transitions are rejected. Failure never erases prepared evidence. Retry is a new explicit attempt with its own identity/evidence and, where repository retransmission occurs after an unsuccessful/unknown attempt, renewed human approval.
 
 ### 13.2 Finding lifecycle
 
@@ -412,21 +391,21 @@ A finding may progress through:
 - `REMEDIATED`
 - `REVALIDATED`
 
-Failure to reproduce is not equivalent to disproving. `DISPROVED` requires evidence satisfying the finding's disproof condition or otherwise decisively refuting the claim.
+Failure to reproduce is not equivalent to disproving. `DISPROVED` requires evidence satisfying the stated disproof condition or otherwise decisively refuting the claim.
 
-## 14. OX message and finding contract
+## 14. OX messages and structured findings
 
 ### 14.1 Native message handling
 
-The client uses the provider's native OpenAI-compatible `messages` representation rather than inventing a parallel conversation protocol. OX-MCP owns persistence/provenance; the API owns ordinary role/message semantics.
+The client uses the provider's native OpenAI-compatible message representation rather than inventing a parallel conversation protocol. Byte-MCP owns persistence/provenance; the API owns ordinary role/message semantics.
 
-Each thread is stored append-only in exact order. Blind revalidation uses a fresh message sequence rather than telling OX to pretend prior context does not exist.
+Each thread is stored append-only in exact order. Blind revalidation uses a fresh message sequence rather than asking OX to pretend prior context does not exist.
 
-### 14.2 Structured findings
+### 14.2 Structured finding contract
 
-Formal OX reviews are instructed to return a strict, versioned finding schema. Expected fields include:
+Formal OX reviews are instructed to return a strict, versioned finding schema containing at least:
 
-- finding ID;
+- finding ID/key;
 - category;
 - severity;
 - confidence;
@@ -439,61 +418,54 @@ Formal OX reviews are instructed to return a strict, versioned finding schema. E
 - disproof condition;
 - recommended investigation.
 
-Where the fixed API route reliably supports native JSON response mode, the client should request it and then validate the result against the OX-MCP schema.
+Where the fixed Vercel/Z.AI route reliably supports native JSON response mode, the client requests it and validates the returned JSON against the OX-MCP schema.
 
-The raw provider response is always preserved. OX-MCP validates but never silently rewrites or repairs malformed findings. Invalid structured output becomes an explicit protocol-format failure; OX may be asked in a later explicit continuation turn to resubmit correctly.
+The raw provider response is always preserved. OX-MCP never silently rewrites malformed findings. Invalid output becomes an explicit protocol-format failure; a later explicit continuation may ask OX to resubmit correctly.
 
-Private model reasoning/chain-of-thought is not part of the engineering evidence contract. Evidence depends on visible claims, cited/reproducible evidence, structured findings, and Byte's documented adjudication rationale.
+Private model reasoning/chain-of-thought is not part of the engineering evidence contract. Evidence depends on visible claims, reproducible/cited evidence, structured findings, and Byte's documented adjudication rationale.
 
 ## 15. Outbound API semantics
 
 ### 15.1 One narrow client
 
-Only the dedicated OX client module may make OX/Vercel HTTP calls. It does not decide scope, grant approval, read arbitrary files, or mutate evidence outside its defined request/response responsibilities.
+Only the dedicated OX client may make Vercel/Z.AI HTTP calls. It does not decide scope, grant approval, read arbitrary files, or mutate repository/evidence state outside its request/response responsibility.
 
 ### 15.2 Non-streaming V1
 
-V1 uses non-streaming requests only. One request yields one complete response before validation/persistence. Streaming and partial-response recovery are deferred.
+V1 uses non-streaming requests. One call yields one complete response before validation/persistence. Streaming and partial-response recovery are deferred.
 
 ### 15.3 Attempt identity before transmission
 
-Every outbound attempt receives durable identity before network transmission, including:
+Every provider attempt receives durable identity before network transmission, including attempt ID, provider request ID where supported, review/revalidation ID, manifest SHA-256 where repository content is involved, message-history SHA-256, and timestamp.
 
-- attempt ID;
-- provider request ID where supported;
-- review/revalidation ID;
-- manifest SHA-256;
-- message-history SHA-256;
-- creation timestamp.
-
-The `TRANSMISSION_INTENT` record must be persisted before the network is touched. Failure to persist that intent aborts transmission.
+A `TRANSMISSION_INTENT` lifecycle event is persisted before touching the network. Failure to persist it aborts transmission.
 
 ### 15.4 No automatic retries
 
-V1 performs no automatic provider retry for timeout, rate limit, overload, or other failure. Retries could duplicate cost and make external state ambiguous. A retry is a new explicit MCP operation/attempt.
+There are no automatic retries for timeout, rate limit, overload, or other provider failure. Retrying is an explicit MCP operation/attempt. If the prior outcome was unknown or the retry would resend repository content after an unsuccessful attempt, renewed Nolan approval is required as defined in Section 10.3.
 
-### 15.5 Ambiguous outcomes
+### 15.5 Attempt outcomes
 
-Attempt outcomes distinguish at least:
+Attempts distinguish at least:
 
 - `NOT_SENT`
 - `REJECTED`
 - `COMPLETED`
 - `OUTCOME_UNKNOWN`
 
-A timeout or transport interruption after possible request transmission must not be falsely recorded as definitely rejected/not sent.
+A timeout/interruption after possible transmission is never falsely recorded as definitely not sent.
 
-### 15.6 Bounded network/output behavior
+### 15.6 Bounds
 
-The client uses bounded connect/read/write/pool timeouts and a bounded provider output-token ceiling. Values are server-side configuration/constants with safe ranges, not arbitrary unbounded MCP parameters.
+The client uses bounded connect/read/write/pool timeouts and a bounded provider output-token ceiling. Safe ranges are server-side configuration/constants, not unbounded MCP parameters.
 
 ### 15.7 Usage telemetry
 
-Successful provider responses preserve available token-usage metadata such as input/prompt, output/completion, total, and cached-token counts. V1 does not calculate currency cost because pricing can change.
+Successful responses preserve available prompt/input, completion/output, total, and cached-token usage metadata. V1 does not calculate currency cost because pricing can change.
 
 ## 16. Error model
 
-OX failures are normalized into Byte-MCP domain errors rather than leaking raw HTTP/transport/filesystem exceptions. Expected categories include:
+OX failures are normalized into Byte-MCP domain errors rather than leaking raw HTTP, filesystem, Git, or serialization exceptions. Expected categories include:
 
 - `OXUnavailableError`
 - `OXConfigurationError`
@@ -517,28 +489,29 @@ Safe provider status/code metadata may be retained. Secrets, authorization heade
 
 ## 17. Evidence/audit ordering
 
-For an approved transmission, ordering is strict:
+For an approved transmission:
 
 ```text
 construct prepared packet
-  -> persist PREPARED evidence
-  -> obtain human approval externally in the Byte/Nolan workflow
-  -> verify manifest digest
-  -> persist TRANSMISSION_INTENT
-  -> perform provider call
-  -> persist exact provider response / attempt outcome
-  -> validate and persist structured findings result
-  -> update review lifecycle record
+  -> persist immutable PREPARED evidence
+  -> Nolan approval in Byte/Nolan workflow
+  -> re-verify manifest digest
+  -> atomically claim PREPARED -> TRANSMITTING
+  -> persist TRANSMISSION_INTENT event
+  -> perform one provider call
+  -> persist exact response / attempt outcome
+  -> validate and persist findings result
+  -> append review lifecycle event
   -> write normal Byte-MCP audit entry
   -> return result to Byte
 ```
 
-If a provider call succeeds but durable response persistence fails, the system must not report a clean evidenced review. It returns an evidence/recovery error and preserves as much durable attempt state as possible without inventing certainty.
+If the provider succeeds but durable response persistence fails, the system does not report a clean evidenced review. It returns an evidence/recovery error and retains whatever durable attempt state exists without inventing certainty.
 
-The existing Byte-MCP audit and OX evidence have separate purposes:
+The existing Byte-MCP audit and OX evidence have distinct purposes:
 
 - Byte-MCP audit answers **what operation was requested/performed**.
-- OX evidence answers **what exact engineering review was prepared/transmitted, what OX returned, and how the findings were adjudicated/revalidated**.
+- OX evidence answers **what exact engineering review was prepared/transmitted, what OX returned, and how findings were adjudicated/revalidated**.
 
 ## 18. Testing strategy
 
@@ -546,24 +519,27 @@ Implementation follows TDD. Automated tests never use the real Vercel/Z.AI API o
 
 ### 18.1 Unit contracts
 
-Cover OX settings/runtime states, repository allowlist, stable IDs, subsystem-definition hashing, immutable Git reads, bundle construction, manifest hashing, findings schema, messages, evidence persistence, and legal state transitions.
+Cover settings/runtime states, repository allowlist, IDs, subsystem-definition hashing, immutable Git reads, bundle construction, manifest hashing, findings schema, messages, evidence/event persistence, adjudication events, and legal state transitions.
 
 ### 18.2 Security invariants
 
 Tests must prove:
 
-- no API key persistence or leakage;
+- no API key persistence/leakage;
 - no repository escape;
 - no working-tree substitution for committed Git objects;
 - no unapproved transmission;
 - no digest-mismatch transmission;
+- no approval invocation that changes bundle-defining parameters;
 - no arbitrary continuation attachment/scope expansion;
 - no execution/subprocess path through supported OX operations;
 - no automatic retry;
 - no provider fallback outside Z.AI;
-- no evidence writes inside the reviewed repository.
+- no evidence writes inside a reviewed repository;
+- two concurrent approval calls cannot both reach the provider;
+- a retry requiring renewed approval cannot transmit before that approval.
 
-A fake OX client should deliberately fail if reached, allowing tests to verify that forbidden transitions fail before the network boundary is invoked.
+A fake OX client deliberately fails if reached, allowing forbidden transitions to prove they stop before the network boundary.
 
 ### 18.3 Review protocol
 
@@ -571,80 +547,83 @@ Cover:
 
 - prepare makes zero HTTP calls;
 - approve sends the exact prepared digest;
-- `ox_continue` preserves provider-native message ordering;
-- one MCP outbound operation produces at most one provider response;
-- blind revalidation uses a fresh context;
-- targeted revalidation links the intended original finding/remediation evidence;
-- malformed findings are preserved and surfaced as protocol failures rather than repaired silently.
+- `ox_continue(message)` preserves provider-native order and cannot expand scope;
+- stateless replay resends only previously approved repository material;
+- `ox_continue(adjudicate)` records local adjudication and performs zero HTTP calls;
+- one outbound MCP action produces at most one response;
+- blind revalidation uses fresh context;
+- targeted completeness links intended findings/remediation evidence without adding unapproved files;
+- malformed findings are preserved and surfaced as protocol failures.
 
 ### 18.4 Failure/recovery
 
-Cover authentication rejection, permission rejection, quota/rate limit, context-too-large, provider overload, deterministic `NOT_SENT` failures, ambiguous `OUTCOME_UNKNOWN` transport cases, corrupt evidence, response-persistence failure, and OX-disabled/misconfigured startup isolation.
+Cover authentication/permission rejection, quota/rate limit, context-too-large, overload, deterministic `NOT_SENT`, `OUTCOME_UNKNOWN`, corrupt/torn evidence, response-persistence failure, and OX-disabled/misconfigured startup isolation.
 
 ### 18.5 Regression/integration
 
-The full existing Byte-MCP suite must remain green. With `AI_GATEWAY_API_KEY` absent, all existing local tools must continue to work while OX operations return a controlled unavailable state.
+The full existing Byte-MCP suite remains green. With `AI_GATEWAY_API_KEY` absent, all existing local tools work while OX operations return a controlled unavailable state.
 
-CI must pass on the repository's supported Windows and Linux environments, with lint/compile/dependency checks preserved.
+CI passes on supported Windows and Linux environments with existing lint/compile/dependency gates preserved.
 
 ## 19. Live acceptance sequence
 
 Real credits are not used during automated development.
 
-After implementation and all deterministic/CI gates are green, perform one deliberately small non-sensitive live canary through the real Byte-MCP server:
+After deterministic and CI gates are green, perform one deliberately small non-sensitive canary through the real server:
 
-1. prepare a tiny approved review;
-2. inspect the manifest/digest;
+1. prepare a tiny review;
+2. inspect its manifest/digest;
 3. obtain Nolan's explicit approval;
 4. perform one real `zai/glm-5.3-flash` request through Vercel with Z.AI-only routing;
 5. verify exact response/evidence persistence;
-6. verify structured finding behavior;
+6. verify structured-finding behavior;
 7. verify usage metadata;
 8. verify no secret leakage;
-9. run `ox_get_review`;
-10. perform one explicit `ox_continue` turn;
-11. confirm the existing Byte-MCP local tools still operate afterward.
+9. call `ox_get_review`;
+10. perform one explicit `ox_continue(message)` turn;
+11. record one local `ox_continue(adjudicate)` event;
+12. confirm all existing Byte-MCP local tools still work.
 
-Before transmitting private repository content through Vercel/Z.AI, the live gate must also include a current review of the relevant provider/gateway data-handling terms. The first canary does not require private source code.
+Before transmitting private repository content through Vercel/Z.AI, the live gate also includes a current review of relevant gateway/provider data-handling terms. The first canary does not require private source code.
 
 ## 20. Dogfood review and V1 completion gate
 
-The first serious external review target should be the committed Byte-MCP OX subsystem itself.
-
-Sequence:
+The first serious external target is the committed Byte-MCP OX subsystem itself.
 
 1. Byte implements and deterministically verifies the OX subsystem.
 2. The implementation is committed.
-3. OX-MCP prepares the deterministic OX-subsystem packet from that committed state.
+3. Byte-MCP prepares the OX-subsystem packet from that immutable commit.
 4. Nolan approves the exact manifest.
 5. OX performs the independent review.
-6. Byte adjudicates every finding against the live committed repository and deterministic evidence.
-7. Confirmed findings are remediated using the normal engineering/TDD workflow.
-8. Full regression verification passes.
-9. OX performs blind revalidation against the remediation commit.
-10. OX performs targeted completeness review where required.
-11. Byte issues the final technical recommendation.
-12. Nolan performs final human acceptance.
+6. Byte adjudicates every finding against the committed repository/evidence and records those adjudications locally.
+7. Confirmed findings are remediated through the normal TDD workflow.
+8. Full regression verification passes and the remediation is committed.
+9. Byte-MCP prepares revalidation against that commit; Nolan approves the new manifest.
+10. OX performs blind revalidation.
+11. OX performs targeted completeness where required.
+12. Byte issues the final technical recommendation.
+13. Nolan performs final human acceptance.
 
 V1 is not complete until:
 
-- the design/spec is approved;
-- TDD implementation is complete;
-- existing Byte-MCP regression tests remain green;
-- the new OX suite is green;
-- lint/compile/dependency gates are green;
-- Windows CI is green;
-- Linux CI is green;
-- no real credential appears in repository/history/evidence;
-- the prepare/approve digest binding is demonstrated;
-- OX-disabled mode leaves Byte-MCP core functional;
-- the small live API canary succeeds;
-- persistent multi-turn OX conversation is demonstrated;
-- blind revalidation is demonstrated;
-- OX independently reviews the OX subsystem;
+- design/spec approved;
+- TDD implementation complete;
+- existing Byte-MCP regression suite green;
+- new OX suite green;
+- lint/compile/dependency gates green;
+- Windows and Linux CI green;
+- no real credential in repository/history/evidence;
+- prepare/approve digest binding demonstrated;
+- concurrent duplicate approval prevented;
+- OX-disabled mode leaves core Byte-MCP functional;
+- small live API canary succeeds;
+- persistent multi-turn OX conversation demonstrated;
+- local Byte adjudication recording demonstrated;
+- blind revalidation demonstrated;
+- OX independently reviews the committed OX subsystem;
 - Byte adjudicates all findings;
-- confirmed defects are repaired and regression-tested;
-- OX revalidates the remediation;
+- confirmed defects repaired and regression-tested;
+- OX revalidates remediation;
 - Nolan accepts the subsystem.
 
 ## 21. Explicit V1 non-goals
@@ -654,7 +633,7 @@ V1 does not include:
 - provider/model abstraction;
 - local GLM inference;
 - autonomous model-to-model loops;
-- arbitrary shell or test execution;
+- arbitrary shell/test execution;
 - OX write/patch/commit/delete authority;
 - arbitrary filesystem access;
 - automatic provider retries;
@@ -662,29 +641,21 @@ V1 does not include:
 - database-backed evidence;
 - automatic monetary cost calculation;
 - AI-generated subsystem membership;
-- silent bundle trimming or summarization;
-- multi-process worker queues;
+- silent bundle trimming/summarization;
+- multi-process shared evidence-store support;
+- background worker queues;
 - a separate OX-MCP server or tunnel.
 
 ## 22. Deferred possibilities
 
-Only after evidence demonstrates a need should later versions consider:
+Only after evidence demonstrates a need should later versions consider sandboxed independent test reproduction, richer deterministic dependency expansion, database indexing, evidence rotation/archive tooling, stronger cryptographic human-approval identity mechanisms, OX calibration metrics, known-defect canaries, historical meta-review, or alternative validators.
 
-- sandboxed independent test reproduction;
-- richer deterministic Git/symbol dependency expansion;
-- database indexing for large review histories;
-- evidence rotation/archive tooling;
-- stronger cryptographic human-approval identity mechanisms;
-- structured metrics for OX calibration/accuracy;
-- known-defect canaries and historical meta-review;
-- alternative validator models.
-
-None of these should complicate V1 unless implementation evidence makes them necessary.
+None should complicate V1 without demonstrated need.
 
 ## 23. Final architectural contract
 
-Byte-MCP V1 will contain an isolated OX validation subsystem that sends only explicitly approved, deterministic, hash-bound review bundles from exact committed states of allowlisted repositories to the fixed `zai/glm-5.3-flash` model through Vercel AI Gateway restricted to Z.AI routing.
+Byte-MCP V1 will contain an isolated OX validation subsystem that sends only explicitly approved, deterministic, hash-bound review bundles from exact committed states of allowlisted repositories to fixed `zai/glm-5.3-flash` through Vercel AI Gateway restricted to Z.AI routing.
 
-The subsystem does not execute repository code or mutate reviewed repositories. It preserves append-only provenance outside all reviewed repositories, uses provider-native message semantics and strict structured findings, supports evidence-backed multi-turn discussion plus blind/targeted revalidation, and performs no hidden model loops or automatic retries.
+The subsystem does not execute repository code or mutate reviewed repositories. It preserves canonical append-only provenance outside every reviewed repository, serializes concurrent state mutations, uses provider-native message semantics and strict structured findings, records Byte adjudication separately, supports evidence-backed multi-turn discussion plus blind/targeted revalidation, and performs no hidden loops, failover, or automatic retries.
 
 Byte remains responsible for technical engineering and evidence-based adjudication. OX remains an independent external validator. Nolan remains the human authority for outbound repository transmission and final project acceptance.
