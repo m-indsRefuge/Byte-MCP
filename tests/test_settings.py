@@ -1,9 +1,22 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from byte_mcp.errors import ByteMCPError
-from byte_mcp.settings import Settings
+from byte_mcp.settings import Settings, load_roots
+
+
+def make_settings(tmp_path: Path, roots_file: Path) -> Settings:
+    return Settings(
+        repo_root=tmp_path,
+        roots_file=roots_file,
+        audit_file=tmp_path / "audit.jsonl",
+        max_file_bytes=1_000_000,
+        max_response_chars=60_000,
+        max_search_files=1_000,
+        content_search_max_bytes=100_000,
+    )
 
 
 def test_mcp_url_uses_explicit_host_and_port(tmp_path: Path) -> None:
@@ -41,3 +54,22 @@ def test_load_rejects_privileged_port(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ByteMCPError, match="between 1024 and 65535"):
         Settings.load()
+
+
+def test_load_roots_normalizes_invalid_utf8_config(tmp_path: Path) -> None:
+    roots_file = tmp_path / "roots.json"
+    roots_file.write_bytes(b"\xff\xfeinvalid")
+
+    with pytest.raises(ByteMCPError, match="cannot be read as UTF-8"):
+        load_roots(make_settings(tmp_path, roots_file))
+
+
+def test_load_roots_normalizes_missing_root_path(tmp_path: Path) -> None:
+    roots_file = tmp_path / "roots.json"
+    roots_file.write_text(
+        json.dumps({"roots": {"projects": str(tmp_path / "missing")}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ByteMCPError, match="cannot be resolved"):
+        load_roots(make_settings(tmp_path, roots_file))
