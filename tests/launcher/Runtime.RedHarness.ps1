@@ -22,3 +22,6 @@ function global:Stop-LauncherCreatedProcess { throw 'NOT_IMPLEMENTED: Stop-Launc
 function global:Start-LauncherForegroundServer { throw 'NOT_IMPLEMENTED: Start-LauncherForegroundServer' }
 function global:Start-LauncherForegroundTunnel { throw 'NOT_IMPLEMENTED: Start-LauncherForegroundTunnel' }
 function global:Confirm-LauncherListenersStopped { throw 'NOT_IMPLEMENTED: Confirm-LauncherListenersStopped' }
+function global:Start-ByteMcpBackgroundStack { throw 'NOT_IMPLEMENTED: Start-ByteMcpBackgroundStack' }
+function global:Start-ByteMcpForegroundStack { throw 'NOT_IMPLEMENTED: Start-ByteMcpForegroundStack' }
+function global:Stop-ByteMcpManagedStack { throw 'NOT_IMPLEMENTED: Stop-ByteMcpManagedStack' }
