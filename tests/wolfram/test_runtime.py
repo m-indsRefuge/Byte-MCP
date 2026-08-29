@@ -8,7 +8,10 @@ from byte_mcp.wolfram.domain import WolframAvailability
 from byte_mcp.wolfram.runtime import WolframRuntime
 
 
-def test_missing_appid_yields_disabled_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_missing_appid_yields_disabled_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.delenv("WOLFRAM_APP_ID", raising=False)
     monkeypatch.setenv("BYTE_MCP_WOLFRAM_USAGE_FILE", str(tmp_path / "usage.json"))
 
