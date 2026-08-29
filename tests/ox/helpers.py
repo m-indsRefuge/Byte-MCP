@@ -19,6 +19,7 @@ def commit_files(repository_path: Path, files: dict[str, bytes], message: bytes)
 
 
 def create_repository(tmp_path: Path) -> tuple[Path, str, str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     repository_path = tmp_path / "fixture-repository"
     porcelain.init(repository_path)
     base = commit_files(
