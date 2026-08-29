@@ -4,28 +4,33 @@ Byte-MCP is an extensible, permissioned Model Context Protocol server for connec
 
 ## Project status
 
-Byte-MCP V1.1 remains the accepted local read-only baseline. Its original closeout is preserved as historical evidence, while a bounded remote-integration validation increment is now active using OpenAI Secure MCP Tunnel.
+Byte-MCP V1.1 remains the accepted local read-only baseline. The `build/byte-mcp-ox-validation-v1` branch adds a separately governed, optional OX external-validation capability without changing the original filesystem authority.
 
 ```text
-Release baseline:     0.1.1
-Local implementation: successful_validation
-Remote transport:     OpenAI Secure MCP Tunnel
-ChatGPT validation:   in_progress
-Authority:            read_only
+Release baseline:          0.1.1
+Core local implementation: accepted read-only baseline
+Remote MCP transport:      OpenAI Secure MCP Tunnel
+OX integration candidate:  automated/adversarial gates green
+OX live provider canary:   pending explicit human approval
 ```
 
-The current deployment work does not add tools or mutation authority. It hardens MCP-facing responses so local absolute filesystem paths are not disclosed and validates the existing four-tool server through the first-party tunnel path.
+The integrated branch exposes two distinct capability groups:
+
+- **Core local access:** four read-only filesystem tools with no external side effects.
+- **OX validation:** four high-level tools that may transmit an explicitly approved review packet to the fixed OX provider route and append local evidence, but never mutate or execute the reviewed repository.
 
 Authoritative records:
 
 - [V1.1 Closeout and Freeze](docs/V1.1-CLOSEOUT.md)
 - [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md)
+- [OX Validation Operations](docs/OX-VALIDATION.md)
 - [Security](docs/SECURITY.md)
+- [OX Integration Design](docs/superpowers/specs/2026-08-29-ox-integration-design.md)
 - [Changelog](CHANGELOG.md)
 
-## V1 scope
+## Core V1 scope
 
-V1 is deliberately read-only:
+The original local capability is deliberately read-only:
 
 - list approved roots
 - list directory contents
@@ -36,11 +41,45 @@ V1 is deliberately read-only:
 - append every operation to a local audit ledger
 - block path traversal, symlinks, junctions, common secret locations, and sensitive key formats
 
-No write, rename, delete, execute, shell, process-control, or unrestricted-path tools exist in V1.
+The four core MCP tools are:
+
+- `list_roots`
+- `list_directory`
+- `search`
+- `fetch`
+
+No core write, rename, delete, execute, shell, process-control, or unrestricted-path tool exists.
+
+## OX validation capability
+
+The OX subsystem adds exactly four MCP tools:
+
+- `ox_review`
+- `ox_continue`
+- `ox_revalidate`
+- `ox_get_review`
+
+These tools are isolated from the original `FileService` lifecycle. OX can read only explicitly allowlisted Git repositories and predeclared subsystem definitions from immutable committed states. It cannot execute repository code, run tests, invoke a shell, modify files, apply patches, commit, delete, or broaden review scope heuristically.
+
+The provider route is fixed in V1:
+
+```text
+Byte-MCP
+  -> OXReviewService
+  -> Vercel AI Gateway
+  -> pinned Z.AI provider
+  -> zai/glm-5.3-flash
+```
+
+There is no generic provider abstraction or automatic fallback to a different model/provider in this version.
+
+A new review or blind revalidation uses a two-phase approval protocol. The first call prepares and persists a deterministic proposal and performs **zero provider calls**. Transmission occurs only after a second explicit approval call revalidates the persisted manifest and exact canonical outbound-payload digest. Any material change invalidates that approval.
+
+See [OX Validation Operations](docs/OX-VALIDATION.md) for configuration, evidence, lifecycle, retry, and live-canary rules.
 
 ## V1.1 hardening
 
-V1.1 preserves the four-tool V1 contract while adding:
+V1.1 preserves the four-tool core contract while adding:
 
 - explicit loopback-only host, port, and transport settings
 - startup rejection of non-loopback hosts and unsupported transports
@@ -52,13 +91,13 @@ V1.1 preserves the four-tool V1 contract while adding:
 
 ## Remote-integration hardening
 
-Before the first ChatGPT tunnel connection, the MCP response contract is hardened so:
+For ChatGPT tunnel connectivity, the MCP response contract is hardened so:
 
 - `list_roots` exposes approved aliases, not backing local filesystem paths;
 - search and fetch metadata expose root aliases and relative paths, not `absolute_path`;
 - regression tests enforce those response boundaries.
 
-This is a deployment-security increment over the V1.1 baseline, not an expansion of authority.
+The Secure MCP Tunnel is a transport layer and does not expand Byte-MCP's local filesystem authority.
 
 ## Approved local roots
 
@@ -68,19 +107,21 @@ Machine-specific roots live in:
 config/roots.local.json
 ```
 
-That file is excluded from Git. The local scaffold creates these aliases:
+That file is excluded from Git. The local scaffold can define aliases such as:
 
 - `downloads`
 - `documents`
 - `projects`
 
-For the resumed ChatGPT tunnel validation, a separate profile outside the repository exposes exactly one root:
+For the accepted ChatGPT tunnel profile, the remote root remains deliberately bounded to the approved project location rather than a drive root or entire user profile. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
+
+OX repository/subsystem authorization is separate and machine-local:
 
 ```text
-projects -> %USERPROFILE%\AIProjects
+config/ox-repositories.local.json
 ```
 
-Downloads, Documents, drive roots, and other local locations are not part of the first accepted remote profile. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
+That file is also excluded from Git. Start from [`config/ox-repositories.example.json`](config/ox-repositories.example.json).
 
 ## Supported V1 extraction
 
@@ -102,6 +143,8 @@ http://127.0.0.1:8000/mcp
 
 The server remains loopback-only. `BYTE_MCP_HOST` accepts only `127.0.0.1`, `localhost`, or `::1`.
 
+OX is optional. Without `AI_GATEWAY_API_KEY`, the OX runtime is `DISABLED` while the four core tools remain available. Invalid optional OX configuration produces a fail-isolated `MISCONFIGURED` OX runtime rather than preventing the core server from starting.
+
 ## Inspect
 
 In a second PowerShell terminal:
@@ -122,7 +165,9 @@ http://127.0.0.1:8000/mcp
 .\scripts\Check.ps1
 ```
 
-## Validate the live MCP protocol
+CI validates Python 3.12 on Windows and Ubuntu with dependency integrity, compilation, Ruff, and the full pytest suite.
+
+## Validate the live core MCP protocol
 
 With Byte-MCP already running, validate discovery and `list_roots`:
 
@@ -141,9 +186,9 @@ Validate a real search-to-fetch flow using the active root profile:
 
 The smoke test emits structured JSON with either `successful_validation` or `failed_validation` classification.
 
-## Audit ledger
+## Audit and OX evidence
 
-Runtime audit records are stored locally in:
+Core runtime audit records are stored locally in:
 
 ```text
 data/audit.jsonl
@@ -151,42 +196,41 @@ data/audit.jsonl
 
 A remote validation profile may override that location through `BYTE_MCP_AUDIT_FILE`.
 
-Fetched content is never written to the ledger. Search terms and opaque references are fingerprinted before audit storage.
+Fetched content is never written to the core ledger. Search terms and opaque references are fingerprinted before audit storage.
+
+OX keeps its detailed review evidence separately. By default it uses a user-local data directory rather than the repository; it may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`. OX evidence records prepared scope, manifests, attempts, provider responses, validated findings, conversation history, and Byte adjudication while keeping the reviewed repository read-only.
 
 ## Architecture
 
 ```text
-ChatGPT Web                                   validation in progress
+ChatGPT / Byte
     |
     | OpenAI Secure MCP Tunnel
     v
-OpenAI tunnel-client                         local outbound-only runtime
+Byte-MCP Streamable HTTP server
     |
-    | http://127.0.0.1:8000/mcp
-    v
-Byte-MCP Streamable HTTP server              validated local baseline
+    +-- Core local capability
+    |     +-- approved root aliases
+    |     +-- containment + secret-denial policy
+    |     +-- read-only search/fetch services
+    |     +-- bounded extractors
+    |     +-- append-only local audit ledger
     |
-    +-- explicit loopback network boundary
-    +-- approved root aliases
-    +-- containment and secret-denial policy
-    +-- alias + relative-path response boundary
-    +-- read-only search/fetch services
-    +-- bounded extractors
-    +-- append-only local audit ledger
+    +-- Optional OX validation capability
+          +-- allowlisted Git repository/subsystem registry
+          +-- deterministic committed-state bundle builder
+          +-- digest-bound two-phase approval
+          +-- append-only review evidence
+          +-- fixed Vercel AI Gateway client
+                +-- pinned Z.AI
+                      +-- zai/glm-5.3-flash
 ```
 
-No remote deployment is accepted until every gate in the remote-integration resumption document passes.
+## Authority boundary
 
-## Release boundary
+The core V1.1 filesystem authority remains frozen. OX is a separately reviewed capability exception for **fixed-purpose outbound validation**, not arbitrary HTTP access.
 
-The V1.1 capability boundary remains frozen. Any of the following requires a new version and separate security review:
-
-- write, rename, move, delete, or rollback tools
-- shell, process, registry, application-control, or arbitrary HTTP tools
-- non-loopback binding
-- additional remotely exposed roots
-- materially different authentication authority
-- integration with B87 Chess Arena or another Byte-Nolan system
+Neither capability grants reviewed-repository mutation. Any future addition of write, rename, move, delete, rollback, shell, process, registry, application-control, arbitrary HTTP, broader filesystem roots, or materially different authentication/provider authority requires a new capability contract and security review.
 
 The separate chess-capability work remains isolated from this release line.
 
