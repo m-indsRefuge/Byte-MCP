@@ -25,4 +25,48 @@ Describe 'Launcher configuration contract' {
         $map.BYTE_MCP_MAX_SEARCH_FILES | Should -Be '20000'
         $map.BYTE_MCP_CONTENT_SEARCH_MAX_BYTES | Should -Be '250000'
     }
+
+    It 'resolves tunnel-client as an application executable' {
+        Mock Get-Command {
+            [PSCustomObject]@{ Source = 'C:\Tools\tunnel-client.exe' }
+        } -ParameterFilter {
+            $Name -eq 'tunnel-client' -and $CommandType -eq 'Application'
+        }
+
+        Get-TunnelClientPath | Should -Be 'C:\Tools\tunnel-client.exe'
+    }
+
+    It 'accepts complete prerequisites when credential checking is skipped' {
+        $paths = [PSCustomObject]@{
+            RepoRoot          = 'C:\repo'
+            PythonPath        = 'C:\repo\.venv\Scripts\python.exe'
+            RootsFile         = 'C:\Users\test\.byte-mcp\roots.web.json'
+            CredentialFile    = 'C:\Users\test\.byte-mcp\credentials\tunnel-runtime-key.dpapi'
+            TunnelProfileFile = 'C:\Users\test\AppData\Roaming\tunnel-client\byte-mcp-local.yaml'
+        }
+
+        Mock Test-Path { $true }
+        Mock Get-TunnelClientPath { 'C:\Tools\tunnel-client.exe' }
+
+        { Assert-ByteMcpLauncherPrerequisites -Paths $paths -SkipCredentialCheck } | Should -Not -Throw
+    }
+
+    It 'requires the encrypted credential by default' {
+        $paths = [PSCustomObject]@{
+            RepoRoot          = 'C:\repo'
+            PythonPath        = 'C:\repo\.venv\Scripts\python.exe'
+            RootsFile         = 'C:\Users\test\.byte-mcp\roots.web.json'
+            CredentialFile    = 'C:\Users\test\.byte-mcp\credentials\tunnel-runtime-key.dpapi'
+            TunnelProfileFile = 'C:\Users\test\AppData\Roaming\tunnel-client\byte-mcp-local.yaml'
+        }
+
+        Mock Test-Path {
+            param($LiteralPath)
+            $LiteralPath -ne $paths.CredentialFile
+        }
+        Mock Get-TunnelClientPath { 'C:\Tools\tunnel-client.exe' }
+
+        { Assert-ByteMcpLauncherPrerequisites -Paths $paths } |
+            Should -Throw '*Encrypted tunnel Runtime API key is missing*'
+    }
 }
