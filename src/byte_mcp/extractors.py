@@ -1,12 +1,13 @@
 """Safe, bounded text extraction for V1 file types."""
 from __future__ import annotations
 
+import codecs
 import csv
 import io
 import zipfile
 from pathlib import Path
 
-from .errors import UnsupportedFileError
+from .errors import LimitExceededError, NotFoundError, UnsupportedFileError
 
 TEXT_EXTENSIONS = frozenset(
     {
@@ -46,6 +47,7 @@ DOCUMENT_EXTENSIONS = frozenset(
     {".pdf", ".docx", ".xlsx", ".pptx", ".zip"}
 )
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | DOCUMENT_EXTENSIONS
+HARD_MAX_INPUT_BYTES = 100_000_000
 
 
 def _bounded(text: str, max_chars: int) -> tuple[str, bool]:
@@ -54,17 +56,19 @@ def _bounded(text: str, max_chars: int) -> tuple[str, bool]:
 
 def _read_text(path: Path) -> str:
     raw = path.read_bytes()
-    decoded: str | None = None
 
-    for encoding in ("utf-8-sig", "utf-16", "cp1252"):
+    if raw.startswith(codecs.BOM_UTF8):
+        decoded = raw.decode("utf-8-sig")
+    elif raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        decoded = raw.decode("utf-16")
+    else:
         try:
-            decoded = raw.decode(encoding)
-            break
+            decoded = raw.decode("utf-8")
         except UnicodeDecodeError:
-            continue
-
-    if decoded is None:
-        decoded = raw.decode("utf-8", errors="replace")
+            try:
+                decoded = raw.decode("cp1252")
+            except UnicodeDecodeError:
+                decoded = raw.decode("utf-8", errors="replace")
 
     return decoded.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -72,7 +76,22 @@ def _read_text(path: Path) -> str:
 def extract_file(
     path: Path,
     max_chars: int,
+    *,
+    max_input_bytes: int = HARD_MAX_INPUT_BYTES,
 ) -> tuple[str, bool, str]:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise NotFoundError(
+            f"File cannot be inspected before extraction: {path.name}"
+        ) from exc
+
+    if size > max_input_bytes:
+        raise LimitExceededError(
+            f"File is {size} bytes; extractor input limit is "
+            f"{max_input_bytes} bytes."
+        )
+
     suffix = path.suffix.casefold()
 
     if suffix in TEXT_EXTENSIONS:
