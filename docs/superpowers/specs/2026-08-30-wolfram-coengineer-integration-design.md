@@ -361,6 +361,24 @@ Machine-identifying absolute paths and unrelated private repository material are
 
 A policy denial occurs before network transmission and records that no provider request occurred.
 
+### 11.4 Human approval model
+
+Wolfram's normal co-engineering calls do **not** inherit OX's mandatory two-phase per-review human approval handshake.
+
+Nolan's approval of this capability and its locked outbound policy authorizes Byte to invoke Tier A and bounded Tier B Wolfram calls during ordinary engineering when they remain inside the implemented size, repository, sanitization, and secret-denial constraints.
+
+This distinction is intentional: Wolfram is an active co-engineer, while OX is a controlled independent review gate.
+
+The rules are:
+
+- Tier A may be sent without per-call human approval;
+- bounded Tier B may be sent without per-call human approval when it satisfies the locked outbound policy;
+- Tier C is denied and cannot be transmitted through the normal Wolfram capability;
+- a future Wolfram feature that materially expands repository scope, data sensitivity, provider authority, or transmission size requires a new design/security gate rather than silently reusing this authorization;
+- the later `wolfram_review` lifecycle, if unlocked by qualification, must not blindly copy OX's two-phase approval semantics unless a separate requirement justifies doing so.
+
+Nolan retains authority over project direction, capability expansion, and final acceptance without becoming responsible for approving every routine co-engineering query.
+
 ## 12. OX isolation in Wolfram context
 
 The no-provider-communication rule is enforced in data handling as well as process flow.
