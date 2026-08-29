@@ -2,32 +2,15 @@
 
 ## Purpose
 
-Resume Byte-MCP remote deployment without reopening completed V1.1 implementation work or weakening the accepted local security boundary.
+Resume Byte-MCP remote deployment without weakening the accepted read-only security boundary.
 
-This document is a future deployment gate. It does not authorize public exposure, new tools, or write capability.
+The original V1.1 implementation was closed as a validated local MCP server because the required ChatGPT custom-MCP connection path was not available at that time. Remote integration validation has now resumed using OpenAI Secure MCP Tunnel.
 
-## Resumption prerequisites
-
-Resume only when all of the following are true:
-
-1. The active ChatGPT plan supports custom MCP registration for the intended tool class.
-   - Pro is sufficient only for read/fetch access under current OpenAI documentation.
-   - Business or Enterprise/Edu is required for full MCP modify/write support under current OpenAI documentation.
-2. The account UI exposes the required developer-mode and custom-app creation controls.
-3. A supported remote connection is available.
-   - Prefer OpenAI Secure MCP Tunnel when available to the account.
-   - Otherwise use a stable, authenticated remote endpoint that supports MCP Streamable HTTP requirements.
-4. The deployment can keep Byte-MCP bound to loopback.
-5. A restricted remote roots profile can be used for the first proof.
-6. The operator has time to complete security, protocol, and audit-correlation gates in one controlled session.
-
-Review current OpenAI documentation before resumption because plan availability and UI may change:
-
-- https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta
+This document authorizes only the bounded deployment-validation increment described below. It does not authorize new tools, filesystem mutation, public exposure, or non-loopback binding.
 
 ## Authoritative baseline
 
-The accepted implementation baseline is:
+The accepted implementation baseline remains:
 
 ```text
 Repository:  m-indsRefuge/Byte-MCP
@@ -39,7 +22,31 @@ Port:        8000
 Transport:   streamable-http
 ```
 
-Begin from the released `main` branch or `v0.1.1` tag. Do not begin from the isolated chess-capability branch.
+The deployment candidate adds one security hardening rule to that baseline: MCP-facing responses expose approved root aliases and relative paths, never the backing local absolute filesystem path.
+
+Begin from the current `main` branch after the remote path-sanitization change is merged. Do not begin from the isolated chess-capability branch.
+
+## Deployment authority
+
+The first accepted ChatGPT deployment may expose exactly one root:
+
+```text
+Alias:  projects
+Path:   %USERPROFILE%\AIProjects
+```
+
+The remote profile must not expose Downloads, Documents, the user profile, a drive root, or any other filesystem location.
+
+The tool contract remains exactly:
+
+```text
+fetch
+list_directory
+list_roots
+search
+```
+
+All four tools remain read-only.
 
 ## Gate R0 — clean baseline
 
@@ -65,9 +72,10 @@ git status --short
 .\scripts\Check.ps1
 ```
 
-Required results:
+Acceptance requires:
 
 - branch is `main`;
+- local `main` matches `origin/main`;
 - working tree is clean;
 - dependency check passes;
 - compilation passes;
@@ -76,14 +84,14 @@ Required results:
 
 Stop if any requirement fails.
 
-## Gate R1 — restricted remote profile
+## Gate R1 — AIProjects-only remote profile
 
-Create the profile outside the repository:
+Create the deployment profile outside the repository:
 
 ```text
-Roots file:  %USERPROFILE%\.byte-mcp\roots.web.json
-Audit file:  %USERPROFILE%\.byte-mcp\audit.web.jsonl
-Share root:  %USERPROFILE%\Byte-MCP-Share
+Roots file:     %USERPROFILE%\.byte-mcp\roots.web.json
+Audit file:     %USERPROFILE%\.byte-mcp\audit.web.jsonl
+Approved root:  %USERPROFILE%\AIProjects
 ```
 
 Required roots payload:
@@ -91,14 +99,18 @@ Required roots payload:
 ```json
 {
   "roots": {
-    "share": "%USERPROFILE%\\Byte-MCP-Share"
+    "projects": "%USERPROFILE%\\AIProjects"
   }
 }
 ```
 
-Use only harmless canary files in the share directory.
+Create one harmless canary file directly under `AIProjects` for the first end-to-end proof. The canary must contain no credentials, private data, or executable instructions. A suitable name is:
 
-Set the runtime environment only in the server terminal:
+```text
+byte-mcp-remote-canary.txt
+```
+
+Set the Byte-MCP runtime environment only in the server terminal:
 
 ```powershell
 $env:BYTE_MCP_ROOTS_FILE = "$env:USERPROFILE\.byte-mcp\roots.web.json"
@@ -108,81 +120,96 @@ $env:BYTE_MCP_PORT = "8000"
 $env:BYTE_MCP_TRANSPORT = "streamable-http"
 $env:BYTE_MCP_MAX_FILE_BYTES = "1000000"
 $env:BYTE_MCP_MAX_RESPONSE_CHARS = "10000"
-$env:BYTE_MCP_MAX_SEARCH_FILES = "1000"
+$env:BYTE_MCP_MAX_SEARCH_FILES = "20000"
 $env:BYTE_MCP_CONTENT_SEARCH_MAX_BYTES = "250000"
 
 .\scripts\Run-Server.ps1
 ```
 
-Required local proof:
+The `projects` root may contain many repositories, so the remote validation profile permits a higher bounded filename-scan limit than the earlier one-folder canary profile. Content extraction and response limits remain conservative.
+
+## Gate R2 — local MCP proof
+
+With Byte-MCP running under the AIProjects-only profile, run:
 
 ```powershell
-.\scripts\Run-Smoke-Test.ps1 -Root share
+.\scripts\Run-Smoke-Test.ps1 -Root projects
 
 .\scripts\Run-Smoke-Test.ps1 `
-    -Root share `
-    -Query "byte-mcp-v1-test-note" `
-    -ExpectName "byte-mcp-v1-test-note.txt" `
+    -Root projects `
+    -Query "byte-mcp-remote-canary" `
+    -ExpectName "byte-mcp-remote-canary.txt" `
     -MaxResults 10 `
     -MaxChars 5000
 ```
 
-Acceptance:
+Acceptance requires:
 
 - listener exists only on `127.0.0.1` or `::1`;
-- only root alias `share` is returned;
 - exactly four tools are discovered;
-- search and fetch pass;
-- fetched content is harmless test data;
-- audit contains no raw query, raw opaque reference, or fetched content.
+- `list_roots` returns only the `projects` alias;
+- `list_roots` does not return the backing Windows path;
+- search and fetch results expose relative paths only;
+- no MCP response contains a local absolute filesystem path;
+- search and fetch of the harmless canary pass;
+- the audit ledger contains no raw query, raw opaque reference, or fetched content.
 
-## Gate R2 — remote transport
+## Gate R3 — OpenAI Secure MCP Tunnel runtime
 
-The remote connection must:
+Use OpenAI Secure MCP Tunnel as the transport between ChatGPT and the local loopback MCP server.
 
-- support HTTPS;
-- support the MCP transport behavior used by the current SDK;
-- provide a stable endpoint for the duration of app registration and testing;
-- require no non-loopback Byte-MCP binding;
-- require no router port forwarding;
-- require no inbound Windows Firewall rule;
-- avoid exposing credentials in command history, logs, screenshots, chat, or Git;
-- have an explicit shutdown and credential-revocation procedure.
+Required properties:
 
-Do not accept an account-less Cloudflare Quick Tunnel as the final transport. Cloudflare documents Quick Tunnels as development-only and without SSE support:
+- Byte-MCP remains bound to `127.0.0.1:8000`;
+- the tunnel client connects outbound to OpenAI;
+- no router port forwarding is configured;
+- no inbound Windows Firewall rule is added;
+- no public generic tunnel hostname is created;
+- the long-lived tunnel daemon uses a restricted Runtime API key with Tunnels **Read** + **Use** only;
+- the Runtime API key is never committed, logged, screenshotted, or pasted into chat;
+- the selected tunnel ID is the same tunnel selected later in the ChatGPT plugin;
+- the MCP target is `http://127.0.0.1:8000/mcp`.
 
-- https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
+Use the installed `tunnel-client` binary as the source of truth for the exact command surface:
 
-Before blaming Byte-MCP for any remote client failure, capture the nested client exception, HTTP status, response headers, Byte-MCP server log, tunnel log, and matching audit timestamp.
+```powershell
+tunnel-client help quickstart
+tunnel-client profiles samples show sample_mcp_remote_no_auth
+tunnel-client help doctor
+```
 
-## Gate R3 — remote MCP proof
+A supported profile-based configuration is expected to use the no-auth HTTP MCP sample, the selected tunnel ID, and the local Byte-MCP URL. Keep `CONTROL_PLANE_API_KEY` in the runtime process environment rather than placing the key literal in shell history or a checked-in profile.
 
-Run the existing smoke client against the remote `/mcp` endpoint.
+Before opening ChatGPT, run:
+
+```powershell
+tunnel-client doctor --profile byte-mcp --explain
+tunnel-client run --profile byte-mcp
+```
+
+Keep the daemon running in the foreground for the manual validation session.
 
 Acceptance requires:
 
-- tool discovery passes;
-- only `fetch`, `list_directory`, `list_roots`, and `search` are present;
-- `list_roots` returns only `share`;
-- remote search and fetch pass;
-- the remote result matches the local canary file;
-- no Downloads, Documents, or Projects root appears;
-- the Byte-MCP audit ledger records matching allowed events.
+- `doctor --explain` reports no blocking configuration error;
+- `/healthz` reports healthy;
+- `/readyz` reports ready;
+- the local tunnel UI identifies the intended tunnel and the Byte-MCP target;
+- Byte-MCP server logs show no unexpected startup or protocol error.
 
-Stop immediately if the tool list differs from the accepted four-tool contract.
+Do not add OAuth to Byte-MCP merely to authenticate the tunnel daemon. Tunnel runtime authentication and MCP application authentication are separate boundaries.
 
-## Gate R4 — ChatGPT draft app
+## Gate R4 — ChatGPT private plugin and tool discovery
 
-In ChatGPT:
+In ChatGPT Web:
 
-1. Enable developer mode only on the supported account/workspace.
-2. Create a private draft custom app.
-3. Enter the reviewed remote `/mcp` endpoint.
-4. Configure the supported authentication mechanism.
-5. Select **Scan Tools**.
+1. Create or edit a private Byte-MCP plugin.
+2. Set **Connection** to **Tunnel**.
+3. Select the same Secure MCP Tunnel used by the local runtime.
+4. Set plugin authentication to **No Auth** for this read-only Byte-MCP deployment unless the current product flow explicitly requires a different supported mode.
+5. Scan/discover tools.
 6. Compare every discovered tool name, description, input schema, and annotation to the repository contract.
-7. Reject the app if any unexpected tool or expanded authority appears.
-8. Keep the app private until all acceptance gates pass.
+7. Reject the plugin if any unexpected tool or expanded authority appears.
 
 Required discovered tools:
 
@@ -202,41 +229,44 @@ idempotentHint:   true
 openWorldHint:    false
 ```
 
+Acceptance requires exactly those four tools and no write-capable tool.
+
 ## Gate R5 — ChatGPT invocation and audit correlation
 
-From a new chat with only the Byte-MCP app enabled:
+From a new chat with only the Byte-MCP plugin enabled:
 
 1. Request `list_roots`.
-2. Confirm the response exposes only `share`.
-3. Search for the harmless canary file.
+2. Confirm the response exposes only the `projects` alias and no local absolute path.
+3. Search for `byte-mcp-remote-canary.txt`.
 4. Fetch the canary file.
 5. Record the invocation timestamps.
-6. Inspect `%USERPROFILE%\.byte-mcp\audit.web.jsonl`.
+6. Inspect `%USERPROFILE%\.byte-mcp\audit.web.jsonl` locally.
 7. Match each ChatGPT invocation to an allowed Byte-MCP event.
 8. Confirm the audit does not contain fetched content or raw query/reference values.
 
-Acceptance requires complete correlation between the ChatGPT-side calls and the local audit ledger.
+Acceptance requires complete correlation between ChatGPT-side calls and the local audit ledger.
 
 ## Gate R6 — deployment decision
 
-A remote deployment may be accepted only when Gates R0 through R5 pass.
+The remote deployment is accepted only when Gates R0 through R5 all pass in one controlled validation sequence.
 
-Before expanding the roots profile, conduct a separate authorization review. Do not automatically replace `share` with Downloads, Documents, or Projects.
+After acceptance, keep the remote root set at `projects` only. Adding another root requires a separate authorization and security review.
 
 ## Stop conditions
 
 Stop without workaround when any of the following occurs:
 
-- the account does not expose custom MCP registration;
-- the remote endpoint requires Byte-MCP to bind to `0.0.0.0`;
+- Byte-MCP must bind to `0.0.0.0` or another non-loopback host;
 - the transport requires a public inbound firewall rule or router forwarding;
-- authentication cannot be configured safely;
-- tool scanning returns unexpected tools;
+- tunnel runtime authentication cannot be configured safely;
+- `/readyz` does not become ready;
+- tool discovery returns anything other than the accepted four-tool contract;
 - a remote call cannot be matched to the local audit ledger;
 - a secret-bearing file, directory, or local absolute path is exposed;
-- the endpoint is publicly reachable without the intended protection;
+- Downloads, Documents, a drive root, or another unapproved root appears;
+- the endpoint becomes publicly reachable outside the intended Secure MCP Tunnel protection;
 - the task begins expanding into write, shell, process, registry, or application-control capability.
 
 ## Separate future work
 
-Write capability, authentication changes, signed references, richer auditing, and the chess-capability server are new-version work. They must not be bundled into a remote-deployment resumption increment.
+Write capability, additional roots, authentication changes, signed references, richer auditing, and the chess-capability server are new-version work. They must not be bundled into this remote-deployment validation increment.
