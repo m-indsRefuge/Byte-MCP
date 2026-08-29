@@ -15,6 +15,9 @@ config/inspector.local.json
 data/audit.jsonl
 .env
 
+# Wolfram local operational state
+data/wolfram-usage.json*
+
 # IDE / OS
 .vscode/
 .idea/
