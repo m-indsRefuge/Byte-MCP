@@ -49,3 +49,44 @@ function Get-ByteMcpServerEnvironment {
         BYTE_MCP_CONTENT_SEARCH_MAX_BYTES = '250000'
     }
 }
+
+function Get-TunnelClientPath {
+    [CmdletBinding()]
+    param()
+
+    (Get-Command tunnel-client -CommandType Application -ErrorAction Stop).Source
+}
+
+function Assert-ByteMcpLauncherPrerequisites {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [pscustomobject] $Paths,
+        [switch] $SkipCredentialCheck
+    )
+
+    if (-not $IsWindows) {
+        throw 'Byte-MCP Launcher V1 requires Windows.'
+    }
+
+    if (-not (Test-Path -LiteralPath $Paths.RepoRoot -PathType Container)) {
+        throw 'Byte-MCP repository path is missing.'
+    }
+
+    if (-not (Test-Path -LiteralPath $Paths.PythonPath -PathType Leaf)) {
+        throw 'Byte-MCP virtual environment Python is missing.'
+    }
+
+    if (-not (Test-Path -LiteralPath $Paths.RootsFile -PathType Leaf)) {
+        throw 'AIProjects-only roots.web.json is missing.'
+    }
+
+    if (-not (Test-Path -LiteralPath $Paths.TunnelProfileFile -PathType Leaf)) {
+        throw 'Tunnel profile byte-mcp-local is missing.'
+    }
+
+    $null = Get-TunnelClientPath
+
+    if (-not $SkipCredentialCheck -and -not (Test-Path -LiteralPath $Paths.CredentialFile -PathType Leaf)) {
+        throw 'Encrypted tunnel Runtime API key is missing. Run Setup-ByteMCP.ps1.'
+    }
+}
