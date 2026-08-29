@@ -76,6 +76,34 @@ def test_content_search(tmp_path: Path) -> None:
     assert result["results"][0]["name"] == "notes.md"
 
 
+def test_search_scan_count_never_exceeds_configured_cap(tmp_path: Path) -> None:
+    approved = tmp_path / "projects"
+    approved.mkdir()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (approved / name).write_text("ok", encoding="utf-8")
+
+    settings = Settings(
+        repo_root=tmp_path,
+        roots_file=tmp_path / "roots.json",
+        audit_file=tmp_path / "audit.jsonl",
+        max_file_bytes=1_000_000,
+        max_response_chars=60_000,
+        max_search_files=2,
+        content_search_max_bytes=100_000,
+    )
+    service = FileService(
+        settings,
+        {"projects": approved.resolve()},
+    )
+
+    result = service.search("missing", root="projects")
+
+    assert result["scanned_files"] == 2
+    assert result["truncated"] is True
+    event = read_audit(settings)[-1]
+    assert event["scanned"] == 2
+
+
 def test_list_directory_excludes_blocked_material(tmp_path: Path) -> None:
     approved = tmp_path / "downloads"
     approved.mkdir()
