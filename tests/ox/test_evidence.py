@@ -277,6 +277,62 @@ def test_recovered_event_log_blocks_later_mutation(tmp_path):
     assert events_path.read_bytes() == original
 
 
+def test_revalidation_allocation_rejects_recovered_event_log(tmp_path):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    events_path = tmp_path / "reviews" / review_id / "events.jsonl"
+    with events_path.open("ab") as handle:
+        handle.write(b'{"event_type":"TRANSMISSION_INTENT"')
+
+    with pytest.raises(OXEvidenceError, match="recovery"):
+        store.allocate_revalidation_id(review_id)
+
+    assert not (events_path.parent / "revalidations").exists()
+
+
+@pytest.mark.parametrize("operation", ["thread", "adjudication", "provider", "findings"])
+def test_mutation_reconstruction_failures_are_sanitized(tmp_path, monkeypatch, operation):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("secret reconstruction path")
+
+    monkeypatch.setattr(EvidenceStore, "_reconstruct", fail)
+    with pytest.raises(OXEvidenceError) as raised:
+        if operation == "thread":
+            store.append_thread_message(review_id, "initial", {"role": "user"})
+        elif operation == "adjudication":
+            store.append_adjudication(review_id, {"finding_id": "F1", "status": "CONFIRMED"})
+        elif operation == "provider":
+            store.persist_provider_response(review_id, "OX-000001-A001", {"content": "finding"})
+        else:
+            store.persist_findings(review_id, {"finding": "value"})
+
+    assert "secret reconstruction path" not in str(raised.value)
+    assert raised.value.__cause__ is None
+
+
+@pytest.mark.parametrize("history", ["missing", "empty"])
+def test_missing_or_empty_event_history_cannot_be_used_as_prepared(tmp_path, history):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    events_path = tmp_path / "reviews" / review_id / "events.jsonl"
+    if history == "missing":
+        events_path.unlink()
+    else:
+        events_path.write_bytes(b"")
+
+    with pytest.raises(OXEvidenceError, match="malformed"):
+        store.get_review(review_id)
+    with pytest.raises(OXEvidenceError, match="malformed"):
+        store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    with pytest.raises(OXEvidenceError, match="malformed"):
+        store.append_thread_message(review_id, "initial", {"role": "user"})
+
+    assert not (events_path.parent / "threads" / "initial.jsonl").exists()
+
+
 @pytest.mark.parametrize(
     "event",
     [

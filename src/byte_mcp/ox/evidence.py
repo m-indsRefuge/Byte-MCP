@@ -103,25 +103,29 @@ class EvidenceStore:
 
     def allocate_revalidation_id(self, review_id: str) -> str:
         self._require_review_id(review_id)
-        with self._allocation_lock:
-            review_dir = self._require_review_dir(review_id)
-            revalidations = review_dir / "revalidations"
+        with self._lock_for(review_id):
             try:
-                revalidations.mkdir(exist_ok=True)
-                maximum = max(
-                    (
-                        int(match.group(2))
-                        for path in revalidations.iterdir()
-                        if (match := _REVALIDATION_ID.fullmatch(path.name))
-                        and match.group(1) == review_id
-                    ),
-                    default=0,
-                )
-                result = f"{review_id}-RV{maximum + 1:03d}"
-                (revalidations / result).mkdir()
-                return result
-            except OSError as error:
-                raise OXEvidenceError("unable to allocate revalidation identity") from error
+                review = self._reconstruct(review_id)
+                self._reject_recovered_review(review)
+                with self._allocation_lock:
+                    revalidations = self._review_dir(review_id) / "revalidations"
+                    revalidations.mkdir(exist_ok=True)
+                    maximum = max(
+                        (
+                            int(match.group(2))
+                            for path in revalidations.iterdir()
+                            if (match := _REVALIDATION_ID.fullmatch(path.name))
+                            and match.group(1) == review_id
+                        ),
+                        default=0,
+                    )
+                    result = f"{review_id}-RV{maximum + 1:03d}"
+                    (revalidations / result).mkdir()
+                    return result
+            except OXEvidenceError:
+                raise
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to allocate revalidation identity") from None
 
     def claim_initial_transmission(self, review_id: str, manifest_sha256: str) -> dict[str, str]:
         self._require_digest(manifest_sha256)
@@ -182,12 +186,15 @@ class EvidenceStore:
         if not re.fullmatch(r"[a-z][a-z0-9-]*", thread_name):
             raise OXEvidenceError("thread identity is invalid")
         with self._lock_for(review_id):
-            self._ensure_writable_review(review_id)
+            try:
+                self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to append thread message") from None
             try:
                 self._append_jsonl(
                     self._review_dir(review_id) / "threads" / f"{thread_name}.jsonl", message
                 )
-            except (OXEvidenceError, OSError, TypeError, ValueError):
+            except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to append thread message") from None
 
     def persist_provider_response(
@@ -195,24 +202,39 @@ class EvidenceStore:
     ) -> None:
         self._require_attempt_id(review_id, attempt_id)
         with self._lock_for(review_id):
-            self._ensure_writable_review(review_id)
-            self._write_immutable_json(
-                self._review_dir(review_id) / "responses" / f"{attempt_id}.json", response
-            )
+            try:
+                self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to persist provider response") from None
+            try:
+                self._write_immutable_json(
+                    self._review_dir(review_id) / "responses" / f"{attempt_id}.json", response
+                )
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to persist provider response") from None
 
     def persist_findings(self, review_id: str, findings: Mapping[str, object]) -> None:
         with self._lock_for(review_id):
-            self._ensure_writable_review(review_id)
-            self._write_immutable_json(
-                self._review_dir(review_id) / "findings" / "findings.json", findings
-            )
+            try:
+                self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to persist findings") from None
+            try:
+                self._write_immutable_json(
+                    self._review_dir(review_id) / "findings" / "findings.json", findings
+                )
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to persist findings") from None
 
     def append_adjudication(self, review_id: str, event: Mapping[str, object]) -> None:
         with self._lock_for(review_id):
-            self._ensure_writable_review(review_id)
+            try:
+                self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError("unable to append adjudication") from None
             try:
                 self._append_jsonl(self._review_dir(review_id) / "adjudication.jsonl", event)
-            except (OXEvidenceError, OSError, TypeError, ValueError):
+            except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to append adjudication") from None
 
     def get_review(self, review_id: str) -> dict[str, object]:
@@ -279,17 +301,17 @@ class EvidenceStore:
     def _append_event(self, review_id: str, event: Mapping[str, object]) -> None:
         try:
             self._append_jsonl(self._review_dir(review_id) / "events.jsonl", event)
-        except (OSError, TypeError, ValueError) as error:
-            raise OXEvidenceError("unable to append review event") from error
+        except (OSError, TypeError, ValueError):
+            raise OXEvidenceError("unable to append review event") from None
 
     def _reconstruct(self, review_id: str) -> dict[str, object]:
-        review_dir = self._require_review_dir(review_id)
         try:
+            review_dir = self._require_review_dir(review_id)
             identity = self._read_json(review_dir / "review.json")
             manifest = self._read_json(review_dir / "manifest.json")
             events, warnings = self._read_jsonl(review_dir / "events.jsonl")
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise OXEvidenceError("unable to read review evidence") from error
+        except (OSError, TypeError, ValueError):
+            raise OXEvidenceError("unable to read review evidence") from None
         if (
             not isinstance(identity, dict)
             or not isinstance(manifest, dict)
@@ -298,8 +320,15 @@ class EvidenceStore:
         ):
             raise OXEvidenceError("review evidence is malformed")
         manifest_digest = manifest["manifest_sha256"]
+        if (
+            not events
+            or not isinstance(events[0], dict)
+            or events[0].get("event_type") != "PREPARED"
+        ):
+            raise OXEvidenceError("review events are malformed")
         state = ReviewState.PREPARED.value
         attempts: list[dict[str, str]] = []
+        prepared_seen = False
         for event in events:
             if not isinstance(event, dict):
                 raise OXEvidenceError("review events are malformed")
@@ -335,13 +364,18 @@ class EvidenceStore:
                     AttemptOutcome.OUTCOME_UNKNOWN.value: ReviewState.OUTCOME_UNKNOWN.value,
                 }.get(outcome, ReviewState.FAILED.value)
             elif event_type == "PREPARED":
+                if prepared_seen:
+                    raise OXEvidenceError("review events are malformed")
                 if (
                     event.get("review_id") != review_id
                     or event.get("manifest_sha256") != manifest_digest
                 ):
                     raise OXEvidenceError("review events are malformed")
+                prepared_seen = True
             else:
                 raise OXEvidenceError("review events are malformed")
+        if not prepared_seen:
+            raise OXEvidenceError("review events are malformed")
         return {
             "attempts": attempts,
             "identity": identity,
@@ -433,8 +467,8 @@ class EvidenceStore:
             os.replace(temporary_path, path)
         except OXEvidenceError:
             raise
-        except (OSError, TypeError, ValueError) as error:
-            raise OXEvidenceError("unable to persist immutable evidence") from error
+        except (OSError, TypeError, ValueError):
+            raise OXEvidenceError("unable to persist immutable evidence") from None
 
     @staticmethod
     def _append_jsonl(path: Path, value: Mapping[str, object]) -> None:
@@ -461,11 +495,11 @@ class EvidenceStore:
                 raise OXEvidenceError("review events are malformed")
             try:
                 records.append(json.loads(line.decode("utf-8")))
-            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 is_trailing = index == len(lines) - 1 and not raw.endswith(b"\n")
                 if is_trailing:
                     return records, ["ignored malformed trailing events record"]
-                raise OXEvidenceError("review events are malformed") from error
+                raise OXEvidenceError("review events are malformed") from None
         return records, []
 
 
