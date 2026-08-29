@@ -29,7 +29,16 @@ Describe 'Wolfram launcher extension' {
         [Environment]::SetEnvironmentVariable('WOLFRAM_APP_ID', 'parent-sentinel', 'Process')
         $script:observed = 'not-called'
         try {
-            Mock Test-Path { $false } -ParameterFilter { $LiteralPath -like '*wolfram-appid.dpapi' }
+            Mock Test-Path {
+                if ($LiteralPath -like '*wolfram-appid.dpapi') {
+                    return $false
+                }
+                if ($LiteralPath -like 'Env:*') {
+                    $name = ([string] $LiteralPath).Substring(4)
+                    return $null -ne [Environment]::GetEnvironmentVariable($name, 'Process')
+                }
+                throw "Unexpected Test-Path call in Wolfram launcher test: $LiteralPath"
+            }
             Mock Get-ByteMcpServerEnvironment { @{} }
             Mock Start-Process {
                 $script:observed = [Environment]::GetEnvironmentVariable('WOLFRAM_APP_ID', 'Process')
@@ -51,7 +60,16 @@ Describe 'Wolfram launcher extension' {
         [Environment]::SetEnvironmentVariable('WOLFRAM_APP_ID', 'parent-sentinel', 'Process')
         $script:observed = $null
         try {
-            Mock Test-Path { $true } -ParameterFilter { $LiteralPath -like '*wolfram-appid.dpapi' }
+            Mock Test-Path {
+                if ($LiteralPath -like '*wolfram-appid.dpapi') {
+                    return $true
+                }
+                if ($LiteralPath -like 'Env:*') {
+                    $name = ([string] $LiteralPath).Substring(4)
+                    return $null -ne [Environment]::GetEnvironmentVariable($name, 'Process')
+                }
+                throw "Unexpected Test-Path call in Wolfram launcher test: $LiteralPath"
+            }
             Mock Get-ByteMcpServerEnvironment { @{} }
             Mock Unprotect-ByteMcpCredential { ConvertTo-SecureString 'child-wolfram-secret' -AsPlainText -Force }
             Mock Start-Process {
@@ -71,7 +89,16 @@ Describe 'Wolfram launcher extension' {
 
     It 'uses the same injection boundary in foreground mode' {
         $script:observed = $null
-        Mock Test-Path { $true } -ParameterFilter { $LiteralPath -like '*wolfram-appid.dpapi' }
+        Mock Test-Path {
+            if ($LiteralPath -like '*wolfram-appid.dpapi') {
+                return $true
+            }
+            if ($LiteralPath -like 'Env:*') {
+                $name = ([string] $LiteralPath).Substring(4)
+                return $null -ne [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+            throw "Unexpected Test-Path call in Wolfram launcher test: $LiteralPath"
+        }
         Mock Get-ByteMcpServerEnvironment { @{} }
         Mock Unprotect-ByteMcpCredential { ConvertTo-SecureString 'child-wolfram-secret' -AsPlainText -Force }
         Mock Start-Process {
