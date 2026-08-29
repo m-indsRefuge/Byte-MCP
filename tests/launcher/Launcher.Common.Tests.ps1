@@ -53,8 +53,8 @@ if (-not [bool] `$platform.Value) { exit 3 }
         $LASTEXITCODE | Should -Be 0
     }
 
-    It 'loads the platform bootstrap before common launcher code in setup and start' {
-        foreach ($name in @('Setup-ByteMCP.ps1', 'Start-ByteMCP.ps1')) {
+    It 'loads the platform bootstrap before common launcher code in setup start and status' {
+        foreach ($name in @('Setup-ByteMCP.ps1', 'Start-ByteMCP.ps1', 'Status-ByteMCP.ps1')) {
             $entryPath = Join-Path $PSScriptRoot "../../scripts/$name"
             $source = Get-Content -LiteralPath $entryPath -Raw
             $platformIndex = $source.IndexOf("Launcher.Platform.ps1")
