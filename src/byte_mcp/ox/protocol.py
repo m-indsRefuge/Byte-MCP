@@ -81,7 +81,10 @@ def parse_findings(content: str, review_id: str) -> tuple[Finding, ...]:
         raise OXFindingValidationError(attempt_outcome="COMPLETED") from None
     if not isinstance(payload, dict) or set(payload) != {"protocol_version", "findings"}:
         raise OXFindingValidationError(attempt_outcome="COMPLETED")
-    if payload["protocol_version"] != _FINDINGS_VERSION or not isinstance(payload["findings"], list):
+    invalid_container = payload["protocol_version"] != _FINDINGS_VERSION or not isinstance(
+        payload["findings"], list
+    )
+    if invalid_container:
         raise OXFindingValidationError(attempt_outcome="COMPLETED")
 
     findings: list[Finding] = []
