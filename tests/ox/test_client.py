@@ -266,6 +266,25 @@ def test_complete_rejects_invalid_attempt_id_before_http_call(attempt_id):
     assert SECRET not in repr(raised.value)
 
 
+@pytest.mark.parametrize("attempt_id", ["OX-0000001-A001", "OX-000001-A0001"])
+def test_complete_rejects_overlong_attempt_id_before_http_call(attempt_id):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=SUCCESS_BODY)
+
+    with pytest.raises(OXRequestError) as raised:
+        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=attempt_id)
+
+    assert calls == 0
+    assert raised.value.attempt_outcome == "NOT_SENT"
+    assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
 @pytest.mark.parametrize(
     "messages",
     [

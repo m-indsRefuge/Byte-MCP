@@ -28,7 +28,7 @@ _MODEL = "zai/glm-5.3-flash"
 _PROVIDER_OPTIONS = {"gateway": {"only": ["zai"]}}
 _MAX_TOKENS = 16_384
 _TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
-_ATTEMPT_ID_PATTERN = re.compile(r"OX-(\d{6,})-A(\d{3,})")
+_ATTEMPT_ID_PATTERN = re.compile(r"^OX-\d{6}-A\d{3}$")
 _SAFE_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
 _CONTEXT_ERROR_CODES = frozenset(
