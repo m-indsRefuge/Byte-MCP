@@ -77,6 +77,7 @@ class OXClient:
             "model": _MODEL,
             "stream": False,
             "max_tokens": self._max_output_tokens,
+            "reasoning": {"effort": "medium"},
             "providerOptions": _PROVIDER_OPTIONS,
         }
         if json_mode:
