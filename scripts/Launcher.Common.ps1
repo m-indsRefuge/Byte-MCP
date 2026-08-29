@@ -463,6 +463,39 @@ function Get-LauncherUserProfileFromPaths {
     $env:USERPROFILE
 }
 
+function Get-LauncherProcessEnvironmentSnapshot {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string[]] $Names
+    )
+
+    $snapshot = @{}
+    foreach ($name in $Names) {
+        $snapshot[$name] = [PSCustomObject]@{
+            Exists = Test-Path -LiteralPath "Env:$name"
+            Value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        }
+    }
+    $snapshot
+}
+
+function Restore-LauncherProcessEnvironment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [hashtable] $Snapshot
+    )
+
+    foreach ($name in $Snapshot.Keys) {
+        $entry = $Snapshot[$name]
+        if ($entry.Exists) {
+            [Environment]::SetEnvironmentVariable($name, $entry.Value, 'Process')
+        }
+        else {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Start-LauncherServerProcess {
     [CmdletBinding()]
     param(
@@ -471,11 +504,10 @@ function Start-LauncherServerProcess {
 
     $userProfile = Get-LauncherUserProfileFromPaths -Paths $Paths
     $map = Get-ByteMcpServerEnvironment -UserProfile $userProfile
-    $prior = @{}
+    $prior = Get-LauncherProcessEnvironmentSnapshot -Names @($map.Keys)
 
     try {
         foreach ($name in $map.Keys) {
-            $prior[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
             [Environment]::SetEnvironmentVariable($name, $map[$name], 'Process')
         }
 
@@ -487,9 +519,7 @@ function Start-LauncherServerProcess {
             -RedirectStandardError $Paths.ServerStdErr
     }
     finally {
-        foreach ($name in $map.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $prior[$name], 'Process')
-        }
+        Restore-LauncherProcessEnvironment -Snapshot $prior
     }
 }
 
@@ -501,7 +531,7 @@ function Start-LauncherTunnelProcess {
 
     $secure = Unprotect-ByteMcpCredential -Path $Paths.CredentialFile
     $plain = $null
-    $priorKey = [Environment]::GetEnvironmentVariable('CONTROL_PLANE_API_KEY', 'Process')
+    $prior = Get-LauncherProcessEnvironmentSnapshot -Names @('CONTROL_PLANE_API_KEY')
 
     try {
         $plain = [System.Net.NetworkCredential]::new('', $secure).Password
@@ -514,7 +544,7 @@ function Start-LauncherTunnelProcess {
             -RedirectStandardError $Paths.TunnelStdErr
     }
     finally {
-        [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $priorKey, 'Process')
+        Restore-LauncherProcessEnvironment -Snapshot $prior
         $plain = $null
         $secure = $null
     }
@@ -528,11 +558,10 @@ function Start-LauncherForegroundServer {
 
     $userProfile = Get-LauncherUserProfileFromPaths -Paths $Paths
     $map = Get-ByteMcpServerEnvironment -UserProfile $userProfile
-    $prior = @{}
+    $prior = Get-LauncherProcessEnvironmentSnapshot -Names @($map.Keys)
 
     try {
         foreach ($name in $map.Keys) {
-            $prior[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
             [Environment]::SetEnvironmentVariable($name, $map[$name], 'Process')
         }
 
@@ -543,9 +572,7 @@ function Start-LauncherForegroundServer {
             -PassThru
     }
     finally {
-        foreach ($name in $map.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $prior[$name], 'Process')
-        }
+        Restore-LauncherProcessEnvironment -Snapshot $prior
     }
 }
 
@@ -557,7 +584,7 @@ function Start-LauncherForegroundTunnel {
 
     $secure = Unprotect-ByteMcpCredential -Path $Paths.CredentialFile
     $plain = $null
-    $priorKey = [Environment]::GetEnvironmentVariable('CONTROL_PLANE_API_KEY', 'Process')
+    $prior = Get-LauncherProcessEnvironmentSnapshot -Names @('CONTROL_PLANE_API_KEY')
 
     try {
         $plain = [System.Net.NetworkCredential]::new('', $secure).Password
@@ -569,7 +596,7 @@ function Start-LauncherForegroundTunnel {
             -PassThru
     }
     finally {
-        [Environment]::SetEnvironmentVariable('CONTROL_PLANE_API_KEY', $priorKey, 'Process')
+        Restore-LauncherProcessEnvironment -Snapshot $prior
         $plain = $null
         $secure = $null
     }
