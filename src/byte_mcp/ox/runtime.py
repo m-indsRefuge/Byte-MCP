@@ -7,8 +7,8 @@ from byte_mcp.errors import OXUnavailableError
 from .client import OXClient
 from .evidence import EvidenceStore
 from .models import OXAvailability
+from .natural_service import OXReviewService
 from .repositories import validate_ox_local_config
-from .service import OXReviewService
 from .settings import OXSettings
 
 
