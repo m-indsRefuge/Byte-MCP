@@ -1,11 +1,14 @@
 """Natural-text OX review orchestration layered on the hardened base service."""
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 
-from byte_mcp.errors import OXProtocolError
+from byte_mcp.errors import OXEvidenceError, OXProtocolError
 
 from .models import AttemptOutcome, ProviderResult, ReviewState
+from .protocol import parse_findings
 from .service import _PROVIDER_ERRORS
 from .service import OXReviewService as BaseOXReviewService
 
@@ -69,3 +72,74 @@ class OXReviewService(BaseOXReviewService):
             "response": result.content,
             "usage": asdict(result.usage) if result.usage is not None else None,
         }
+
+    def record_findings(
+        self,
+        review_id: str,
+        findings: Sequence[Mapping[str, object]],
+    ) -> dict[str, object]:
+        """Persist one immutable Byte-authored interpretation of a natural OX review."""
+        review = self._load_prepared_review(review_id, expected_state=ReviewState.REVIEWED)
+        if (
+            isinstance(findings, str | bytes | bytearray)
+            or not isinstance(findings, Sequence)
+            or not findings
+            or not all(isinstance(item, Mapping) for item in findings)
+        ):
+            raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)
+
+        # Byte-authored interpretation is a new local input boundary. Apply the
+        # same exact configured-credential rejection used by outbound/retrieval paths.
+        self._reject_configured_credential(list(findings))
+
+        attempts = review.get("attempts")
+        if not isinstance(attempts, list):
+            raise OXEvidenceError("review attempt evidence is malformed")
+
+        source_attempt_id: str | None = None
+        for attempt in attempts:
+            if not isinstance(attempt, Mapping) or attempt.get("outcome") != AttemptOutcome.COMPLETED.value:
+                continue
+            attempt_id = attempt.get("attempt_id")
+            if not isinstance(attempt_id, str):
+                continue
+            identity = self._evidence.read_attempt_identity(review_id, attempt_id)
+            if identity.get("phase") in {"initial", "initial-retry"}:
+                source_attempt_id = attempt_id
+                break
+        if source_attempt_id is None:
+            raise OXEvidenceError("completed initial OX attempt evidence is unavailable")
+
+        thread = self._evidence.read_thread(review_id, "initial")
+        source_response: str | None = None
+        for message in thread:
+            if message.get("role") != "assistant":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                source_response = content
+                break
+        if source_response is None:
+            raise OXEvidenceError("source OX response evidence is unavailable")
+
+        local_wire_payload = {
+            "protocol_version": "ox-findings-v1",
+            "findings": [dict(item) for item in findings],
+        }
+        validated = parse_findings(
+            json.dumps(local_wire_payload, ensure_ascii=False, allow_nan=False),
+            review_id,
+        )
+        payload = {
+            "protocol_version": "byte-derived-findings-v1",
+            "review_id": review_id,
+            "source_attempt_id": source_attempt_id,
+            "source_response_sha256": hashlib.sha256(
+                source_response.encode("utf-8")
+            ).hexdigest(),
+            "derivation_authority": "byte",
+            "derivation_provenance": "derived-from-ox-natural-review",
+            "findings": [asdict(finding) for finding in validated],
+        }
+        self._evidence.persist_findings(review_id, payload)
+        return payload
