@@ -270,10 +270,10 @@ class FileService:
                     ]
 
                     for filename in filenames:
-                        scanned += 1
-                        if scanned > self.settings.max_search_files:
+                        if scanned >= self.settings.max_search_files:
                             stopped = True
                             break
+                        scanned += 1
 
                         path = current_path / filename
                         relative = path.relative_to(approved_root)
