@@ -1,5 +1,6 @@
 BeforeAll {
     . "$PSScriptRoot/../../scripts/Launcher.Common.ps1"
+    . "$PSScriptRoot/../../scripts/Launcher.Ownership.ps1"
 
     $script:ownershipPaths = [PSCustomObject]@{
         RepoRoot          = 'C:\repo'
