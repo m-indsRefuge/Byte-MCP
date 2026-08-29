@@ -66,6 +66,17 @@ class Finding:
     finding_id: str
     status: FindingStatus
     summary: str = ""
+    category: str = ""
+    severity: str = ""
+    confidence: float = 0.0
+    location: str = ""
+    claim: str = ""
+    evidence: str = ""
+    reproduction: str = ""
+    expected_behavior: str = ""
+    observed_or_predicted_behavior: str = ""
+    disproof_condition: str = ""
+    recommended_investigation: str = ""
 
 
 @dataclass(frozen=True, slots=True)
