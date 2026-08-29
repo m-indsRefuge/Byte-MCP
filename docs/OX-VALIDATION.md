@@ -2,7 +2,7 @@
 
 This document defines the operator procedure for Byte-MCP's optional OX external-validation capability.
 
-OX is an independent reviewer. Byte remains the technical process owner and evidence adjudicator. The human operator remains the final authority over outbound review approval and final acceptance.
+OX is an independent reviewer. Byte remains the technical process owner and evidence adjudicator. Nolan, as the human operator, remains the final authority over outbound review approval and final acceptance.
 
 ## Status
 
@@ -34,6 +34,8 @@ Byte-MCP
 
 The OX client is not a generic provider abstraction. V1 has no caller-selected URL, model, provider, or fallback route.
 
+Vercel and Z.AI are external processors for any approved OX transmission. An approved review packet leaves the local Byte-MCP trust boundary and is sent through Vercel AI Gateway to Z.AI. Review their current data-handling terms before transmitting private repository material; the first live canary remains deliberately non-sensitive regardless.
+
 ## MCP tool surface
 
 OX exposes exactly four high-level tools:
@@ -61,6 +63,8 @@ Do not paste this value into chat, source code, documentation, repository config
 
 If the variable is absent, OX initializes as `DISABLED`. The four original Byte-MCP local tools continue to work.
 
+After setting or changing `AI_GATEWAY_API_KEY`, restart Byte-MCP so the new server process inherits the environment value. Never print the key as part of a verification command.
+
 ### Repository registry
 
 Machine-specific OX authorization defaults to:
@@ -75,7 +79,7 @@ This path is Git-ignored. Copy the shape from:
 config/ox-repositories.example.json
 ```
 
-Each repository entry declares a local Git repository and one or more versioned subsystem definitions. A subsystem explicitly declares:
+Use an absolute local Git repository path in each machine-local repository entry. Each entry declares one or more versioned subsystem definitions. A subsystem explicitly declares:
 
 - `source_roots`
 - `test_roots`
@@ -106,6 +110,8 @@ BYTE_MCP_OX_EVIDENCE_DIR
 ```
 
 The evidence directory must remain outside the reviewed repository. Configuration that overlaps the evidence root with a reviewed repository fails closed.
+
+The V1 evidence store is intentionally single-process. Its locks coordinate concurrent calls within one Byte-MCP process; multiple Byte-MCP processes must not share the same OX evidence root.
 
 ### Limits
 
@@ -178,11 +184,11 @@ Preparation:
 7. returns the proposal with `review_id`, artifact/size information, `manifest_sha256`, and `payload_sha256`;
 8. performs **zero provider calls**.
 
-The human operator must inspect the proposal before transmission.
+Nolan must inspect and approve the exact proposal before transmission. The approval must cover the repository, subsystem, commits, objective/purpose, artifact count/bytes, `manifest_sha256`, and `payload_sha256` shown by preparation.
 
 ### Phase 2 — approve/transmit
 
-After explicit human approval of the exact prepared proposal, call `ox_review` in approval mode for that `review_id`.
+After explicit approval of that exact prepared proposal, call `ox_review` in approval mode for the `review_id`.
 
 Before any provider request, Byte-MCP rebuilds the bundle from the committed state and verifies:
 
@@ -239,6 +245,8 @@ A new remediation commit requires a new prepared revalidation boundary.
 
 `ox_revalidate` first prepares the new exact committed state with verification evidence. Preparation performs no provider call and returns a new digest-bound proposal.
 
+Nolan must inspect and approve that new exact proposal before the blind provider request.
+
 After explicit approval, blind revalidation is sent in fresh OX context. Original findings and Byte remediation/adjudication are not disclosed during the blind pass.
 
 ### Targeted revalidation
@@ -262,7 +270,7 @@ Provider/transport outcomes distinguish:
 
 `OUTCOME_UNKNOWN` is important: a timeout after request upload may mean the provider received the request even if Byte-MCP did not receive the response. The system must not relabel this as definitely unsent.
 
-Retry is explicit and uses a new attempt identity. Where the lifecycle requires renewed approval, lack of renewed approval fails before the provider boundary.
+Retry is explicit and uses a new attempt identity. Where the lifecycle requires renewed approval, Nolan must approve the retry before repository context can be resent.
 
 Continuation and revalidation retries replay the exact persisted native history only after verifying its history digest. The replayed history is then checked again for the currently configured gateway credential before a retry attempt can be claimed. This also protects against authentic evidence created by a pre-hardening build.
 
@@ -312,6 +320,8 @@ Streaming:   disabled
 Redirects:   disabled
 ```
 
+There is no automatic model/provider fallback.
+
 The request does not expose tool/function-calling authority to OX. OX cannot request Byte-MCP to execute a command or access an undeclared file merely by writing such an instruction in its response.
 
 The authorization header is formed in memory from `AI_GATEWAY_API_KEY`. Safe provider status/error classifications may be retained; sensitive request diagnostics and credentials must not be persisted.
@@ -323,18 +333,19 @@ Do not perform the first real provider request casually as part of startup or CI
 The first live canary should use a deliberately small, non-sensitive approved subsystem. The required sequence is:
 
 1. confirm Vercel AI Gateway account/balance and the intended Z.AI route;
-2. configure `AI_GATEWAY_API_KEY` outside Git;
-3. configure the machine-local OX repository registry;
-4. prepare the canary review only;
-5. inspect the exact repository, subsystem, base/target commits, objective, artifact count/bytes, `manifest_sha256`, and `payload_sha256`;
-6. obtain explicit human approval for that exact outbound proposal;
-7. transmit one initial review;
-8. confirm provider/model routing, evidence durability, usage metadata, and absence of credential leakage;
-9. optionally perform one explicit continuation;
-10. re-run the core local-tool checks to confirm OX remains fail-isolated from the original Byte-MCP capability.
+2. review current Vercel/Z.AI data-handling terms;
+3. configure `AI_GATEWAY_API_KEY` outside Git and restart Byte-MCP;
+4. create/configure the machine-local `ox-canary` repository registry entry;
+5. prepare the canary review only;
+6. inspect the exact repository, subsystem, base/target commits, objective, artifact count/bytes, `manifest_sha256`, and `payload_sha256`;
+7. obtain Nolan's explicit approval for that exact outbound proposal;
+8. transmit one initial review;
+9. confirm provider/model routing, evidence durability, usage metadata, and absence of credential leakage;
+10. optionally perform one explicit continuation and one local adjudication;
+11. re-run the core local-tool checks to confirm OX remains fail-isolated from the original Byte-MCP capability.
 
 No live API key or live provider call belongs in CI.
 
 ## Acceptance after the canary
 
-The canary proves transport and provider behavior, not the quality of the entire integration. The first serious dogfood review should then review the committed OX subsystem itself, followed by Byte evidence-based adjudication, remediation of confirmed defects, blind OX revalidation, targeted completeness review where appropriate, regression verification, and final human acceptance.
+The canary proves transport and provider behavior, not the quality of the entire integration. The first serious dogfood review should then review the committed OX subsystem itself, followed by Byte evidence-based adjudication, remediation of confirmed defects, blind OX revalidation, targeted completeness review where appropriate, regression verification, and Nolan's final human acceptance.
