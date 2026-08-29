@@ -4,6 +4,22 @@ All notable Byte-MCP changes are documented here.
 
 ## Unreleased
 
+### OX validation integration candidate
+
+- Added an optional OX external-validation subsystem while preserving the accepted four-tool core filesystem authority.
+- Added exactly four OX MCP tools: `ox_review`, `ox_continue`, `ox_revalidate`, and `ox_get_review`.
+- Added deterministic review bundles from allowlisted immutable Git commits and versioned subsystem definitions, with mandatory source/test/boundary/context evidence and bounded verification records.
+- Added two-phase human approval for initial review and blind revalidation, binding approval to the complete deterministic manifest and canonical outbound `payload_sha256` before network access.
+- Added a fixed non-streaming Vercel AI Gateway client pinned to the Z.AI provider and `zai/glm-5.3-flash`, with redirects disabled and no provider/model fallback.
+- Added append-only OX review, attempt, native-message, provider-response, findings, adjudication, and revalidation evidence outside the reviewed repository.
+- Added explicit `NOT_SENT`, `REJECTED`, `COMPLETED`, and `OUTCOME_UNKNOWN` attempt semantics with no automatic retries and renewed approval for replay paths that can resend repository context.
+- Added fail-isolated OX runtime states so missing credentials or invalid optional OX configuration do not prevent the original Byte-MCP tools from starting.
+- Added configured-credential fail-closed guards across preparation, continuation, adjudication, targeted revalidation, retry replay, and all bounded retrieval views.
+- Added adversarial tests for forbidden scope/repository states, manifest/payload tampering, credential persistence/transmission/retrieval, ambiguous transport outcomes, and legacy retry replay.
+- Added `docs/OX-VALIDATION.md` and updated the README/security boundary for the integrated capability.
+- Verified the integration candidate on Windows and Ubuntu with 229 passing tests, Ruff, compilation, and dependency integrity before the live provider canary.
+- Live Vercel AI Gateway → Z.AI canary remains pending explicit human approval and is not run in CI.
+
 ### External review hardening
 
 - Hardened secret denial so secret/credential stems and sensitive suffixes remain blocked through ordinary and multi-suffix filenames.
