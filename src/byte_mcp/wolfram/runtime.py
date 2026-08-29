@@ -21,7 +21,7 @@ class WolframRuntime:
     error: str | None = None
 
     @classmethod
-    def load(cls, repo_root: Path, audit: AuditLog) -> "WolframRuntime":
+    def load(cls, repo_root: Path, audit: AuditLog) -> WolframRuntime:
         try:
             settings = WolframSettings.load(repo_root)
         except WolframConfigurationError as exc:
