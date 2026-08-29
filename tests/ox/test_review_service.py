@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from byte_mcp.ox.service import OXReviewService
 
 from byte_mcp.errors import (
     OXApprovalError,
@@ -15,7 +16,6 @@ from byte_mcp.errors import (
 )
 from byte_mcp.ox.evidence import EvidenceStore
 from byte_mcp.ox.models import ProviderResult, ProviderUsage, ReviewState
-from byte_mcp.ox.service import OXReviewService
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import create_repository
 
@@ -264,7 +264,7 @@ def test_prepare_oversize_and_evidence_failure_never_call_provider(tmp_path) -> 
         )
 
 
-def test_transmit_reverifies_prepared_scope_then_persists_response_findings_and_usage(tmp_path) -> None:
+def test_transmit_persists_response_findings_and_usage(tmp_path) -> None:
     client = RecordingClient()
     service, store, _, base, target, _ = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
@@ -291,7 +291,7 @@ def test_transmit_reverifies_prepared_scope_then_persists_response_findings_and_
     assert response["id"] == "response-OX-000001-A001"
 
 
-def test_changed_subsystem_definition_invalidates_prepared_approval_before_provider(tmp_path) -> None:
+def test_changed_scope_invalidates_approval_before_provider(tmp_path) -> None:
     client = RecordingClient()
     service, _, repository_path, base, target, registry_path = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
