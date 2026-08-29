@@ -4,7 +4,8 @@ from enum import StrEnum
 
 class OXAvailability(StrEnum):
     AVAILABLE = "AVAILABLE"
-    UNAVAILABLE = "UNAVAILABLE"
+    DISABLED = "DISABLED"
+    MISCONFIGURED = "MISCONFIGURED"
 
 
 class ReviewState(StrEnum):
@@ -47,6 +48,8 @@ class VerificationRecord:
 class ProviderUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    total_tokens: int = 0
+    cached_input_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
