@@ -145,13 +145,16 @@ def test_natural_blind_and_targeted_revalidation_preserve_byte_provenance(tmp_pa
         revalidation["revalidation_id"], [f"{review_id}-F001"]
     )
     targeted_call = client.calls[-1]
-    targeted_serialized = json.dumps(targeted_call["messages"])
+    targeted_payload = json.loads(targeted_call["messages"][-1]["content"])
+    targeted_context = targeted_payload["review_packet"]["targeted_context"]
+    provenance = targeted_context["byte_derived_findings_provenance"]
     assert targeted_call["json_mode"] is False
     assert targeted["state"] == ReviewState.REVALIDATED.value
     assert targeted["response"]
     assert "findings" not in targeted
-    assert "derived-from-ox-natural-review" in targeted_serialized
-    assert '"derivation_authority":"byte"' in targeted_serialized
+    assert provenance["derivation_authority"] == "byte"
+    assert provenance["derivation_provenance"] == "derived-from-ox-natural-review"
+    assert len(targeted_context["byte_derived_findings"]) == 1
 
 
 def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blind(
