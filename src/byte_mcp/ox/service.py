@@ -121,12 +121,14 @@ class OXReviewService:
         )
         objective = objective.strip()
         messages = build_initial_messages(prepared.packet, objective=objective)
+        self._reject_configured_credential(messages)
         total_bytes = _message_bytes(messages)
         if total_bytes > self._settings.max_bundle_bytes:
             raise OXBundleError(
                 f"review payload size {total_bytes} exceeds max_bundle_bytes "
                 f"{self._settings.max_bundle_bytes}"
             )
+        payload_sha256 = _history_sha256(messages)
         identity = {
             "repository": repository,
             "subsystem": subsystem,
@@ -136,6 +138,7 @@ class OXReviewService:
             "verification": _json_copy(list(verification)),
             "artifact_count": len(prepared.manifest.entries),
             "total_bytes": total_bytes,
+            "payload_sha256": payload_sha256,
             "model": "zai/glm-5.3-flash",
             "provider": "zai",
         }
@@ -444,8 +447,10 @@ class OXReviewService:
             "Blindly validate the exact approved subsystem state at the new committed target."
         )
         messages = build_initial_messages(prepared.packet, objective=objective)
+        self._reject_configured_credential(messages)
         total_bytes = _message_bytes(messages)
         self._enforce_message_bound(messages)
+        payload_sha256 = _history_sha256(messages)
         revalidation_id = self._evidence.allocate_revalidation_id(review_id)
         revalidation_identity = {
             "repository": repository,
@@ -456,6 +461,7 @@ class OXReviewService:
             "verification": _json_copy(list(verification)),
             "artifact_count": len(prepared.manifest.entries),
             "total_bytes": total_bytes,
+            "payload_sha256": payload_sha256,
             "model": "zai/glm-5.3-flash",
             "provider": "zai",
         }
@@ -840,6 +846,7 @@ class OXReviewService:
             "target_commit",
             "objective",
             "verification",
+            "payload_sha256",
         )
         if any(key not in identity for key in required):
             raise OXApprovalError("prepared review identity is incomplete")
@@ -866,12 +873,18 @@ class OXReviewService:
             base_commit=base_commit,
             verification=verification,
         )
-        manifest_sha256 = manifest.get("manifest_sha256")
-        if prepared.manifest.manifest_sha256 != manifest_sha256:
+        persisted_manifest = _json_copy(dict(manifest))
+        expected_manifest = _json_copy(asdict(prepared.manifest))
+        if persisted_manifest != expected_manifest:
             raise OXApprovalError("prepared manifest no longer matches approved scope")
         messages = build_initial_messages(prepared.packet, objective=identity["objective"])
+        self._reject_configured_credential(messages)
         if _message_bytes(messages) != identity.get("total_bytes"):
             raise OXApprovalError("prepared outbound payload no longer matches approval")
+        if _history_sha256(messages) != identity.get("payload_sha256"):
+            raise OXApprovalError("prepared outbound payload no longer matches approval")
+        if identity.get("artifact_count") != len(prepared.manifest.entries):
+            raise OXApprovalError("prepared artifact count no longer matches approval")
         return prepared, messages
 
     def _rebuild_revalidation_and_verify(
@@ -887,6 +900,7 @@ class OXReviewService:
             "target_commit",
             "objective",
             "verification",
+            "payload_sha256",
         )
         if any(key not in identity for key in required):
             raise OXApprovalError("prepared revalidation identity is incomplete")
@@ -913,11 +927,18 @@ class OXReviewService:
             base_commit=base_commit,
             verification=verification,
         )
-        if prepared.manifest.manifest_sha256 != manifest.get("manifest_sha256"):
+        persisted_manifest = _json_copy(dict(manifest))
+        expected_manifest = _json_copy(asdict(prepared.manifest))
+        if persisted_manifest != expected_manifest:
             raise OXApprovalError("revalidation manifest no longer matches approved scope")
         messages = build_initial_messages(prepared.packet, objective=identity["objective"])
+        self._reject_configured_credential(messages)
         if _message_bytes(messages) != identity.get("total_bytes"):
             raise OXApprovalError("revalidation outbound payload no longer matches approval")
+        if _history_sha256(messages) != identity.get("payload_sha256"):
+            raise OXApprovalError("revalidation outbound payload no longer matches approval")
+        if identity.get("artifact_count") != len(prepared.manifest.entries):
+            raise OXApprovalError("revalidation artifact count no longer matches approval")
         return prepared, messages
 
     def _build_bundle(
@@ -1367,6 +1388,24 @@ class OXReviewService:
                 f"outbound message size {total_bytes} exceeds max_bundle_bytes "
                 f"{self._settings.max_bundle_bytes}"
             )
+
+    def _reject_configured_credential(self, value: object) -> None:
+        api_key = self._settings.api_key
+        if not api_key:
+            return
+        try:
+            payload = json.dumps(
+                value,
+                allow_nan=False,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                default=str,
+            )
+        except (TypeError, ValueError, RecursionError):
+            return
+        if api_key in payload:
+            raise OXBundleError("review material contains the configured gateway credential")
 
 
 def _json_copy(value: object) -> object:
