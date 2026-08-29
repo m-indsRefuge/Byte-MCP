@@ -98,7 +98,10 @@ class OXReviewService(BaseOXReviewService):
 
         source_attempt_id: str | None = None
         for attempt in attempts:
-            if not isinstance(attempt, Mapping) or attempt.get("outcome") != AttemptOutcome.COMPLETED.value:
+            if (
+                not isinstance(attempt, Mapping)
+                or attempt.get("outcome") != AttemptOutcome.COMPLETED.value
+            ):
                 continue
             attempt_id = attempt.get("attempt_id")
             if not isinstance(attempt_id, str):
