@@ -237,7 +237,10 @@ def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeyp
             finding_ids=["OX-000001-F001"],
         )
 
-    assert server.ox_get_review("OX-000001", "findings")["operation"] == "get_review"
+    for view in ("findings", "attempts", "revalidation"):
+        result = server.ox_get_review("OX-000001", view)
+        assert result["operation"] == "get_review"
+        assert fake.calls[-1][2]["view"] == view
     with pytest.raises(OXProtocolError):
         server.ox_get_review("OX-000001", "source")
 
