@@ -53,7 +53,17 @@ class OXEvidenceError(ByteMCPError):
     pass
 
 
-class OXAuthenticationError(ByteMCPError):
+class _ProviderCallError(ByteMCPError):
+    _APPROVED_OUTCOMES = frozenset({"NOT_SENT", "REJECTED", "COMPLETED", "OUTCOME_UNKNOWN"})
+
+    def __init__(self, *, attempt_outcome: str = "OUTCOME_UNKNOWN"):
+        if attempt_outcome not in self._APPROVED_OUTCOMES:
+            raise ValueError("attempt_outcome must use an approved outcome")
+        self.attempt_outcome = attempt_outcome
+        super().__init__()
+
+
+class OXAuthenticationError(_ProviderCallError):
     pass
 
 
@@ -61,31 +71,31 @@ class OXPermissionError(ByteMCPError):
     pass
 
 
-class OXRequestError(ByteMCPError):
+class OXRequestError(_ProviderCallError):
     pass
 
 
-class OXContextLimitError(ByteMCPError):
+class OXContextLimitError(_ProviderCallError):
     pass
 
 
-class OXRateLimitError(ByteMCPError):
+class OXRateLimitError(_ProviderCallError):
     pass
 
 
-class OXQuotaError(ByteMCPError):
+class OXQuotaError(_ProviderCallError):
     pass
 
 
-class OXProviderUnavailableError(ByteMCPError):
+class OXProviderUnavailableError(_ProviderCallError):
     pass
 
 
-class OXTransportError(ByteMCPError):
+class OXTransportError(_ProviderCallError):
     pass
 
 
-class OXProtocolError(ByteMCPError):
+class OXProtocolError(_ProviderCallError):
     pass
 
 

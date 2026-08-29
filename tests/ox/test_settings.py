@@ -13,7 +13,7 @@ def test_settings_repr_redacts_key(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "SENTINEL-SECRET")
     settings = OXSettings.load(tmp_path)
     assert "SENTINEL-SECRET" not in repr(settings)
-    assert "api_key_configured=True" in repr(settings)
+    assert repr(settings) == "OXSettings(api_key_configured=True)"
 
 
 def test_settings_selects_platform_evidence_root(monkeypatch, tmp_path):

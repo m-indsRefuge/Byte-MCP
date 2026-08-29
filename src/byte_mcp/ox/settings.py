@@ -16,14 +16,7 @@ class OXSettings:
     provider_slug: str = "zai"
 
     def __repr__(self) -> str:
-        return (
-            f"OXSettings(api_key_configured={self.api_key is not None}, "
-            f"repositories_file={self.repositories_file!r}, evidence_root={self.evidence_root!r}, "
-            f"max_bundle_bytes={self.max_bundle_bytes}, "
-            f"max_output_tokens={self.max_output_tokens}, "
-            f"gateway_url={self.gateway_url!r}, model={self.model!r}, "
-            f"provider_slug={self.provider_slug!r})"
-        )
+        return f"OXSettings(api_key_configured={self.api_key is not None})"
 
     @classmethod
     def load(cls, repo_root: Path) -> "OXSettings":
