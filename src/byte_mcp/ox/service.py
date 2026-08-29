@@ -549,6 +549,15 @@ class OXReviewService:
                 revalidation_id, "targeted-revalidation"
             )
             thread_name = "targeted-revalidation"
+        prior_identity = self._read_revalidation_attempt_identity(
+            revalidation_id, previous_attempt_id
+        )
+        if (
+            prior_identity.get("revalidation_id") != revalidation_id
+            or prior_identity.get("phase") != phase
+            or prior_identity.get("history_sha256") != _history_sha256(messages)
+        ):
+            raise OXApprovalError("revalidation history no longer matches failed attempt")
         try:
             attempt = self._evidence.claim_revalidation_retry(
                 revalidation_id,
@@ -583,6 +592,7 @@ class OXReviewService:
         revalidation = self._load_revalidation(
             revalidation_id, expected_state=ReviewState.BLIND_REVALIDATED
         )
+        self._require_validated_revalidation_phase(revalidation_id, "blind")
         if (
             isinstance(finding_ids, str | bytes | bytearray)
             or not isinstance(finding_ids, Sequence)
@@ -668,7 +678,10 @@ class OXReviewService:
             review = self._evidence.get_review(review_id)
             return {
                 **review,
-                "revalidations": self._evidence.list_revalidations(review_id),
+                "revalidations": [
+                    self._effective_revalidation(item)
+                    for item in self._evidence.list_revalidations(review_id)
+                ],
             }
         if view == "findings":
             return {"review_id": review_id, **self._evidence.read_findings(review_id)}
@@ -690,7 +703,10 @@ class OXReviewService:
         if view == "revalidation":
             return {
                 "review_id": review_id,
-                "revalidations": self._evidence.list_revalidations(review_id),
+                "revalidations": [
+                    self._effective_revalidation(item)
+                    for item in self._evidence.list_revalidations(review_id)
+                ],
             }
         raise OXProtocolError(attempt_outcome="NOT_SENT")
 
@@ -720,7 +736,9 @@ class OXReviewService:
         expected_state: ReviewState | tuple[ReviewState, ...],
     ) -> dict[str, object]:
         try:
-            revalidation = self._evidence.get_revalidation(revalidation_id)
+            revalidation = self._effective_revalidation(
+                self._evidence.get_revalidation(revalidation_id)
+            )
         except OXEvidenceError as exc:
             raise OXApprovalError("revalidation evidence is unavailable") from exc
         allowed = (
@@ -731,6 +749,83 @@ class OXReviewService:
         if revalidation.get("state") not in allowed:
             raise OXApprovalError("revalidation state does not permit this operation")
         return revalidation
+
+    def _effective_revalidation(
+        self, revalidation: Mapping[str, object]
+    ) -> dict[str, object]:
+        result = dict(revalidation)
+        revalidation_id = result.get("revalidation_id")
+        state = result.get("state")
+        if not isinstance(revalidation_id, str):
+            return result
+        phase = None
+        if state == ReviewState.BLIND_REVALIDATED.value:
+            phase = "blind"
+        elif state == ReviewState.REVALIDATED.value:
+            phase = "targeted"
+        if phase is not None and not self._validated_revalidation_phase_exists(
+            revalidation_id, phase
+        ):
+            result["state"] = ReviewState.FAILED.value
+            result["protocol_status"] = "FINDINGS_INVALID"
+        return result
+
+    def _validated_revalidation_phase_exists(self, revalidation_id: str, phase: str) -> bool:
+        match = re.fullmatch(r"(OX-\d{6})-RV\d{3}", revalidation_id)
+        if match is None or phase not in {"blind", "targeted"}:
+            return False
+        path = (
+            self._settings.evidence_root
+            / "reviews"
+            / match.group(1)
+            / "revalidations"
+            / revalidation_id
+            / "findings"
+            / f"{phase}.json"
+        )
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return (
+            isinstance(value, dict)
+            and value.get("protocol_version") == "ox-findings-v1"
+            and isinstance(value.get("findings"), list)
+        )
+
+    def _require_validated_revalidation_phase(
+        self, revalidation_id: str, phase: str
+    ) -> None:
+        if not self._validated_revalidation_phase_exists(revalidation_id, phase):
+            raise OXApprovalError("revalidation phase has no validated findings evidence")
+
+    def _read_revalidation_attempt_identity(
+        self, revalidation_id: str, attempt_id: str
+    ) -> dict[str, object]:
+        revalidation_match = re.fullmatch(r"(OX-\d{6})-RV\d{3}", revalidation_id)
+        attempt_match = re.fullmatch(r"(OX-\d{6})-A\d{3}", attempt_id)
+        if (
+            revalidation_match is None
+            or attempt_match is None
+            or revalidation_match.group(1) != attempt_match.group(1)
+        ):
+            raise OXApprovalError("revalidation attempt identity is invalid")
+        path = (
+            self._settings.evidence_root
+            / "reviews"
+            / revalidation_match.group(1)
+            / "revalidations"
+            / revalidation_id
+            / "attempts"
+            / f"{attempt_id}.json"
+        )
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OXApprovalError("revalidation attempt evidence is unavailable") from exc
+        if not isinstance(value, dict):
+            raise OXApprovalError("revalidation attempt evidence is malformed")
+        return value
 
     def _rebuild_and_verify(
         self, review: Mapping[str, object]
@@ -1083,6 +1178,9 @@ class OXReviewService:
         try:
             findings = parse_findings(result.content, review_id)
         except OXFindingValidationError:
+            self._persist_invalid_revalidation_findings(
+                review_id, revalidation_id, attempt_id, phase, result.content
+            )
             self._evidence.record_revalidation_attempt_outcome(
                 revalidation_id, attempt_id, AttemptOutcome.COMPLETED
             )
@@ -1092,7 +1190,7 @@ class OXReviewService:
                 manifest_sha256,
                 AttemptOutcome.COMPLETED.value,
                 action="ox_revalidate",
-                phase=phase,
+                phase=f"{phase}-protocol-failure",
                 revalidation_id=revalidation_id,
             )
             raise
@@ -1107,7 +1205,9 @@ class OXReviewService:
         self._evidence.record_revalidation_attempt_outcome(
             revalidation_id, attempt_id, AttemptOutcome.COMPLETED
         )
-        completed = self._evidence.get_revalidation(revalidation_id)
+        completed = self._effective_revalidation(
+            self._evidence.get_revalidation(revalidation_id)
+        )
         self._audit_attempt(
             review_id,
             attempt_id,
@@ -1140,6 +1240,34 @@ class OXReviewService:
             path,
             {
                 "attempt_id": attempt_id,
+                "validation": "FINDINGS_INVALID",
+                "raw_content_sha256": digest,
+            },
+        )
+
+    def _persist_invalid_revalidation_findings(
+        self,
+        review_id: str,
+        revalidation_id: str,
+        attempt_id: str,
+        phase: str,
+        content: str,
+    ) -> None:
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        path = (
+            self._settings.evidence_root
+            / "reviews"
+            / review_id
+            / "revalidations"
+            / revalidation_id
+            / "findings"
+            / f"FINDINGS_INVALID-{attempt_id}.json"
+        )
+        self._evidence._write_immutable_json(
+            path,
+            {
+                "attempt_id": attempt_id,
+                "phase": phase,
                 "validation": "FINDINGS_INVALID",
                 "raw_content_sha256": digest,
             },
