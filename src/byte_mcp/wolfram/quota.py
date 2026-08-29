@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,10 +70,8 @@ class WolframQuotaLedger:
                 os.fsync(handle.fileno())
             os.replace(temp, self.path)
         except OSError as exc:
-            try:
+            with suppress(OSError):
                 temp.unlink(missing_ok=True)
-            except OSError:
-                pass
             raise WolframQuotaError("Wolfram usage ledger could not be persisted.") from exc
 
     def reserve_attempt(self, now: datetime | None = None) -> QuotaReservation:
