@@ -1,4 +1,5 @@
 from byte_mcp.ox.models import ReviewState
+from byte_mcp.ox.natural_service import OXReviewService
 from byte_mcp.ox.protocol import build_initial_messages
 from tests.ox.test_review_service import RecordingClient, make_service, prepare
 
@@ -16,7 +17,13 @@ def test_initial_prompt_requests_natural_engineering_review() -> None:
 
 def test_initial_review_uses_natural_provider_response_without_findings_parse(tmp_path) -> None:
     client = RecordingClient()
-    service, store, _, base, target, _ = make_service(tmp_path, client)
+    base_service, store, _, base, target, _ = make_service(tmp_path, client)
+    service = OXReviewService(
+        base_service._settings,
+        store,
+        client,
+        base_service._audit,
+    )
     proposal = prepare(service, base, target)
 
     result = service.transmit_review(proposal["review_id"])
