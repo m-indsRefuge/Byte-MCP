@@ -4,22 +4,23 @@ Byte-MCP is an extensible, permissioned Model Context Protocol server for connec
 
 ## Project status
 
-Byte-MCP V1.1 is complete and frozen as a validated local read-only MCP server.
+Byte-MCP V1.1 remains the accepted local read-only baseline. Its original closeout is preserved as historical evidence, while a bounded remote-integration validation increment is now active using OpenAI Secure MCP Tunnel.
 
 ```text
-Release:             0.1.1
-Implementation:      successful_validation
-Deployment status:   integration_ready
-ChatGPT deployment:  blocked_external_dependency
-Lifecycle state:     complete_and_frozen
+Release baseline:     0.1.1
+Local implementation: successful_validation
+Remote transport:     OpenAI Secure MCP Tunnel
+ChatGPT validation:   in_progress
+Authority:            read_only
 ```
 
-The accepted implementation performs its defined local role. The deployment account used during closeout did not expose the required custom MCP registration path. A tunnel can provide network reachability, but it cannot add a missing account entitlement.
+The current deployment work does not add tools or mutation authority. It hardens MCP-facing responses so local absolute filesystem paths are not disclosed and validates the existing four-tool server through the first-party tunnel path.
 
-Authoritative closeout and future resumption documents:
+Authoritative records:
 
 - [V1.1 Closeout and Freeze](docs/V1.1-CLOSEOUT.md)
 - [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md)
+- [Security](docs/SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
 ## V1 scope
@@ -49,6 +50,16 @@ V1.1 preserves the four-tool V1 contract while adding:
 - Windows and Linux continuous-integration validation
 - expanded denial and configuration tests
 
+## Remote-integration hardening
+
+Before the first ChatGPT tunnel connection, the MCP response contract is hardened so:
+
+- `list_roots` exposes approved aliases, not backing local filesystem paths;
+- search and fetch metadata expose root aliases and relative paths, not `absolute_path`;
+- regression tests enforce those response boundaries.
+
+This is a deployment-security increment over the V1.1 baseline, not an expansion of authority.
+
 ## Approved local roots
 
 Machine-specific roots live in:
@@ -57,13 +68,19 @@ Machine-specific roots live in:
 config/roots.local.json
 ```
 
-That file is excluded from Git. The scaffold creates these aliases:
+That file is excluded from Git. The local scaffold creates these aliases:
 
 - `downloads`
 - `documents`
 - `projects`
 
-A remotely exposed deployment must begin with a separate restricted profile rather than automatically exposing these roots. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
+For the resumed ChatGPT tunnel validation, a separate profile outside the repository exposes exactly one root:
+
+```text
+projects -> %USERPROFILE%\AIProjects
+```
+
+Downloads, Documents, drive roots, and other local locations are not part of the first accepted remote profile. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
 
 ## Supported V1 extraction
 
@@ -83,7 +100,7 @@ The default Streamable HTTP endpoint is:
 http://127.0.0.1:8000/mcp
 ```
 
-The server remains loopback-only in V1.1. `BYTE_MCP_HOST` accepts only `127.0.0.1`, `localhost`, or `::1`.
+The server remains loopback-only. `BYTE_MCP_HOST` accepts only `127.0.0.1`, `localhost`, or `::1`.
 
 ## Inspect
 
@@ -113,13 +130,13 @@ With Byte-MCP already running, validate discovery and `list_roots`:
 .\scripts\Run-Smoke-Test.ps1
 ```
 
-Validate a real search-to-fetch flow:
+Validate a real search-to-fetch flow using the active root profile:
 
 ```powershell
 .\scripts\Run-Smoke-Test.ps1 `
-    -Root downloads `
-    -Query "byte-mcp-v1-test-note" `
-    -ExpectName "byte-mcp-v1-test-note.txt"
+    -Root projects `
+    -Query "byte-mcp-remote-canary" `
+    -ExpectName "byte-mcp-remote-canary.txt"
 ```
 
 The smoke test emits structured JSON with either `successful_validation` or `failed_validation` classification.
@@ -132,40 +149,47 @@ Runtime audit records are stored locally in:
 data/audit.jsonl
 ```
 
-The file is excluded from Git. Fetched content is never written to the ledger. Search terms and opaque references are fingerprinted before audit storage.
+A remote validation profile may override that location through `BYTE_MCP_AUDIT_FILE`.
+
+Fetched content is never written to the ledger. Search terms and opaque references are fingerprinted before audit storage.
 
 ## Architecture
 
 ```text
-Supported remote MCP client                 future deployment
+ChatGPT Web                                   validation in progress
     |
-    |  authenticated supported connection
+    | OpenAI Secure MCP Tunnel
     v
-Byte-MCP Streamable HTTP server             complete
+OpenAI tunnel-client                         local outbound-only runtime
+    |
+    | http://127.0.0.1:8000/mcp
+    v
+Byte-MCP Streamable HTTP server              validated local baseline
     |
     +-- explicit loopback network boundary
     +-- approved root aliases
     +-- containment and secret-denial policy
+    +-- alias + relative-path response boundary
     +-- read-only search/fetch services
     +-- bounded extractors
     +-- append-only local audit ledger
 ```
 
-No accepted public Byte-MCP endpoint is active as part of V1.1.
+No remote deployment is accepted until every gate in the remote-integration resumption document passes.
 
 ## Release boundary
 
-V1.1 is frozen. Any of the following requires a new version and separate security review:
+The V1.1 capability boundary remains frozen. Any of the following requires a new version and separate security review:
 
 - write, rename, move, delete, or rollback tools
 - shell, process, registry, application-control, or arbitrary HTTP tools
 - non-loopback binding
-- authentication or public-endpoint implementation
 - additional remotely exposed roots
+- materially different authentication authority
 - integration with B87 Chess Arena or another Byte-Nolan system
 
-The future chess-capability work remains isolated from this release.
+The separate chess-capability work remains isolated from this release line.
 
 ## Planned expansion
 
-Future versions can add separately governed capability modules, authentication, richer document parsing, local application adapters, explicit write approvals, and integration with other Byte-Nolan Construct systems. New capabilities must remain opt-in, policy-enforced, tested, auditable, and separately releasable.
+Future versions can add separately governed capability modules, authentication, richer document parsing, local application adapters, explicit write approvals, and integration with other systems. New capabilities must remain opt-in, policy-enforced, tested, auditable, and separately releasable.
