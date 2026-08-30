@@ -10,10 +10,12 @@ All notable Byte-MCP changes are documented here.
 - Added bounded input/output handling, deny-first secret screening, machine-path sanitization, typed provider failures, and zero automatic retries.
 - Added metadata-only audit and conservative UTC-month quota accounting without caching provider result content.
 - Added optional Windows user-bound DPAPI storage for the Wolfram AppID and child-only launcher injection; missing Wolfram credentials do not block Byte-MCP core startup.
-- Added a fixed 30-task qualification campaign and score-only harness. Broad Wolfram review tooling remains disabled until live evidence justifies a separate approved implementation cycle.
+- Preserved the original V1 qualification fixture as exploratory provenance and added a frozen V2 30-task campaign with refined coding defects, campaign-ground-truth root-cause scoring, incomplete-campaign refusal, duplicate-primary rejection, per-mode five-follow-up ceilings, and deterministic A/B/C/D capability profiles.
+- Froze separate `RAW` and `BYTE_MEDIATED` V2 inputs before live benchmark execution, including per-task route reasons, `wolfram-native-v0.1` mediated queries, transmitted-query SHA-256 evidence, and independent score summaries.
 - Added a fixed six-case Byte-mediated Wolfram-native calibration corpus covering symbolic identity verification, constrained optimization, recurrence analysis, bounded sequence generation, state counting, and Boolean counterexample evidence.
 - Added an MCP-only native calibration runner that discovers and calls `wolfram_query` without direct provider HTTP, AppID, or authorization handling and validates only bounded expected evidence in memory.
-- Documented the Byte-owned native query protocol and the separation between raw prompt evidence and mediated engineering-to-Wolfram translation evidence.
+- Validated the six-case calibration through the local MCP boundary and separately validated the full ChatGPT Web UI -> secure tunnel -> Byte-MCP -> Wolfram -> Web UI path. Documented that ChatGPT's server connection must be refreshed after MCP tool-surface changes so the Web UI re-discovers the current schema.
+- Documented the Byte-owned native query protocol and the separation between V1 exploratory, V2 RAW, and V2 BYTE_MEDIATED evidence.
 - Preserved the invariant that OX and Wolfram never communicate directly; Byte remains the only mediator.
 
 ### External review hardening
@@ -84,4 +86,3 @@ Lifecycle state:     complete_and_frozen
 - SHA-256 calculation for fetched files.
 - Basic local audit ledger.
 - Traversal, symlink, junction, secret-location, and sensitive-suffix denial.
-
