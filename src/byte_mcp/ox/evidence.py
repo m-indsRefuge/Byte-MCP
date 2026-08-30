@@ -322,7 +322,7 @@ class EvidenceStore:
                 self._ensure_writable_review(review_id)
                 self._append_jsonl(self._review_dir(review_id) / "adjudication.jsonl", event)
             except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
-                raise OXEvidenceError("unable to append adjudication") from None
+                raise OXEvidenceError("unable to persist adjudication") from None
 
     def read_thread(self, review_id: str, thread_name: str = "initial") -> list[dict[str, object]]:
         self._require_thread_name(thread_name)
@@ -470,12 +470,18 @@ class EvidenceStore:
         revalidation_id: str,
         attempt_id: str,
         outcome: AttemptOutcome | str,
+        *,
+        safe_error_type: str | None = None,
     ) -> None:
         review_id = self._review_id_from_revalidation(revalidation_id)
         self._require_attempt_id(review_id, attempt_id)
         outcome_value = _enum_value(outcome)
         if outcome_value not in {item.value for item in AttemptOutcome}:
             raise OXEvidenceError("attempt outcome is invalid")
+        if safe_error_type is not None and re.fullmatch(
+            r"OX[A-Za-z0-9]+Error", safe_error_type
+        ) is None:
+            raise OXEvidenceError("safe error type is invalid")
         with self._lock_for(review_id):
             revalidation = self._reconstruct_revalidation(review_id, revalidation_id)
             self._reject_recovered_revalidation(revalidation)
@@ -484,14 +490,17 @@ class EvidenceStore:
                 raise OXEvidenceError("revalidation attempt is not current")
             if revalidation["state"] != ReviewState.REVALIDATION_TRANSMITTING.value:
                 raise OXEvidenceError("revalidation attempt is not transmitting")
+            event: dict[str, object] = {
+                "attempt_id": attempt_id,
+                "event_type": "REVALIDATION_ATTEMPT_OUTCOME",
+                "outcome": outcome_value,
+                "phase": attempts[-1]["phase"],
+            }
+            if safe_error_type is not None:
+                event["safe_error_type"] = safe_error_type
             self._append_jsonl(
                 self._revalidation_dir(review_id, revalidation_id) / "events.jsonl",
-                {
-                    "attempt_id": attempt_id,
-                    "event_type": "REVALIDATION_ATTEMPT_OUTCOME",
-                    "outcome": outcome_value,
-                    "phase": attempts[-1]["phase"],
-                },
+                event,
             )
 
     def persist_revalidation_attempt_identity(
@@ -853,10 +862,18 @@ class EvidenceStore:
                 attempt_id = event.get("attempt_id")
                 outcome = event.get("outcome")
                 phase = event.get("phase")
+                safe_error_type = event.get("safe_error_type")
                 if (
                     not isinstance(attempt_id, str)
                     or outcome not in {item.value for item in AttemptOutcome}
                     or phase not in {"blind", "targeted"}
+                    or (
+                        safe_error_type is not None
+                        and (
+                            not isinstance(safe_error_type, str)
+                            or re.fullmatch(r"OX[A-Za-z0-9]+Error", safe_error_type) is None
+                        )
+                    )
                 ):
                     raise OXEvidenceError("revalidation events are malformed")
                 matching = next(
@@ -865,6 +882,8 @@ class EvidenceStore:
                 if matching is None or matching.get("phase") != phase or "outcome" in matching:
                     raise OXEvidenceError("revalidation events are malformed")
                 matching["outcome"] = outcome
+                if safe_error_type is not None:
+                    matching["safe_error_type"] = safe_error_type
                 if outcome == AttemptOutcome.COMPLETED.value:
                     state = (
                         ReviewState.BLIND_REVALIDATED.value
