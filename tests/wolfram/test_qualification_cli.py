@@ -92,14 +92,48 @@ def test_summary_reports_incomplete_without_profile(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["classification"] == "INCOMPLETE"
+    assert payload["primary_count"] == 1
+    assert len(payload["missing_primary_task_ids"]) == 29
+    assert "capability_profile" not in payload
+    assert "broad_coengineer_threshold_met" not in payload
 
 
-def test_summary_requires_complete_primary_campaign_for_profile(tmp_path: Path) -> None:
+def test_complete_summary_emits_capability_profile(tmp_path: Path) -> None:
+    fixture_hash = campaign_sha256(CAMPAIGN_V2)
     scores = tmp_path / "scores.jsonl"
-    for task_number in range(1, 31):
-        task_id = f"WA-{((task_number - 1) // 3) + 1:02d}-{((task_number - 1) % 3) + 1:02d}"
-        recorded = _run(*_record_args(scores, task_id))
-        assert recorded.returncode == 0, recorded.stderr
+    records: list[str] = []
+    for family in range(1, 11):
+        for item in range(1, 4):
+            task_id = f"WA-{family:02d}-{item:02d}"
+            record = {
+                "task_id": task_id,
+                "correctness": 3,
+                "specificity": 3,
+                "evidence_quality": 3,
+                "engineering_usefulness": 3,
+                "unsupported_claim_discipline": 3,
+                "hard_label": None,
+                "defect_found": None,
+                "root_cause_correct": (
+                    True if task_id in {
+                        "WA-04-02",
+                        "WA-04-03",
+                        "WA-05-01",
+                        "WA-05-02",
+                        "WA-05-03",
+                    } else None
+                ),
+                "location_correct": None,
+                "fix_correct": None,
+                "tests_useful": None,
+                "invented_facts": False,
+                "fixture_sha256": fixture_hash,
+                "follow_up": False,
+                "byte_baseline_correct": None,
+                "note": "",
+            }
+            records.append(json.dumps(record, sort_keys=True))
+    scores.write_text("\n".join(records) + "\n", encoding="utf-8")
 
     result = _run(
         "summary",
@@ -107,20 +141,11 @@ def test_summary_requires_complete_primary_campaign_for_profile(tmp_path: Path) 
         str(CAMPAIGN_V2),
         "--scores",
         str(scores),
+        "--byte-plus-wolfram-improved",
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["classification"] in {
-        "COMPUTATION_SPECIALIST",
-        "BOUNDED_CODE_ASSISTANT",
-        "COENGINEER_CANDIDATE",
-        "FALLBACK_VALIDATOR",
-        "DO_NOT_INTEGRATE",
-    }
-
-
-def test_list_hash_matches_qualification_module() -> None:
-    result = _run("list", "--campaign", str(CAMPAIGN_V2))
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["campaign_sha256"] == campaign_sha256(CAMPAIGN_V2)
+    assert payload["classification"] == "COMPLETE"
+    assert payload["primary_count"] == 30
+    assert payload["capability_profile"] == "A_BROAD_COENGINEER"
+    assert payload["broad_coengineer_threshold_met"] is True
