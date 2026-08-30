@@ -14,11 +14,18 @@ All notable Byte-MCP changes are documented here.
 - Added append-only OX review, attempt, native-message, provider-response, findings, adjudication, and revalidation evidence outside the reviewed repository.
 - Added explicit `NOT_SENT`, `REJECTED`, `COMPLETED`, and `OUTCOME_UNKNOWN` attempt semantics with no automatic retries and renewed approval for replay paths that can resend repository context.
 - Added fail-isolated OX runtime states so missing credentials or invalid optional OX configuration do not prevent the original Byte-MCP tools from starting.
-- Added configured-credential fail-closed guards across preparation, continuation, adjudication, targeted revalidation, retry replay, and all bounded retrieval views.
-- Added adversarial tests for forbidden scope/repository states, manifest/payload tampering, credential persistence/transmission/retrieval, ambiguous transport outcomes, and legacy retry replay.
-- Added `docs/OX-VALIDATION.md` and updated the README/security boundary for the integrated capability.
-- Verified the integration candidate on Windows and Ubuntu with 229 passing tests, Ruff, compilation, and dependency integrity before the live provider canary.
-- Live Vercel AI Gateway → Z.AI canary remains pending explicit human approval and is not run in CI.
+- Added configured-credential fail-closed guards across preparation, continuation, Byte-derived findings, adjudication, targeted revalidation, retry replay, and all bounded retrieval views.
+- Added adversarial tests for forbidden scope/repository states, manifest/payload tampering, credential persistence/transmission/retrieval, ambiguous transport outcomes, legacy retry replay, and local findings validation.
+- Replaced rigid provider-generated findings JSON as the primary review contract with exact natural OX response evidence.
+- Added local-only `ox_continue` `record_findings` mode so Byte can persist strict structured findings explicitly labelled `byte-derived-findings-v1`, bound to the exact completed OX source attempt and response SHA-256.
+- Converted blind and targeted revalidation to natural OX responses while preserving the blind-first lifecycle and requiring provenance-valid Byte-derived findings before targeted disclosure.
+- Added explicit targeted-context labels so Byte-derived findings are never represented to OX as verbatim prior OX output.
+- Raised the default generated-token budget to 65,536, allowed operator configuration through 131,072, and set reasoning effort to `medium` after live evidence showed the earlier 16,384-token budget could be consumed by reasoning before useful visible output.
+- Extended the OX client read timeout from 300 to 900 seconds after a long-running live attempt crossed the former read deadline.
+- Added `docs/OX-VALIDATION.md` and updated the README/security boundary for the integrated capability and natural-review provenance model.
+- Verified the natural-review integration candidate on Windows and Ubuntu with 242 tests plus Ruff, compilation, and dependency integrity before final deployment review.
+- Completed a deliberately non-sensitive live Vercel AI Gateway → Z.AI → GLM-5.3-Flash round trip outside CI; live API calls remain prohibited in CI.
+- Kept private-source dogfood behind a separate privacy/ZDR gate because Vercel Model Training opt-out and zero-data-retention are distinct controls.
 
 ### External review hardening
 
