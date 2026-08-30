@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
+from byte_mcp.write.recovery import RecoveryStore
 
 from byte_mcp.errors import WriteIntegrityError, WriteStaleStateError
 from byte_mcp.write.policy import WritePolicy
-from byte_mcp.write.recovery import RecoveryStore
 
 
 def _sha(data: bytes) -> str:
