@@ -32,7 +32,7 @@ An approved root itself is resolved to its canonical target when configuration i
 
 Text found inside a retrieved file or OX review bundle must be treated as untrusted content. It must never override the operator's request, Byte-MCP's tool contract, the OX protocol boundary, or higher-level safety rules.
 
-OX provider output is also untrusted data. Provider responses may be recorded and parsed as review evidence, but they do not become executable instructions. The OX provider is not given tools, shell access, filesystem access, or function-calling authority through Byte-MCP.
+OX provider output is also untrusted data. Exact provider responses may be recorded as review evidence, but they do not become executable instructions. Byte may separately derive structured local findings from a natural OX response; those findings are explicitly labelled as Byte-authored interpretation and are not treated as verbatim provider output. The OX provider is not given tools, shell access, filesystem access, or function-calling authority through Byte-MCP.
 
 ## Core network boundary
 
@@ -148,7 +148,7 @@ The integrated OX branch additionally exposes four separately annotated OX tools
 - `ox_revalidate`
 - `ox_get_review`
 
-The three OX tools capable of external action are intentionally **not** classified as read-only or idempotent at the MCP system level. `ox_get_review` is local/read-only. The reviewed repository itself remains read-only throughout all four OX operations.
+The three OX tools capable of external action are intentionally **not** classified as read-only or idempotent at the MCP system level. `ox_continue` also contains a local-only `record_findings` mode, but the tool as a whole retains its external-action classification. `ox_get_review` is local/read-only. The reviewed repository itself remains read-only throughout all four OX operations.
 
 ## OX external-validation boundary
 
@@ -186,6 +186,7 @@ The OX service also fails closed if the exact configured credential appears anyw
 - initial review objective, verification, and committed bundle content;
 - blind revalidation preparation;
 - continuation messages and replayed continuation retries;
+- Byte-derived local findings before persistence;
 - adjudication events;
 - targeted revalidation context and replayed targeted retries;
 - all bounded `ox_get_review` response views.
@@ -217,6 +218,18 @@ The approval check binds to the complete deterministic manifest and the canonica
 
 Continuation cannot add repository files or expand the prepared scope. Revalidation of a new commit requires a separately prepared approval boundary.
 
+## OX natural-response and provenance boundary
+
+Initial review, blind revalidation, targeted revalidation, and ordinary continuation responses are accepted as natural OX text rather than requiring OX to satisfy a rigid findings JSON schema.
+
+The exact raw provider response is persisted before a successful phase is treated as durably evidenced. Natural assistant text is separately preserved in the corresponding native thread.
+
+Structured findings are created only by an explicit local Byte operation. Canonical local findings evidence uses `byte-derived-findings-v1`, identifies `derivation_authority` as `byte`, identifies the derivation source as `derived-from-ox-natural-review`, and binds to both the completed OX source attempt and the SHA-256 of the exact OX response text.
+
+Targeted revalidation may consume those findings only when this provenance is present. The outbound targeted packet labels them as Byte-derived context so OX is never told that Byte's structured interpretation was verbatim prior OX output.
+
+This is a trust-boundary rule, not merely a formatting preference.
+
 ## OX attempts, failures, and retries
 
 Every outbound attempt receives an identity and durable local intent/evidence before the provider boundary is crossed. If pre-request evidence persistence fails, the provider is not called.
@@ -236,7 +249,7 @@ The location may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`.
 
 The OX `EvidenceStore` is intentionally single-process. Its in-process locks make concurrent calls deterministic within one Byte-MCP process; multi-process use of the same evidence root is unsupported and separate processes must use separate evidence roots.
 
-OX evidence records prepared review identity, manifest, bundle, attempt identity, native conversation messages, provider responses, validated findings, adjudication events, and revalidation evidence. OX statements are never rewritten into Byte conclusions; adjudication is stored separately so provenance remains explicit.
+OX evidence records prepared review identity, manifest, bundle, attempt identity, native conversation messages, exact provider responses, optional provenance-bound Byte-derived findings, adjudication events, and revalidation evidence. OX statements are never rewritten into Byte conclusions; interpretation and adjudication are stored separately so provenance remains explicit.
 
 The public retrieval surface is bounded to seven views: `summary`, `findings`, `thread`, `manifest`, `adjudication`, `attempts`, and `revalidation`. Returned material passes through the configured-credential guard before crossing the MCP boundary.
 
@@ -258,9 +271,11 @@ The separate chess-capability branch is not part of this integration and must no
 
 ## Current OX acceptance status
 
-Automated unit, integration, lifecycle, failure-recovery, and adversarial security tests are green on Windows and Ubuntu for the OX integration candidate. This does **not** by itself prove the real external provider route.
+Automated unit, integration, lifecycle, failure-recovery, and adversarial security tests are green on Windows and Ubuntu for the OX integration candidate.
 
-A live Vercel AI Gateway → Z.AI → GLM-5.3-Flash canary remains a separate acceptance gate and must not occur until the exact repository, commit, subsystem, objective, manifest/payload digests, and outbound purpose have been explicitly approved by the human operator.
+A deliberately non-sensitive live Vercel AI Gateway → Z.AI → GLM-5.3-Flash handshake has proven the fixed route can complete an end-to-end round trip outside CI. Longer dogfood attempts also produced useful transport/generation evidence that led to the 900-second read timeout and larger generated-token budget.
+
+This live transport evidence does **not** by itself approve private repository transmission. Vercel Model Training opt-out and provider zero-data-retention are separate concerns, and the most recent private-route evidence showed that zero-data-retention was not enabled for that request. The private-source privacy/ZDR gate must therefore be explicitly reassessed before another private dogfood review.
 
 See [OX Validation Operations](OX-VALIDATION.md) for the operational procedure.
 
