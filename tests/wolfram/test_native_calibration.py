@@ -74,6 +74,18 @@ def test_native_calibration_queries_are_single_line_and_bounded() -> None:
         assert len(case.query) <= 80
 
 
+def test_native_call_arguments_are_fixed_and_governed() -> None:
+    module = _module()
+    case = module.NATIVE_CALIBRATION_CASES[1]
+
+    assert module.native_call_arguments(case, max_chars=3000) == {
+        "input": "maximize x*y, x+y=10, x>=0, y>=0",
+        "max_chars": 3000,
+        "purpose": "COENGINEERING",
+        "route_reason": "DIRECT_COMPUTATION",
+    }
+
+
 def test_assess_native_result_accepts_expected_evidence() -> None:
     module = _module()
     case = module.NATIVE_CALIBRATION_CASES[5]
