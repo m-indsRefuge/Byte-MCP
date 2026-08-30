@@ -17,6 +17,16 @@ from byte_mcp.wolfram.qualification import (
 
 CAMPAIGN_V1 = Path("qualification/wolfram/llm-api-v1.json")
 CAMPAIGN_V2 = Path("qualification/wolfram/llm-api-v2.json")
+ALLOWED_ROUTES = {
+    "DIRECT_COMPUTATION",
+    "KNOWLEDGE_LOOKUP",
+    "VERIFY_BYTE_HYPOTHESIS",
+    "GENERATE_TEST_ORACLE",
+    "SEARCH_COUNTEREXAMPLE",
+    "DEBUG_NUMERICAL_BEHAVIOR",
+    "CODE_COMPREHENSION",
+    "OTHER_BOUNDED_REASON",
+}
 
 
 def _score(
@@ -54,6 +64,24 @@ def test_v2_campaign_is_fixed_30_task_balanced_fixture() -> None:
     assert len(campaign_sha256(CAMPAIGN_V2)) == 64
     assert all("C:\\Users\\" not in task.prompt for task in tasks)
     assert all("API_KEY=" not in task.prompt for task in tasks)
+
+
+def test_v2_freezes_raw_and_byte_mediated_inputs_before_live_calls() -> None:
+    tasks = load_campaign(CAMPAIGN_V2)
+    assert all(task.raw_route_reason in ALLOWED_ROUTES for task in tasks)
+    assert all(task.mediated_route_reason in ALLOWED_ROUTES for task in tasks)
+    assert all(task.mediated_query is not None for task in tasks)
+    assert all(task.mediated_query == task.mediated_query.strip() for task in tasks)
+    assert all("\n" not in task.mediated_query for task in tasks)
+    assert all(0 < len(task.mediated_query) <= 8_000 for task in tasks)
+    assert all(task.mediation_note is not None for task in tasks)
+    assert all(task.mediation_note == task.mediation_note.strip() for task in tasks)
+
+    by_id = {task.task_id: task for task in tasks}
+    assert by_id["WA-01-01"].mediated_query == "2^100"
+    assert by_id["WA-03-02"].mediated_query == "table min(2*2^n,60), n=0 to 6"
+    assert by_id["WA-04-03"].mediated_query == "P && V"
+    assert by_id["WA-10-03"].mediated_query == "2^40"
 
 
 def test_v2_coding_fixture_contains_refined_defect_cases() -> None:
