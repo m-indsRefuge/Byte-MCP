@@ -5,7 +5,12 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 
-from byte_mcp.errors import OXApprovalError, OXEvidenceError, OXProtocolError
+from byte_mcp.errors import (
+    OXApprovalError,
+    OXEvidenceError,
+    OXFindingValidationError,
+    OXProtocolError,
+)
 
 from .models import AttemptOutcome, ProviderResult, ReviewState
 from .protocol import build_initial_messages, parse_findings
@@ -129,10 +134,17 @@ class OXReviewService(BaseOXReviewService):
             "protocol_version": "ox-findings-v1",
             "findings": [dict(item) for item in findings],
         }
-        validated = parse_findings(
-            json.dumps(local_wire_payload, ensure_ascii=False, allow_nan=False),
-            review_id,
-        )
+        try:
+            serialized_findings = json.dumps(
+                local_wire_payload,
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            raise OXFindingValidationError(
+                attempt_outcome=AttemptOutcome.NOT_SENT.value
+            ) from None
+        validated = parse_findings(serialized_findings, review_id)
         payload = {
             "protocol_version": "byte-derived-findings-v1",
             "review_id": review_id,
