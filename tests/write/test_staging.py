@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+from byte_mcp.errors import WriteIntegrityError, WriteLimitError, WritePathError
 from byte_mcp.write.staging import (
     StagingStore,
     TextFileProfile,
@@ -10,8 +12,6 @@ from byte_mcp.write.staging import (
     encode_with_profile,
     read_utf8_profile,
 )
-
-from byte_mcp.errors import WriteIntegrityError, WriteLimitError, WritePathError
 
 
 def test_utf8_profiles_preserve_bom_and_detect_single_newline_convention() -> None:
