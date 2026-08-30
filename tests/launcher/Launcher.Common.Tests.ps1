@@ -21,7 +21,7 @@ Describe 'Launcher configuration contract' {
         $map.BYTE_MCP_PORT | Should -Be '8000'
         $map.BYTE_MCP_TRANSPORT | Should -Be 'streamable-http'
         $map.BYTE_MCP_MAX_FILE_BYTES | Should -Be '1000000'
-        $map.BYTE_MCP_MAX_RESPONSE_CHARS | Should -Be '60000'
+        $map.BYTE_MCP_MAX_RESPONSE_CHARS | Should -Be '10000'
         $map.BYTE_MCP_MAX_SEARCH_FILES | Should -Be '20000'
         $map.BYTE_MCP_CONTENT_SEARCH_MAX_BYTES | Should -Be '250000'
     }
