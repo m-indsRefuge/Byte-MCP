@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from byte_mcp.errors import OXApprovalError, OXTransportError
@@ -93,6 +95,25 @@ def test_explicit_initial_retry_requires_renewed_approval_and_allocates_a002(tmp
         proposal["review_id"], f"{proposal['review_id']}-A002"
     )
     assert identity["phase"] == "initial-retry"
+
+
+def test_unknown_initial_audit_contains_only_bounded_safe_error_metadata(tmp_path) -> None:
+    client = SequenceClient([OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")])
+    service, _, _, base, target, _ = make_live_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    result = service.transmit_review(proposal["review_id"])
+
+    assert result["attempt_outcome"] == "OUTCOME_UNKNOWN"
+    action, outcome, fields = service._audit.events[-1]
+    assert action == "ox_review"
+    assert outcome == "error"
+    assert fields["attempt_outcome"] == "OUTCOME_UNKNOWN"
+    assert fields["safe_error_type"] == "OXTransportError"
+    serialized = json.dumps(fields)
+    assert "Bearer" not in serialized
+    assert "messages" not in fields
+    assert "response" not in fields
 
 
 def test_continuation_unknown_returns_structured_terminal_result(tmp_path) -> None:
