@@ -13,7 +13,11 @@ def test_main_initializes_service_before_binding_server(monkeypatch: Any) -> Non
         assert transport == server.SETTINGS.transport
         events.append("run")
 
+    def fail_if_wolfram_loaded():
+        raise AssertionError("Wolfram runtime must remain lazy during core startup")
+
     monkeypatch.setattr(server, "service", fake_service)
+    monkeypatch.setattr(server, "wolfram_runtime", fail_if_wolfram_loaded)
     monkeypatch.setattr(server.mcp, "run", fake_run)
 
     server.main()
