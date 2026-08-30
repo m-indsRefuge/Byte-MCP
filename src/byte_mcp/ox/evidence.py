@@ -322,7 +322,7 @@ class EvidenceStore:
                 self._ensure_writable_review(review_id)
                 self._append_jsonl(self._review_dir(review_id) / "adjudication.jsonl", event)
             except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
-                raise OXEvidenceError("unable to persist adjudication") from None
+                raise OXEvidenceError("unable to append adjudication") from None
 
     def read_thread(self, review_id: str, thread_name: str = "initial") -> list[dict[str, object]]:
         self._require_thread_name(thread_name)
