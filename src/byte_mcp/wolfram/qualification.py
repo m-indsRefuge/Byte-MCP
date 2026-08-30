@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+QUALIFICATION_MODES = ("BYTE_MEDIATED", "RAW")
+MEDIATED_DIALECT_VERSION = "wolfram-native-v0.1"
 _HARD_LABELS = frozenset(
     {
         "UNINTERPRETABLE",
@@ -30,10 +32,23 @@ class QualificationTask:
     ground_truth: str
     coding: bool = False
     defect_expected: bool | None = None
+    raw_route_reason: str | None = None
+    mediated_query: str | None = None
+    mediated_route_reason: str | None = None
+    mediation_note: str | None = None
 
     def __post_init__(self) -> None:
         if self.defect_expected is not None and not self.coding:
             raise ValueError("defect_expected is valid only for coding tasks.")
+        mediation_fields = (
+            self.raw_route_reason,
+            self.mediated_query,
+            self.mediated_route_reason,
+            self.mediation_note,
+        )
+        populated = [value is not None for value in mediation_fields]
+        if any(populated) and not all(populated):
+            raise ValueError("Qualification mediation fields must be populated together.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +108,28 @@ def load_campaign(path: Path) -> tuple[QualificationTask, ...]:
     if len(ids) != len(set(ids)):
         raise ValueError("Qualification task IDs must be unique.")
     return tasks
+
+
+def task_query_for_mode(task: QualificationTask, mode: str) -> str:
+    if mode == "RAW":
+        return task.prompt
+    if mode == "BYTE_MEDIATED":
+        if task.mediated_query is None:
+            raise ValueError("Task has no BYTE_MEDIATED query.")
+        return task.mediated_query
+    raise ValueError("Unknown qualification mode.")
+
+
+def task_route_reason_for_mode(task: QualificationTask, mode: str) -> str:
+    if mode == "RAW":
+        if task.raw_route_reason is None:
+            raise ValueError("Task has no RAW route reason.")
+        return task.raw_route_reason
+    if mode == "BYTE_MEDIATED":
+        if task.mediated_route_reason is None:
+            raise ValueError("Task has no BYTE_MEDIATED route reason.")
+        return task.mediated_route_reason
+    raise ValueError("Unknown qualification mode.")
 
 
 def score_total(score: QualificationScore) -> int:

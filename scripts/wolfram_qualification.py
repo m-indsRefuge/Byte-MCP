@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from dataclasses import asdict
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from byte_mcp.wolfram.qualification import (
+    MEDIATED_DIALECT_VERSION,
+    QUALIFICATION_MODES,
     QualificationScore,
     broad_coengineer_threshold_met,
     campaign_sha256,
@@ -16,6 +19,8 @@ from byte_mcp.wolfram.qualification import (
     incomplete_primary_task_ids,
     load_campaign,
     summarize,
+    task_query_for_mode,
+    task_route_reason_for_mode,
 )
 
 DEFAULT_CAMPAIGN = Path("qualification/wolfram/llm-api-v2.json")
@@ -45,7 +50,11 @@ def _optional_bool(value: str | None) -> bool | None:
     raise argparse.ArgumentTypeError("expected true or false")
 
 
-def _read_fixture_records(path: Path, fixture_hash: str) -> list[dict[str, Any]]:
+def _read_fixture_records(
+    path: Path,
+    fixture_hash: str,
+    mode: str | None = None,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if not path.exists():
         return records
@@ -53,14 +62,21 @@ def _read_fixture_records(path: Path, fixture_hash: str) -> list[dict[str, Any]]
         if not line.strip():
             continue
         record = json.loads(line)
-        if record.get("fixture_sha256") == fixture_hash:
-            records.append(record)
+        if record.get("fixture_sha256") != fixture_hash:
+            continue
+        if mode is not None and record.get("mode") != mode:
+            continue
+        records.append(record)
     return records
 
 
-def _read_scores(path: Path, fixture_hash: str) -> list[QualificationScore]:
+def _read_scores(
+    path: Path,
+    fixture_hash: str,
+    mode: str,
+) -> list[QualificationScore]:
     scores: list[QualificationScore] = []
-    for record in _read_fixture_records(path, fixture_hash):
+    for record in _read_fixture_records(path, fixture_hash, mode):
         if record.get("follow_up") is True:
             continue
         score_fields = {
@@ -80,6 +96,7 @@ def command_list(args: argparse.Namespace) -> None:
                 "fixture_sha256": campaign_sha256(path),
                 "task_count": len(tasks),
                 "task_ids": [task.task_id for task in tasks],
+                "modes": list(QUALIFICATION_MODES),
             },
             indent=2,
             sort_keys=True,
@@ -90,23 +107,27 @@ def command_list(args: argparse.Namespace) -> None:
 def command_record(args: argparse.Namespace) -> None:
     campaign = Path(args.campaign)
     fixture_hash = campaign_sha256(campaign)
-    task_ids = {task.task_id for task in load_campaign(campaign)}
-    if args.task_id not in task_ids:
+    tasks = {task.task_id: task for task in load_campaign(campaign)}
+    task = tasks.get(args.task_id)
+    if task is None:
         raise SystemExit(f"Unknown task ID: {args.task_id}")
 
     output = Path(args.scores)
-    existing = _read_fixture_records(output, fixture_hash)
+    existing = _read_fixture_records(output, fixture_hash, args.mode)
     if args.follow_up:
         follow_up_count = sum(record.get("follow_up") is True for record in existing)
         if follow_up_count >= 5:
-            raise SystemExit("Qualification follow-up limit of 5 reached.")
+            raise SystemExit(
+                f"Qualification follow-up limit of 5 reached for mode {args.mode}."
+            )
     elif any(
         record.get("follow_up") is not True
         and record.get("task_id") == args.task_id
         for record in existing
     ):
         raise SystemExit(
-            f"Primary score already recorded for task ID: {args.task_id}"
+            f"Primary score already recorded for task ID: {args.task_id} "
+            f"in mode {args.mode}"
         )
 
     note = args.note.strip()
@@ -127,9 +148,19 @@ def command_record(args: argparse.Namespace) -> None:
         tests_useful=args.tests_useful,
         invented_facts=args.invented_facts,
     )
+    transmitted_query = task_query_for_mode(task, args.mode)
+    route_reason = task_route_reason_for_mode(task, args.mode)
     record = {
         **asdict(score),
         "fixture_sha256": fixture_hash,
+        "mode": args.mode,
+        "transmitted_query_sha256": hashlib.sha256(
+            transmitted_query.encode("utf-8")
+        ).hexdigest(),
+        "route_reason": route_reason,
+        "dialect_version": (
+            MEDIATED_DIALECT_VERSION if args.mode == "BYTE_MEDIATED" else None
+        ),
         "follow_up": args.follow_up,
         "byte_baseline_correct": args.byte_baseline_correct,
         "note": note,
@@ -142,7 +173,10 @@ def command_record(args: argparse.Namespace) -> None:
             {
                 "recorded": args.task_id,
                 "fixture_sha256": fixture_hash,
+                "mode": args.mode,
                 "follow_up": args.follow_up,
+                "transmitted_query_sha256": record["transmitted_query_sha256"],
+                "route_reason": route_reason,
             },
             sort_keys=True,
         )
@@ -154,8 +188,8 @@ def command_summary(args: argparse.Namespace) -> None:
     tasks = load_campaign(campaign)
     fixture_hash = campaign_sha256(campaign)
     scores_path = Path(args.scores)
-    scores = _read_scores(scores_path, fixture_hash)
-    records = _read_fixture_records(scores_path, fixture_hash)
+    scores = _read_scores(scores_path, fixture_hash, args.mode)
+    records = _read_fixture_records(scores_path, fixture_hash, args.mode)
     follow_up_count = sum(record.get("follow_up") is True for record in records)
 
     try:
@@ -169,6 +203,7 @@ def command_summary(args: argparse.Namespace) -> None:
                 {
                     "classification": "INCOMPLETE",
                     "fixture_sha256": fixture_hash,
+                    "mode": args.mode,
                     "primary_count": len(scores),
                     "follow_up_count": follow_up_count,
                     "missing_primary_task_ids": list(missing),
@@ -184,6 +219,7 @@ def command_summary(args: argparse.Namespace) -> None:
     payload = {
         "classification": "COMPLETE",
         "fixture_sha256": fixture_hash,
+        "mode": args.mode,
         "overall_average": summary.overall_average,
         "family_averages": summary.family_averages,
         "classification_counts": summary.classification_counts,
@@ -210,6 +246,10 @@ def _add_common_paths(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scores", default=str(_default_scores()))
 
 
+def _add_mode(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--mode", required=True, choices=QUALIFICATION_MODES)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Score the fixed Wolfram LLM API campaign."
@@ -222,6 +262,7 @@ def _parser() -> argparse.ArgumentParser:
 
     record = sub.add_parser("record")
     _add_common_paths(record)
+    _add_mode(record)
     record.add_argument("task_id")
     for name in (
         "correctness",
@@ -253,6 +294,7 @@ def _parser() -> argparse.ArgumentParser:
 
     summary = sub.add_parser("summary")
     _add_common_paths(summary)
+    _add_mode(summary)
     summary.add_argument("--byte-plus-wolfram-improved", action="store_true")
     summary.set_defaults(func=command_summary)
     return parser
