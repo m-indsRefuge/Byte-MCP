@@ -4,6 +4,24 @@ All notable Byte-MCP changes are documented here.
 
 ## Unreleased
 
+### OX + Wolfram host integration
+
+- Reconciled the OX validation and Wolfram co-engineer implementation lines into one Byte-MCP host while preserving both Git histories.
+- Preserved independent OX and Wolfram runtime/configuration boundaries; neither specialist communicates directly with the other and Byte remains the mediator.
+- Added an integration gate requiring the four core filesystem tools, exactly four OX lifecycle tools, and the single Phase 1 `wolfram_query` tool on the combined MCP surface.
+
+### Wolfram LLM co-engineer — implementation in validation
+
+- Added a separately governed `wolfram_query` capability backed by the fixed Wolfram|Alpha LLM API route.
+- Added bounded input/output handling, deny-first secret screening, machine-path sanitization, typed provider failures, and zero automatic retries.
+- Added metadata-only audit and conservative UTC-month quota accounting without caching provider result content.
+- Added optional Windows user-bound DPAPI storage for the Wolfram AppID and child-only launcher injection; missing Wolfram credentials do not block Byte-MCP core startup.
+- Added a fixed 30-task qualification campaign and score-only harness. Broad Wolfram review tooling remains disabled until live evidence justifies a separate approved implementation cycle.
+- Added a fixed six-case Byte-mediated Wolfram-native calibration corpus covering symbolic identity verification, constrained optimization, recurrence analysis, bounded sequence generation, state counting, and Boolean counterexample evidence.
+- Added an MCP-only native calibration runner that discovers and calls `wolfram_query` without direct provider HTTP, AppID, or authorization handling and validates only bounded expected evidence in memory.
+- Documented the Byte-owned native query protocol and the separation between raw prompt evidence and mediated engineering-to-Wolfram translation evidence.
+- Preserved the invariant that OX and Wolfram never communicate directly; Byte remains the only mediator.
+
 ### OX validation integration candidate
 
 - Added an optional OX external-validation subsystem while preserving the accepted four-tool core filesystem authority.

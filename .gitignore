@@ -14,6 +14,7 @@ config/roots.local.json
 config/ox-repositories.local.json
 config/inspector.local.json
 data/audit.jsonl
+data/wolfram-usage.json
 .env
 
 # IDE / OS
