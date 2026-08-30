@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from byte_mcp.wolfram.qualification import campaign_sha256
 
@@ -48,7 +48,12 @@ def test_default_campaign_is_v2() -> None:
     result = _run("list")
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["campaign"].endswith("qualification/wolfram/llm-api-v2.json")
+    campaign = PurePath(payload["campaign"].replace("\\", "/"))
+    assert campaign.parts[-3:] == (
+        "qualification",
+        "wolfram",
+        "llm-api-v2.json",
+    )
     assert payload["task_count"] == 30
 
 
