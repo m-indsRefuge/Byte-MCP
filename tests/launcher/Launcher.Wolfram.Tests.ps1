@@ -24,6 +24,22 @@ Describe 'Wolfram launcher extension' {
             Should -Be 'C:\Users\test\.byte-mcp\wolfram\usage.json'
     }
 
+    It 'raises the response ceiling only for the combined specialist server profile' {
+        $command = Get-Command Get-ByteMcpCombinedServerEnvironment -ErrorAction SilentlyContinue
+        $command | Should -Not -BeNullOrEmpty
+        if ($null -eq $command) {
+            return
+        }
+
+        $base = Get-ByteMcpServerEnvironment -UserProfile 'C:\Users\test'
+        $combined = Get-ByteMcpCombinedServerEnvironment -UserProfile 'C:\Users\test'
+
+        $base.BYTE_MCP_MAX_RESPONSE_CHARS | Should -Be '10000'
+        $combined.BYTE_MCP_MAX_RESPONSE_CHARS | Should -Be '60000'
+        $combined.BYTE_MCP_WOLFRAM_USAGE_FILE |
+            Should -Be 'C:\Users\test\.byte-mcp\wolfram\usage.json'
+    }
+
     It 'scrubs an inherited Wolfram AppID when no dedicated credential exists' {
         $prior = [Environment]::GetEnvironmentVariable('WOLFRAM_APP_ID', 'Process')
         [Environment]::SetEnvironmentVariable('WOLFRAM_APP_ID', 'parent-sentinel', 'Process')
