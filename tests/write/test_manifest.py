@@ -150,6 +150,44 @@ def test_manifest_orders_dependencies_and_hashes_full_in_memory_request(write_po
     assert manifest.manifest_sha256 != changed.manifest_sha256
 
 
+def test_manifest_orders_acyclic_move_chain_by_dependency(write_policy_file) -> None:
+    from byte_mcp.write.policy import WritePolicy
+
+    policy = WritePolicy.load(write_policy_file)
+    move_a_to_b = _operation("move", path="projects/demo/a", destination="projects/demo/b")
+    move_b_to_c = _operation("move", path="projects/demo/b", destination="projects/demo/c")
+
+    manifest = build_manifest((move_a_to_b, move_b_to_c), policy)
+
+    assert manifest.ordered_operations == (move_b_to_c, move_a_to_b)
+
+
+def test_manifest_hash_is_stable_for_equivalent_move_input_order(write_policy_file) -> None:
+    from byte_mcp.write.policy import WritePolicy
+
+    policy = WritePolicy.load(write_policy_file)
+    move_a_to_b = _operation("move", path="projects/demo/a", destination="projects/demo/b")
+    move_b_to_c = _operation("move", path="projects/demo/b", destination="projects/demo/c")
+
+    forward = build_manifest((move_a_to_b, move_b_to_c), policy)
+    reverse = build_manifest((move_b_to_c, move_a_to_b), policy)
+
+    assert forward.ordered_operations == reverse.ordered_operations
+    assert forward.manifest_sha256 == reverse.manifest_sha256
+
+
+def test_manifest_rejects_case_insensitive_duplicate_planned_targets(write_policy_file) -> None:
+    from byte_mcp.write.policy import WritePolicy
+
+    operations = (
+        _operation("create_directory", path="projects/demo/Folder"),
+        _operation("create_directory", path="projects/demo/folder"),
+    )
+
+    with pytest.raises(WriteConflictError, match="destination"):
+        build_manifest(operations, WritePolicy.load(write_policy_file))
+
+
 @pytest.mark.parametrize(
     "operations",
     [
