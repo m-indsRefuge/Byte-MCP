@@ -80,7 +80,7 @@ class WritePolicy:
     def load(cls, path: Path) -> WritePolicy:
         try:
             raw = path.read_text(encoding="utf-8")
-            payload = json.loads(raw)
+            payload = json.loads(raw, object_pairs_hook=_reject_duplicate_members)
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise WriteConfigurationError(
                 "write policy cannot be read as valid UTF-8 JSON"
@@ -155,6 +155,15 @@ def _validate(payload: dict[str, Any]) -> None:
         value = payload[key]
         if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
             raise WriteConfigurationError(f"{key} must be between {minimum} and {maximum}")
+
+
+def _reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise WriteConfigurationError("write policy contains duplicate JSON members")
+        result[key] = value
+    return result
 
 
 def load_optional_write_policy(path: Path) -> WritePolicy | None:
