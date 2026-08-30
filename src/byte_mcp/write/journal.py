@@ -9,14 +9,14 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from ..errors import WriteIntegrityError, WriteStaleStateError, WriteTransactionError
 
 
-class TransactionStatus(str, Enum):
+class TransactionStatus(StrEnum):
     """Durable transaction lifecycle states."""
 
     REQUESTED = "REQUESTED"
@@ -31,7 +31,7 @@ class TransactionStatus(str, Enum):
     FAILED = "FAILED"
 
 
-class ProjectWriteState(str, Enum):
+class ProjectWriteState(StrEnum):
     """Whether controlled writes may proceed for one project."""
 
     NORMAL = "NORMAL"
@@ -317,7 +317,7 @@ def _payload_record(payload: dict[str, Any]) -> TransactionRecord:
         status = TransactionStatus(str(payload["status"]))
         created_at = _utc(datetime.fromisoformat(str(payload["created_at"])))
         updated_at = _utc(datetime.fromisoformat(str(payload["updated_at"])))
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, WriteTransactionError) as exc:
         raise WriteIntegrityError("transaction journal values are malformed") from exc
     if updated_at < created_at:
         raise WriteIntegrityError("transaction journal timestamps are inconsistent")
@@ -367,7 +367,9 @@ def _validate_safe_value(value: object, label: str) -> None:
             _validate_safe_value(nested, label)
         return
     if value is None or isinstance(value, (str, int, float, bool)):
-        if isinstance(value, float) and (value != value or value in {float("inf"), float("-inf")}):
+        if isinstance(value, float) and (
+            value != value or value in {float("inf"), float("-inf")}
+        ):
             raise WriteIntegrityError("transaction journal contains a non-finite number")
         return
     raise WriteIntegrityError(f"transaction journal {label} contains a non-JSON value")

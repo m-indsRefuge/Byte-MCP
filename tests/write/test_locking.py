@@ -5,9 +5,9 @@ import sys
 import time
 
 import pytest
-from byte_mcp.write.locking import ProjectWriteLock
 
 from byte_mcp.errors import WriteLockError
+from byte_mcp.write.locking import ProjectWriteLock
 
 
 def test_project_lock_release_allows_reacquire(write_env) -> None:

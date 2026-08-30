@@ -4,9 +4,9 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from byte_mcp.write.journal import TransactionJournal, TransactionStatus
 
 from byte_mcp.errors import WriteIntegrityError, WriteStaleStateError, WriteTransactionError
+from byte_mcp.write.journal import TransactionJournal, TransactionStatus
 
 
 def test_journal_generates_random_transaction_id_and_persists_lifecycle(write_env) -> None:
