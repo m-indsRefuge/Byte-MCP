@@ -11,7 +11,8 @@ Release baseline:          0.1.1
 Core local implementation: accepted read-only baseline
 Remote MCP transport:      OpenAI Secure MCP Tunnel
 OX integration candidate:  automated/adversarial gates green
-OX live provider canary:   pending explicit human approval
+OX live provider route:    non-sensitive round trip proven
+Private OX dogfood:        privacy/ZDR gate pending
 ```
 
 The integrated branch exposes two distinct capability groups:
@@ -65,7 +66,7 @@ The provider route is fixed in V1:
 
 ```text
 Byte-MCP
-  -> OXReviewService
+  -> natural OXReviewService
   -> Vercel AI Gateway
   -> pinned Z.AI provider
   -> zai/glm-5.3-flash
@@ -75,7 +76,9 @@ There is no generic provider abstraction or automatic fallback to a different mo
 
 A new review or blind revalidation uses a two-phase approval protocol. The first call prepares and persists a deterministic proposal and performs **zero provider calls**. Transmission occurs only after a second explicit approval call revalidates the persisted manifest and exact canonical outbound-payload digest. Any material change invalidates that approval.
 
-See [OX Validation Operations](docs/OX-VALIDATION.md) for configuration, evidence, lifecycle, retry, and live-canary rules.
+OX review responses are preserved as exact natural-language provider evidence. Byte may separately derive structured local findings through `ox_continue`'s `record_findings` mode. Those findings are explicitly labelled as Byte-authored interpretation and bound to the exact OX source attempt and response hash; they are not represented as verbatim OX JSON.
+
+See [OX Validation Operations](docs/OX-VALIDATION.md) for configuration, evidence, lifecycle, retry, privacy, and live-route rules.
 
 ## V1.1 hardening
 
@@ -198,7 +201,7 @@ A remote validation profile may override that location through `BYTE_MCP_AUDIT_F
 
 Fetched content is never written to the core ledger. Search terms and opaque references are fingerprinted before audit storage.
 
-OX keeps its detailed review evidence separately. By default it uses a user-local data directory rather than the repository; it may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`. OX evidence records prepared scope, manifests, attempts, provider responses, validated findings, conversation history, and Byte adjudication while keeping the reviewed repository read-only.
+OX keeps its detailed review evidence separately. By default it uses a user-local data directory rather than the repository; it may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`. OX evidence records prepared scope, manifests, attempts, raw provider responses, natural conversation history, optional Byte-derived findings, Byte adjudication, and revalidation evidence while keeping the reviewed repository read-only.
 
 ## Architecture
 
@@ -220,7 +223,8 @@ Byte-MCP Streamable HTTP server
           +-- allowlisted Git repository/subsystem registry
           +-- deterministic committed-state bundle builder
           +-- digest-bound two-phase approval
-          +-- append-only review evidence
+          +-- exact natural OX response evidence
+          +-- provenance-bound Byte findings/adjudication
           +-- fixed Vercel AI Gateway client
                 +-- pinned Z.AI
                       +-- zai/glm-5.3-flash
