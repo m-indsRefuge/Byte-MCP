@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "root_alias": "projects",
+  "protected_projects": ["Byte-MCP"],
+  "allow_new_projects": true,
+  "allow_cross_project_moves": false,
+  "allow_binary_writes": false,
+  "snapshot_existing": true,
+  "delete_mode": "recoverable",
+  "allow_permanent_delete": false,
+  "require_prepare_commit": true,
+  "allow_self_commit": true,
+  "max_operations": 200,
+  "max_file_bytes": 1000000,
+  "max_staged_bytes": 20000000,
+  "max_directory_entries": 20000,
+  "max_directory_bytes": 250000000,
+  "max_patch_bytes": 1000000,
+  "transaction_ttl_seconds": 900,
+  "recovery_retention_days": 30,
+  "recovery_max_bytes": 2147483648
+}

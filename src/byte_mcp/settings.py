@@ -63,6 +63,8 @@ class Settings:
     server_host: str = "127.0.0.1"
     server_port: int = 8000
     transport: str = "streamable-http"
+    write_policy_file: Path | None = None
+    write_state_dir: Path | None = None
 
     @property
     def mcp_url(self) -> str:
@@ -122,6 +124,16 @@ class Settings:
                 "BYTE_MCP_TRANSPORT",
                 "streamable-http",
                 _SUPPORTED_TRANSPORTS,
+            ),
+            write_policy_file=_resolve_config_path(
+                repo_root,
+                "BYTE_MCP_WRITE_POLICY_FILE",
+                "~/.byte-mcp/write/policy.json",
+            ),
+            write_state_dir=_resolve_config_path(
+                repo_root,
+                "BYTE_MCP_WRITE_STATE_DIR",
+                "~/.byte-mcp/write/state",
             ),
         )
 
