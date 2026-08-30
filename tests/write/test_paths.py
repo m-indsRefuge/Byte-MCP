@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import byte_mcp.write.paths as write_paths
 from byte_mcp.errors import WritePathError
 from byte_mcp.write.paths import assert_safe_existing_entry, resolve_write_path
 
@@ -116,6 +117,47 @@ def test_denies_protected_project_regardless_of_case(write_env) -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw_path", "canonical_path", "message"),
+    [
+        ("projects/BYTEMC~1", "Byte-MCP", "protected"),
+        ("projects/demo/SECRE~1.JSON", "demo/secrets.json", "alias|blocked|secret"),
+    ],
+)
+def test_denies_windows_short_name_alias_of_protected_or_secret_identity(
+    write_env,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_path: str,
+    canonical_path: str,
+    message: str,
+) -> None:
+    canonical = write_env.projects / canonical_path
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    if canonical.suffix:
+        canonical.write_text("sentinel\n", encoding="utf-8")
+    else:
+        canonical.mkdir()
+    alias = write_env.projects.joinpath(*raw_path.split("/")[1:])
+    original_lstat = Path.lstat
+    original_resolve = Path.resolve
+
+    def lstat_short_name(self: Path):
+        if self == alias:
+            return original_lstat(canonical)
+        return original_lstat(self)
+
+    def resolve_short_name(self: Path, strict: bool = False) -> Path:
+        if self == alias:
+            return original_resolve(canonical, strict=strict)
+        return original_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "lstat", lstat_short_name)
+    monkeypatch.setattr(Path, "resolve", resolve_short_name)
+
+    with pytest.raises(WritePathError, match=message):
+        resolve(write_env.projects, raw_path)
+
+
+@pytest.mark.parametrize(
     "raw_path",
     [
         "projects/demo/CON",
@@ -201,6 +243,49 @@ def test_denies_generic_windows_reparse_point_when_detectable(
 
     with pytest.raises(WritePathError, match="reparse"):
         resolve(write_env.projects, "projects/demo/reparse/file.py")
+
+
+def test_denies_missing_reparse_attributes_on_windows(
+    write_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = write_env.projects / "entry.txt"
+    entry.write_text("sentinel\n", encoding="utf-8")
+    original_lstat = Path.lstat
+
+    def lstat_without_attributes(self: Path):
+        result = original_lstat(self)
+        if self == entry:
+            return SimpleNamespace(st_mode=result.st_mode, st_nlink=result.st_nlink)
+        return result
+
+    monkeypatch.setattr(write_paths.os, "name", "nt")
+    monkeypatch.setattr(Path, "lstat", lstat_without_attributes)
+    monkeypatch.setattr(Path, "is_junction", lambda self: False, raising=False)
+
+    with pytest.raises(WritePathError, match="reparse|inspect"):
+        assert_safe_existing_entry(entry)
+
+
+def test_allows_missing_reparse_attributes_off_windows(
+    write_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = write_env.projects / "entry.txt"
+    entry.write_text("sentinel\n", encoding="utf-8")
+    original_lstat = Path.lstat
+
+    def lstat_without_attributes(self: Path):
+        result = original_lstat(self)
+        if self == entry:
+            return SimpleNamespace(st_mode=result.st_mode, st_nlink=result.st_nlink)
+        return result
+
+    monkeypatch.setattr(write_paths.os, "name", "posix")
+    monkeypatch.setattr(Path, "lstat", lstat_without_attributes)
+    monkeypatch.setattr(Path, "is_junction", lambda self: False, raising=False)
+
+    assert_safe_existing_entry(entry)
 
 
 def test_denies_uninspectable_existing_entry(write_env, monkeypatch: pytest.MonkeyPatch) -> None:

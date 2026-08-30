@@ -62,7 +62,8 @@ def resolve_write_path(
     root_alias, project, *project_parts = parts
     if root_alias != "projects":
         raise WritePathError("write paths must begin with the projects root alias")
-    if project.casefold() in {name.casefold() for name in protected_projects}:
+    protected_project_names = frozenset(name.casefold() for name in protected_projects)
+    if project.casefold() in protected_project_names:
         raise WritePathError("the requested project is protected from write mutations")
 
     root_relative = PurePosixPath(project, *project_parts)
@@ -90,6 +91,13 @@ def resolve_write_path(
             raise WritePathError("existing path entry cannot be inspected safely") from exc
         assert_safe_existing_entry(candidate)
         cursor = _contained_canonical_path(candidate, canonical_root)
+
+    _validate_canonical_identity(
+        cursor,
+        canonical_root,
+        root_relative,
+        protected_project_names,
+    )
 
     return ResolvedWritePath(
         root_alias=root_alias,
@@ -163,6 +171,26 @@ def _contained_canonical_path(path: Path, canonical_root: Path) -> Path:
     return canonical_path
 
 
+def _validate_canonical_identity(
+    path: Path,
+    canonical_root: Path,
+    requested_relative: PurePosixPath,
+    protected_project_names: frozenset[str],
+) -> None:
+    try:
+        canonical_relative = path.relative_to(canonical_root)
+    except ValueError as exc:
+        raise WritePathError("write path escaped the approved projects root") from exc
+    if not canonical_relative.parts:
+        raise WritePathError("write paths must identify one top-level project")
+    if canonical_relative.parts[0].casefold() in protected_project_names:
+        raise WritePathError("the requested project is protected from write mutations")
+    if is_denied_relative(canonical_relative):
+        raise WritePathError("the requested path is blocked by the secret-denial policy")
+    if PurePosixPath(*canonical_relative.parts) != requested_relative:
+        raise WritePathError("write paths cannot use filesystem aliases")
+
+
 def _reject_casefold_alias(parent: Path, requested_name: str) -> None:
     try:
         for sibling in parent.iterdir():
@@ -178,5 +206,10 @@ def _reject_casefold_alias(parent: Path, requested_name: str) -> None:
 
 
 def _is_reparse_point(entry_stat: os.stat_result) -> bool:
-    attributes = getattr(entry_stat, "st_file_attributes", 0)
+    if os.name != "nt":
+        return False
+    try:
+        attributes = entry_stat.st_file_attributes
+    except AttributeError as exc:
+        raise WritePathError("Windows reparse attributes cannot be inspected safely") from exc
     return bool(attributes & _REPARSE_POINT_ATTRIBUTE)
