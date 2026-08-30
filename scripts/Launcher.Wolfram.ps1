@@ -32,6 +32,23 @@ function Get-ByteMcpWolframServerEnvironment {
     }
 }
 
+function Get-ByteMcpCombinedServerEnvironment {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $UserProfile
+    )
+
+    $map = Get-ByteMcpServerEnvironment -UserProfile $UserProfile
+    $map.BYTE_MCP_MAX_RESPONSE_CHARS = '60000'
+
+    $wolframMap = Get-ByteMcpWolframServerEnvironment -UserProfile $UserProfile
+    foreach ($name in $wolframMap.Keys) {
+        $map[$name] = $wolframMap[$name]
+    }
+
+    $map
+}
+
 function Invoke-StartByteMcpServerWithWolfram {
     [CmdletBinding()]
     param(
@@ -40,11 +57,7 @@ function Invoke-StartByteMcpServerWithWolfram {
     )
 
     $userProfile = Get-LauncherUserProfileFromPaths -Paths $Paths
-    $map = Get-ByteMcpServerEnvironment -UserProfile $userProfile
-    $wolframMap = Get-ByteMcpWolframServerEnvironment -UserProfile $userProfile
-    foreach ($name in $wolframMap.Keys) {
-        $map[$name] = $wolframMap[$name]
-    }
+    $map = Get-ByteMcpCombinedServerEnvironment -UserProfile $userProfile
 
     $names = @($map.Keys) + @('WOLFRAM_APP_ID')
     $prior = Get-LauncherProcessEnvironmentSnapshot -Names $names
