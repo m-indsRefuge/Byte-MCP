@@ -53,6 +53,19 @@ NATIVE_CALIBRATION_CASES = (
 )
 
 
+def native_call_arguments(
+    case: NativeCalibrationCase,
+    *,
+    max_chars: int,
+) -> dict[str, object]:
+    return {
+        "input": case.query,
+        "max_chars": max_chars,
+        "purpose": "COENGINEERING",
+        "route_reason": case.route_reason,
+    }
+
+
 def assess_native_result(
     case: NativeCalibrationCase,
     payload: dict[str, Any],
