@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-from importlib import import_module
-
 import pytest
 
 
@@ -10,9 +7,10 @@ MODULE_NAME = "byte_mcp.wolfram.native_calibration"
 
 
 def _module():
-    spec = importlib.util.find_spec(MODULE_NAME)
-    assert spec is not None, "native Wolfram calibration module must exist"
-    return import_module(MODULE_NAME)
+    try:
+        return __import__(MODULE_NAME, fromlist=["*"])
+    except ModuleNotFoundError:
+        pytest.fail("native Wolfram calibration module must exist")
 
 
 def test_native_calibration_corpus_is_fixed_and_byte_owned() -> None:
