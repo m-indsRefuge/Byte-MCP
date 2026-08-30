@@ -1,7 +1,7 @@
 from byte_mcp.errors import OXRateLimitError, OXTransportError
 from byte_mcp.ox.models import AttemptOutcome, ReviewState
 from tests.ox.test_natural_review_architecture import make_natural_service
-from tests.ox.test_review_service import make_service, prepare
+from tests.ox.test_review_service import prepare
 
 
 class ProviderErrorClient:
@@ -41,9 +41,9 @@ def assert_terminal_result(
     }
 
 
-def test_base_unknown_initial_attempt_returns_structured_terminal_result(tmp_path) -> None:
+def test_natural_unknown_initial_attempt_returns_structured_terminal_result(tmp_path) -> None:
     client = ProviderErrorClient(OXTransportError(attempt_outcome="OUTCOME_UNKNOWN"))
-    service, store, _, base, target, _ = make_service(tmp_path, client)
+    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
     result = service.transmit_review(proposal["review_id"])
