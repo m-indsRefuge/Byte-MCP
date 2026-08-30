@@ -38,8 +38,7 @@ def build_manifest(
     _validate_targets(operations)
     _validate_delete_parents(operations)
     _validate_created_file_parents(operations, project)
-    _validate_move_cycles(operations)
-    ordered = tuple(sorted(operations, key=_order_key))
+    ordered = _order_operations(operations)
     canonical = json.dumps(
         _canonical_operations(ordered), ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
@@ -83,20 +82,33 @@ def _target_paths(operation: MutationOperation) -> tuple[str, ...]:
     return (operation.path,) if operation.path is not None else ()
 
 
+def _path_identity(path: str) -> str:
+    return path.casefold()
+
+
+def _path_sort_key(path: str) -> tuple[str, str]:
+    return path.casefold(), path
+
+
 def _validate_targets(operations: tuple[MutationOperation, ...]) -> None:
-    targets: set[str] = set()
-    source_paths = {operation.path for operation in operations if operation.path is not None}
+    targets: dict[str, str] = {}
+    non_move_sources = {
+        _path_identity(operation.path)
+        for operation in operations
+        if operation.kind is not OperationKind.MOVE and operation.path is not None
+    }
     for operation in operations:
         for target in _target_paths(operation):
-            if target is None:
-                continue
-            if target in targets or (
-                operation.kind is OperationKind.MOVE and target in source_paths
-            ):
+            key = _path_identity(target)
+            if key in targets:
                 raise WriteConflictError(
                     "mutation manifest contains an occupied planned destination"
                 )
-            targets.add(target)
+            if operation.kind is OperationKind.MOVE and key in non_move_sources:
+                raise WriteConflictError(
+                    "mutation manifest contains an occupied planned destination"
+                )
+            targets[key] = target
 
 
 def _validate_delete_parents(operations: tuple[MutationOperation, ...]) -> None:
@@ -135,37 +147,90 @@ def _validate_created_file_parents(operations: tuple[MutationOperation, ...], pr
             )
 
 
-def _validate_move_cycles(operations: tuple[MutationOperation, ...]) -> None:
-    moves = {
-        operation.path: operation.destination
-        for operation in operations
-        if operation.kind is OperationKind.MOVE
-        and operation.path is not None
-        and operation.destination is not None
-    }
-    for source in moves:
-        seen: set[str] = set()
-        cursor = source
-        while cursor in moves:
-            if cursor in seen:
-                raise WriteConflictError("move source and destination dependencies contain a cycle")
-            seen.add(cursor)
-            cursor = moves[cursor]
+def _order_operations(
+    operations: tuple[MutationOperation, ...],
+) -> tuple[MutationOperation, ...]:
+    create_directories = sorted(
+        (operation for operation in operations if operation.kind is OperationKind.CREATE_DIRECTORY),
+        key=lambda operation: (
+            len(PurePosixPath(operation.path or "").parts),
+            _path_sort_key(operation.path or ""),
+        ),
+    )
+    file_operations = sorted(
+        (
+            operation
+            for operation in operations
+            if operation.kind
+            in {
+                OperationKind.CREATE_TEXT_FILE,
+                OperationKind.REPLACE_TEXT_FILE,
+                OperationKind.PATCH_TEXT_FILE,
+            }
+        ),
+        key=lambda operation: _path_sort_key(operation.path or ""),
+    )
+    moves = _order_moves(
+        tuple(operation for operation in operations if operation.kind is OperationKind.MOVE)
+    )
+    deletes = sorted(
+        (operation for operation in operations if operation.kind is OperationKind.RECOVER_DELETE),
+        key=lambda operation: _path_sort_key(operation.path or ""),
+    )
+    restores = sorted(
+        (
+            operation
+            for operation in operations
+            if operation.kind is OperationKind.RESTORE_RECOVERY_ITEM
+        ),
+        key=lambda operation: _path_sort_key(operation.destination or ""),
+    )
+    return tuple(create_directories + file_operations + list(moves) + deletes + restores)
 
 
-def _order_key(operation: MutationOperation) -> tuple[int, int, str]:
-    path = operation.path or operation.destination or ""
-    depth = len(PurePosixPath(path).parts)
-    kind_order = {
-        OperationKind.CREATE_DIRECTORY: 0,
-        OperationKind.CREATE_TEXT_FILE: 1,
-        OperationKind.REPLACE_TEXT_FILE: 1,
-        OperationKind.PATCH_TEXT_FILE: 1,
-        OperationKind.MOVE: 2,
-        OperationKind.RECOVER_DELETE: 3,
-        OperationKind.RESTORE_RECOVERY_ITEM: 4,
-    }[operation.kind]
-    return kind_order, depth if kind_order == 0 else 0, path
+def _order_moves(moves: tuple[MutationOperation, ...]) -> tuple[MutationOperation, ...]:
+    if not moves:
+        return ()
+
+    by_source: dict[str, MutationOperation] = {}
+    for operation in moves:
+        if operation.path is None or operation.destination is None:
+            raise WritePolicyError("move operation is missing a source or destination")
+        source_key = _path_identity(operation.path)
+        if source_key in by_source:
+            raise WriteConflictError("mutation manifest contains a duplicate move source")
+        by_source[source_key] = operation
+
+    indegree = {source_key: 0 for source_key in by_source}
+    dependents: dict[str, list[str]] = {source_key: [] for source_key in by_source}
+    for source_key, operation in by_source.items():
+        destination_key = _path_identity(operation.destination or "")
+        if destination_key in by_source:
+            indegree[source_key] += 1
+            dependents[destination_key].append(source_key)
+
+    ready = [source_key for source_key, degree in indegree.items() if degree == 0]
+    ready.sort(key=lambda key: _move_sort_key(by_source[key]))
+    ordered: list[MutationOperation] = []
+
+    while ready:
+        source_key = ready.pop(0)
+        ordered.append(by_source[source_key])
+        for dependent in sorted(
+            dependents[source_key], key=lambda key: _move_sort_key(by_source[key])
+        ):
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                ready.append(dependent)
+                ready.sort(key=lambda key: _move_sort_key(by_source[key]))
+
+    if len(ordered) != len(moves):
+        raise WriteConflictError("move source and destination dependencies contain a cycle")
+    return tuple(ordered)
+
+
+def _move_sort_key(operation: MutationOperation) -> tuple[tuple[str, str], tuple[str, str]]:
+    return _path_sort_key(operation.path or ""), _path_sort_key(operation.destination or "")
 
 
 def _canonical_operations(operations: tuple[MutationOperation, ...]) -> list[dict[str, object]]:
