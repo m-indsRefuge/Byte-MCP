@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 MODULE_NAME = "byte_mcp.wolfram.native_calibration"
 
 
@@ -84,6 +87,18 @@ def test_native_call_arguments_are_fixed_and_governed() -> None:
         "purpose": "COENGINEERING",
         "route_reason": "DIRECT_COMPUTATION",
     }
+
+
+def test_native_calibration_operator_uses_mcp_boundary_only() -> None:
+    script = Path("scripts/wolfram_native_calibration.py")
+    assert script.is_file()
+    source = script.read_text(encoding="utf-8")
+
+    assert "wolfram_query" in source
+    assert "NATIVE_CALIBRATION_CASES" in source
+    assert "httpx" not in source
+    assert "WOLFRAM_APP_ID" not in source
+    assert "Authorization" not in source
 
 
 def test_assess_native_result_accepts_expected_evidence() -> None:
