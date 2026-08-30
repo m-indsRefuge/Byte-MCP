@@ -7,9 +7,9 @@ Capability:          Wolfram|Alpha LLM API
 Implementation:      implementation_in_validation
 Public MCP surface:  wolfram_query only
 Broad co-engineer:   not yet qualified
-Live transport:      canary_and_failure_path_validated
-Native dialect:      calibration_runner_pending_local_acceptance
-Formal campaign:     pending qualification conformance repair
+Live transport:      web_ui_end_to_end_validated
+Native dialect:      six_case_calibration_validated
+Formal campaign:     v2_frozen_pending_live_execution
 ```
 
 This capability is a separately governed next-version expansion. It does not rewrite the accepted Byte-MCP V1.1 closeout or weaken the four existing filesystem tools.
@@ -41,6 +41,8 @@ Local conservative usage accounting is stored at:
 ```
 
 `Setup-Wolfram.ps1` is optional. Without a dedicated Wolfram credential, Byte-MCP core still starts and the Wolfram capability reports unavailable when invoked.
+
+When the MCP tool surface changes, refresh the Byte-MCP server connection in the ChatGPT Web UI so ChatGPT re-discovers the current tool schema. A connected session may otherwise continue exposing a previously scanned tool set.
 
 ## Phase 1 tool
 
@@ -102,8 +104,10 @@ It contains six Byte-authored Wolfram-native cases covering identity verificatio
 Run the live calibration only against a running Byte-MCP instance:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\wolfram_native_calibration.py
+.\.venv\Scripts\python.exe .\scripts\wolfram_native_calibration.py
 ```
+
+The accepted local MCP calibration completed all six cases successfully with exactly six quota increments. A separate ChatGPT Web UI acceptance call then invoked `wolfram_query` through the secure tunnel and returned the expected result, validating the complete Web UI -> Byte-MCP -> Wolfram -> Web UI transport path.
 
 The runner:
 
@@ -116,14 +120,71 @@ The runner:
 - prints only calibration names, pass status, local quota counts, and run metadata in its final success summary;
 - does not persist raw provider result text.
 
-The raw 30-task qualification campaign and this mediated calibration measure different things and must remain separate evidence sets:
+## Qualification V2 freeze
+
+The original V1 campaign remains unchanged as provenance for the early exploratory RAW calls:
 
 ```text
-RAW        = Wolfram receives the frozen engineering prompt unchanged.
-MEDIATED   = Byte extracts a formal/computational model and sends Wolfram-native input.
+qualification/wolfram/llm-api-v1.json
 ```
 
-A strong mediated calibration does not erase raw `UNINTERPRETABLE` results and does not by itself unlock broad co-engineer status. It measures whether Byte + Wolfram can use the actual intended orchestration pattern effectively.
+Those exploratory results are not relabeled as formal V2 evidence.
+
+The formal qualification campaign is now:
+
+```text
+qualification/wolfram/llm-api-v2.json
+```
+
+V2 contains exactly 30 primary tasks, three each across WA-01 through WA-10. It covers computation, symbolic reasoning, algorithms, code comprehension, debugging, test generation, test oracles, state machines, architecture constraints, and adversarial claim checking. The coding fixtures include a clean control and five ground-truth defect cases so root-cause scoring is derived from the campaign contract rather than from score-field presence.
+
+Each V2 task freezes both qualification conditions before any new live campaign answers are observed:
+
+```text
+RAW             = transmit the exact engineering prompt unchanged.
+BYTE_MEDIATED   = transmit the task's exact pre-authored Wolfram-native query.
+```
+
+For both conditions the fixture also freezes the route reason. `BYTE_MEDIATED` uses dialect version `wolfram-native-v0.1`. The mediation note records Byte's local semantic mapping and is not sent to Wolfram.
+
+The two modes are independent evidence sets. A primary task may therefore have one RAW score and one BYTE_MEDIATED score. Duplicate primaries are rejected within a mode, while the same task ID in the other mode is valid. Each mode receives its own maximum of five deliberate follow-up calls.
+
+Inspect the frozen campaign and hash before live execution:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\wolfram_qualification.py list
+```
+
+The score ledger stores only derived qualification evidence: task ID, fixture hash, mode, transmitted-query SHA-256, route reason, dialect version where applicable, numeric scores, bounded Byte-authored notes, and coding diagnostic booleans. Raw Wolfram response text is not persisted by the harness.
+
+Record and summarize RAW and BYTE_MEDIATED independently:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\wolfram_qualification.py summary --mode RAW
+.\.venv\Scripts\python.exe .\scripts\wolfram_qualification.py summary --mode BYTE_MEDIATED
+```
+
+An incomplete mode reports `INCOMPLETE` plus its missing primary task IDs and does not assign a capability profile. A complete mode receives one of:
+
+```text
+A_BROAD_COENGINEER
+B_COMPUTATIONAL_COENGINEER
+C_SPECIALIST_CALCULATOR
+D_NOT_WORTH_BROAD_INTEGRATION
+```
+
+Broad co-engineer status requires all of:
+
+```text
+overall average >= 14/20
+ground-truth coding defect root-cause correctness >= 70%
+unsupported/invented claim rate <= 10%
+Byte + Wolfram materially improves >= 1 meaningful task family
+```
+
+The final production question is not whether Wolfram can consume arbitrary engineering prose. It is whether the Byte-mediated system solves engineering problems more reliably or usefully than Byte alone and whether that improvement is broad enough to justify a co-engineer profile.
+
+Even if the threshold is met, no broader MCP tools are registered automatically. `wolfram_review`, `wolfram_continue`, `wolfram_revalidate`, and `wolfram_get_review` require a separate approved implementation cycle.
 
 ## OX separation
 
@@ -139,52 +200,22 @@ Operational audit records metadata and SHA-256 input fingerprints, not raw Wolfr
 
 Provider responses are not cached. Current-call response text exists only long enough to return and use the result.
 
-## Qualification gate
-
-The fixed raw campaign is:
-
-```text
-qualification/wolfram/llm-api-v1.json
-```
-
-It contains exactly 30 primary tasks: three each across WA-01 through WA-10. The campaign covers computation, symbolic reasoning, algorithms, code comprehension, debugging, test generation, test oracles, state machines, architecture constraints, and adversarial claim checking.
-
-Freeze and inspect its hash before live qualification:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\wolfram_qualification.py list `
-    --campaign qualification\wolfram\llm-api-v1.json
-```
-
-The score ledger stores only task IDs, fixture hash, numeric scores, bounded Byte-authored notes, and coding diagnostic booleans. Raw Wolfram responses are not persisted by the harness.
-
-Broad co-engineer status requires all of:
-
-```text
-overall average >= 14/20
-WA-04/WA-05 root-cause correctness >= 70%
-unsupported/invented claim rate <= 10%
-Byte + Wolfram materially improves >= 1 meaningful task family
-```
-
-Even if that threshold is met, no broader MCP tools are registered automatically. `wolfram_review`, `wolfram_continue`, `wolfram_revalidate`, and `wolfram_get_review` require a separate approved implementation cycle.
-
 ## Current provider constraints
 
 Before live use, re-check the current Wolfram|Alpha LLM API documentation and API Terms of Use. Phase 1 is designed around the documented GET endpoint, bearer AppID support, result-link attribution, and a no-cache operating model. Wolfram API results must not be accumulated into a training or fine-tuning dataset.
 
-## Live acceptance sequence
+## Formal benchmark execution sequence
 
 After deterministic CI is green:
 
-1. Run `Setup-Wolfram.ps1` locally and paste the existing AppID only into its secure prompt.
-2. Start Byte-MCP and confirm MCP discovery contains `wolfram_query` plus the existing filesystem tools.
-3. Run a single non-sensitive `2^100` canary through the actual MCP tool.
-4. Confirm exactly one quota increment and metadata-only audit.
-5. Exercise one controlled uninterpretable input without retrying to force an error.
-6. Run `scripts/wolfram_native_calibration.py` and require all six mediated cases to pass through the MCP boundary.
-7. Preserve the raw and mediated evidence separately.
-8. Repair and freeze the formal qualification fixture before executing the remaining primary campaign.
-9. Record scores without storing raw provider results and use at most five deliberate clarification follow-ups.
-10. Generate the summary and assign one evidence-based capability profile.
+1. Update the local Wolfram worktree to the exact accepted branch head and run `scripts/Check.ps1`.
+2. Run `scripts/wolfram_qualification.py list` and preserve the V2 fixture SHA-256 in the run evidence.
+3. Confirm Byte-MCP is READY and ChatGPT's refreshed server connection exposes `wolfram_query`.
+4. Execute all 30 V2 RAW primaries through `wolfram_query` using the exact frozen prompts and route reasons. No silent reformulation is allowed in RAW mode.
+5. Score the RAW answers without persisting raw provider result text. Use at most five deliberate RAW follow-ups.
+6. Execute all 30 V2 BYTE_MEDIATED primaries through `wolfram_query` using the exact frozen mediated queries and route reasons. Do not edit the mediated fixture in response to RAW outcomes.
+7. Score the BYTE_MEDIATED answers without persisting raw provider result text. Use at most five deliberate mediated follow-ups.
+8. Generate independent summaries for both modes and compare family-level performance.
+9. Determine whether Byte + Wolfram materially improves at least one meaningful family and assign the evidence-based capability profile.
+10. Preserve V1 exploratory evidence, V2 RAW evidence, and V2 BYTE_MEDIATED evidence as separate provenance classes.
 11. Only then decide whether broader Wolfram lifecycle tooling is justified.
