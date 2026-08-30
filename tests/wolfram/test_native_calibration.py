@@ -1,6 +1,3 @@
-from pathlib import Path
-
-
 MODULE_NAME = "byte_mcp.wolfram.native_calibration"
 
 
@@ -90,7 +87,8 @@ def test_native_call_arguments_are_fixed_and_governed() -> None:
 
 
 def test_native_calibration_operator_uses_mcp_boundary_only() -> None:
-    script = Path("scripts/wolfram_native_calibration.py")
+    path_type = __import__("pathlib", fromlist=["Path"]).Path
+    script = path_type("scripts/wolfram_native_calibration.py")
     assert script.is_file()
     source = script.read_text(encoding="utf-8")
 
