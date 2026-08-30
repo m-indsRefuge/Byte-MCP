@@ -17,6 +17,10 @@ EXPECTED_TOOLS = frozenset(
         "list_directory",
         "search",
         "fetch",
+        "ox_review",
+        "ox_continue",
+        "ox_revalidate",
+        "ox_get_review",
         "wolfram_query",
     }
 )
