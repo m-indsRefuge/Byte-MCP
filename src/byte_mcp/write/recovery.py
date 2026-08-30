@@ -8,6 +8,7 @@ import os
 import shutil
 import stat
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -349,10 +350,8 @@ def _copy_file_payload(source: Path, destination: Path) -> _FileCopyEvidence:
             source_signature=_file_identity(after),
         )
     except Exception:
-        try:
+        with suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise
 
 
@@ -456,10 +455,8 @@ def _materialize_file(payload: Path, destination: Path, item: RecoveryItem) -> N
         os.replace(temporary, destination)
         _fsync_directory(destination.parent)
     except Exception:
-        try:
+        with suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise
 
 
@@ -543,7 +540,9 @@ def _metadata_item(metadata: dict[str, Any]) -> RecoveryItem:
             byte_count=_integer(metadata["byte_count"], "byte_count"),
             entry_count=_integer(metadata["entry_count"], "entry_count"),
             transaction_id=str(metadata["transaction_id"]),
-            created_at=_require_utc_datetime(datetime.fromisoformat(str(metadata["created_at"]))),
+            created_at=_require_utc_datetime(
+                datetime.fromisoformat(str(metadata["created_at"]))
+            ),
             require_text=_boolean(metadata["require_text"], "require_text"),
         )
     except (ValueError, TypeError) as exc:
@@ -659,10 +658,8 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         os.replace(temporary, path)
         _fsync_directory(path.parent)
     except OSError as exc:
-        try:
+        with suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise WriteIntegrityError("recovery metadata could not be persisted") from exc
 
 
