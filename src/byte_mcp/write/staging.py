@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from ..security import is_denied_relative
 from .paths import assert_safe_existing_entry
 
 _UTF8_BOM = b"\xef\xbb\xbf"
+_PRIVATE_ID_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +97,12 @@ class StagingStore:
 
     def stage_bytes(self, transaction_id: str, operation_index: int, data: bytes) -> StagedBlob:
         _validate_private_component(transaction_id, prefix="TX-")
-        if isinstance(operation_index, bool) or not isinstance(operation_index, int) or operation_index < 0:
+        invalid_index = (
+            isinstance(operation_index, bool)
+            or not isinstance(operation_index, int)
+            or operation_index < 0
+        )
+        if invalid_index:
             raise WriteIntegrityError("staging operation index must be a non-negative integer")
         if not isinstance(data, bytes):
             raise WriteIntegrityError("staged content must be bytes")
@@ -272,7 +281,7 @@ def _validate_private_component(value: str, prefix: str) -> None:
         not isinstance(value, str)
         or not value.startswith(prefix)
         or len(value) > 160
-        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for character in value)
+        or any(character not in _PRIVATE_ID_CHARACTERS for character in value)
     ):
         raise WriteIntegrityError("private write-state identifier is malformed")
 
@@ -288,10 +297,8 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         os.replace(temporary, path)
         _fsync_directory(path.parent)
     except OSError as exc:
-        try:
+        with suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise WriteIntegrityError("private staged content could not be persisted") from exc
 
 
