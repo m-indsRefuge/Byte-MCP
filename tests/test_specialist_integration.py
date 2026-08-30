@@ -1,6 +1,5 @@
 from byte_mcp import server
 
-
 _EXPECTED_TOOLS = {
     "list_roots",
     "list_directory",
