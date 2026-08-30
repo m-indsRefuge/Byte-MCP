@@ -12,6 +12,7 @@ from byte_mcp.errors import (
     OXProtocolError,
 )
 
+from .execution import execute_provider_attempt
 from .models import AttemptOutcome, ProviderResult, ReviewState
 from .protocol import build_initial_messages, parse_findings
 from .service import _PROVIDER_ERRORS
@@ -29,29 +30,46 @@ class OXReviewService(BaseOXReviewService):
         manifest_sha256: str,
         messages: Sequence[Mapping[str, object]],
     ) -> dict[str, object]:
-        try:
-            result = self._client.complete(
-                messages,
-                json_mode=False,
+        execution = execute_provider_attempt(
+            self._client,
+            messages,
+            json_mode=False,
+            attempt_id=attempt_id,
+        )
+        if execution.provider_result is None:
+            return self._terminal_initial_result(
+                review_id=review_id,
                 attempt_id=attempt_id,
+                manifest_sha256=manifest_sha256,
+                outcome=execution.outcome,
+                safe_error_type=execution.safe_error_type,
+                response_available=False,
             )
-        except _PROVIDER_ERRORS as exc:
-            self._record_provider_error(review_id, attempt_id, manifest_sha256, exc)
-            raise
 
+        result = execution.provider_result
         if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
-            self._record_provider_error(review_id, attempt_id, manifest_sha256, error)
-            raise error
+            return self._terminal_initial_result(
+                review_id=review_id,
+                attempt_id=attempt_id,
+                manifest_sha256=manifest_sha256,
+                outcome=AttemptOutcome.COMPLETED,
+                safe_error_type="OXProtocolError",
+                response_available=False,
+            )
 
         # The raw provider response is canonical evidence and is durable before
         # any higher-level usability check is applied to the assistant text.
         self._evidence.persist_provider_response(review_id, attempt_id, result.raw_response)
 
         if not isinstance(result.content, str) or not result.content.strip():
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.REJECTED.value)
-            self._record_provider_error(review_id, attempt_id, manifest_sha256, error)
-            raise error
+            return self._terminal_initial_result(
+                review_id=review_id,
+                attempt_id=attempt_id,
+                manifest_sha256=manifest_sha256,
+                outcome=AttemptOutcome.REJECTED,
+                safe_error_type="OXProtocolError",
+                response_available=False,
+            )
 
         self._evidence.append_thread_message(
             review_id,
@@ -74,8 +92,46 @@ class OXReviewService(BaseOXReviewService):
             "attempt_id": attempt_id,
             "state": ReviewState.REVIEWED.value,
             "manifest_sha256": manifest_sha256,
+            "attempt_outcome": AttemptOutcome.COMPLETED.value,
+            "safe_error_type": None,
+            "response_available": True,
+            "replayed": False,
             "response": result.content,
             "usage": asdict(result.usage) if result.usage is not None else None,
+        }
+
+    def _terminal_initial_result(
+        self,
+        *,
+        review_id: str,
+        attempt_id: str,
+        manifest_sha256: str,
+        outcome: AttemptOutcome,
+        safe_error_type: str | None,
+        response_available: bool,
+    ) -> dict[str, object]:
+        self._evidence.record_attempt_outcome(
+            review_id,
+            attempt_id,
+            outcome,
+            safe_error_type=safe_error_type,
+        )
+        self._audit_attempt(
+            review_id,
+            attempt_id,
+            manifest_sha256,
+            outcome.value,
+        )
+        state = self._evidence.get_review(review_id)["state"]
+        return {
+            "review_id": review_id,
+            "attempt_id": attempt_id,
+            "state": state,
+            "manifest_sha256": manifest_sha256,
+            "attempt_outcome": outcome.value,
+            "safe_error_type": safe_error_type,
+            "response_available": response_available,
+            "replayed": False,
         }
 
     def record_findings(
