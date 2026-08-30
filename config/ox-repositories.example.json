@@ -9,7 +9,12 @@
           "source_roots": ["src/byte_mcp/ox"],
           "test_roots": ["tests/ox"],
           "boundary_files": ["src/byte_mcp/server.py", "src/byte_mcp/errors.py", "src/byte_mcp/settings.py"],
-          "context_files": ["pyproject.toml", "docs/superpowers/specs/2026-08-29-ox-integration-design.md"]
+          "context_files": [
+            "pyproject.toml",
+            "docs/superpowers/specs/2026-08-29-ox-integration-design.md",
+            "docs/superpowers/specs/2026-08-30-ox-natural-review-architecture-design.md",
+            "docs/OX-VALIDATION.md"
+          ]
         }
       }
     }

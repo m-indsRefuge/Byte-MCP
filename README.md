@@ -1,24 +1,26 @@
 # Byte-MCP
 
-Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved resources on a Windows computer.
+Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved local resources and separately governed external validation capabilities.
 
 ## Project status
 
-Byte-MCP V1.1 remains the accepted local read-only baseline. The `build/byte-mcp-ox-validation-v1` branch adds a separately governed, optional OX external-validation capability without changing the original filesystem authority.
+Byte-MCP V1.1 remains the accepted read-only filesystem baseline. The ChatGPT Web connection through OpenAI Secure MCP Tunnel is accepted, Launcher V1 manages that local stack on Windows, and the OX integration candidate is implemented and awaiting its final end-to-end MCP acceptance test.
 
 ```text
 Release baseline:          0.1.1
-Core local implementation: accepted read-only baseline
-Remote MCP transport:      OpenAI Secure MCP Tunnel
-OX integration candidate:  automated/adversarial gates green
-OX live provider route:    non-sensitive round trip proven
-Private OX dogfood:        privacy/ZDR gate pending
+Core filesystem authority: accepted / read-only
+Remote MCP transport:      OpenAI Secure MCP Tunnel / accepted
+Launcher V1:               integrated
+OX implementation:         automated + adversarial gates green
+OX live provider route:    Vercel -> Z.AI -> GLM-5.3-Flash proven
+OX via MCP:                acceptance test pending
+Private OX dogfood:        privacy/ZDR gate remains separate
 ```
 
-The integrated branch exposes two distinct capability groups:
+Byte-MCP now contains two deliberately separate capability groups:
 
 - **Core local access:** four read-only filesystem tools with no external side effects.
-- **OX validation:** four high-level tools that may transmit an explicitly approved review packet to the fixed OX provider route and append local evidence, but never mutate or execute the reviewed repository.
+- **OX validation:** four high-level review tools that can transmit only an explicitly approved, deterministic review packet to the fixed OX provider route and append local review evidence. They never mutate or execute the reviewed repository.
 
 Authoritative records:
 
@@ -27,20 +29,21 @@ Authoritative records:
 - [OX Validation Operations](docs/OX-VALIDATION.md)
 - [Security](docs/SECURITY.md)
 - [OX Integration Design](docs/superpowers/specs/2026-08-29-ox-integration-design.md)
+- [OX Natural Review Superseding Design](docs/superpowers/specs/2026-08-30-ox-natural-review-architecture-design.md)
 - [Changelog](CHANGELOG.md)
 
-## Core V1 scope
+## Core filesystem capability
 
-The original local capability is deliberately read-only:
+The original capability remains deliberately read-only. It can:
 
-- list approved roots
-- list directory contents
-- search approved folders by filename
-- optionally search bounded extractable file content
-- fetch and extract one file returned by search
-- compute SHA-256 for fetched files
-- append every operation to a local audit ledger
-- block path traversal, symlinks, junctions, common secret locations, and sensitive key formats
+- list approved roots;
+- list directory contents;
+- search approved folders by filename;
+- optionally search bounded extractable file content;
+- fetch and extract one file returned by search;
+- compute SHA-256 for fetched files;
+- append every operation to a local audit ledger;
+- block path traversal, symlinks, junctions, common secret locations, and sensitive key formats.
 
 The four core MCP tools are:
 
@@ -49,7 +52,7 @@ The four core MCP tools are:
 - `search`
 - `fetch`
 
-No core write, rename, delete, execute, shell, process-control, or unrestricted-path tool exists.
+No core write, rename, delete, execute, shell, process-control MCP tool, or unrestricted-path tool exists.
 
 ## OX validation capability
 
@@ -60,63 +63,101 @@ The OX subsystem adds exactly four MCP tools:
 - `ox_revalidate`
 - `ox_get_review`
 
-These tools are isolated from the original `FileService` lifecycle. OX can read only explicitly allowlisted Git repositories and predeclared subsystem definitions from immutable committed states. It cannot execute repository code, run tests, invoke a shell, modify files, apply patches, commit, delete, or broaden review scope heuristically.
+OX reads only explicitly allowlisted Git repositories and predeclared subsystem definitions from immutable committed states. It cannot execute repository code, run tests, invoke a shell, modify files, apply patches, commit, delete, or broaden review scope heuristically.
 
 The provider route is fixed in V1:
 
 ```text
+ChatGPT / Byte
+    |
+    | OpenAI Secure MCP Tunnel
+    v
 Byte-MCP
-  -> natural OXReviewService
-  -> Vercel AI Gateway
-  -> pinned Z.AI provider
-  -> zai/glm-5.3-flash
+    |
+    +-- natural OXReviewService
+          |
+          v
+Vercel AI Gateway
+    |
+    +-- pinned provider: Z.AI
+          |
+          +-- zai/glm-5.3-flash
 ```
 
-There is no generic provider abstraction or automatic fallback to a different model/provider in this version.
+There is no generic provider abstraction or automatic provider/model fallback in OX V1.
 
-A new review or blind revalidation uses a two-phase approval protocol. The first call prepares and persists a deterministic proposal and performs **zero provider calls**. Transmission occurs only after a second explicit approval call revalidates the persisted manifest and exact canonical outbound-payload digest. Any material change invalidates that approval.
+### Human approval boundary
 
-OX review responses are preserved as exact natural-language provider evidence. Byte may separately derive structured local findings through `ox_continue`'s `record_findings` mode. Those findings are explicitly labelled as Byte-authored interpretation and bound to the exact OX source attempt and response hash; they are not represented as verbatim OX JSON.
+A new review or blind revalidation uses a two-phase protocol. The first call prepares and persists a deterministic proposal and performs **zero provider calls**. Transmission occurs only after a second explicit approval call revalidates the complete persisted manifest and canonical outbound-payload digest.
 
-See [OX Validation Operations](docs/OX-VALIDATION.md) for configuration, evidence, lifecycle, retry, privacy, and live-route rules.
+OX responses are preserved as exact natural-language provider evidence. Byte may separately derive strict structured findings through `ox_continue` using `record_findings`. Those records are explicitly Byte-authored interpretation, provenance-bound to the exact OX source attempt and response digest; they are never represented as verbatim OX JSON.
 
-## V1.1 hardening
+See [OX Validation Operations](docs/OX-VALIDATION.md) for configuration, evidence, retry, privacy, and lifecycle rules.
 
-V1.1 preserves the four-tool core contract while adding:
+## Launcher V1
 
-- explicit loopback-only host, port, and transport settings
-- startup rejection of non-loopback hosts and unsupported transports
-- audit records for allowed, denied, and unexpected-error outcomes
-- SHA-256 fingerprints instead of raw search terms or opaque references in audit records
-- repeatable MCP client discovery and search/fetch smoke testing
-- Windows and Linux continuous-integration validation
-- expanded denial and configuration tests
+Launcher V1 is a repository-native PowerShell control layer for the accepted Byte-MCP + Secure MCP Tunnel stack. It does not add MCP tools, roots, or filesystem mutation authority.
 
-## Remote-integration hardening
+One-time setup stores the restricted tunnel Runtime API key using Windows user-bound DPAPI:
 
-For ChatGPT tunnel connectivity, the MCP response contract is hardened so:
+```powershell
+.\scripts\Setup-ByteMCP.ps1
+```
 
-- `list_roots` exposes approved aliases, not backing local filesystem paths;
-- search and fetch metadata expose root aliases and relative paths, not `absolute_path`;
-- regression tests enforce those response boundaries.
+Start the managed background stack:
 
-The Secure MCP Tunnel is a transport layer and does not expand Byte-MCP's local filesystem authority.
+```powershell
+.\scripts\Start-ByteMCP.ps1
+```
+
+Inspect launcher state and health:
+
+```powershell
+.\scripts\Status-ByteMCP.ps1
+```
+
+Stop only launcher-owned processes whose PID, executable path, and process start time still match recorded state:
+
+```powershell
+.\scripts\Stop-ByteMCP.ps1
+```
+
+Foreground troubleshooting remains available:
+
+```powershell
+.\scripts\Start-ByteMCP.ps1 -Foreground
+```
+
+Launcher machine-local data lives beneath:
+
+```text
+%USERPROFILE%\.byte-mcp\
+```
+
+Important locations include:
+
+```text
+credentials\tunnel-runtime-key.dpapi
+runtime\launcher-state.json
+logs\byte-mcp-server.log
+logs\byte-mcp-server.err.log
+logs\tunnel-client.log
+logs\tunnel-client.err.log
+roots.web.json
+audit.web.jsonl
+```
+
+The launcher inherits ordinary parent-process environment variables when starting Byte-MCP. OX therefore sees `AI_GATEWAY_API_KEY` only when that variable is present in the launcher process environment; the key is not stored in repository configuration or launcher state.
 
 ## Approved local roots
 
-Machine-specific roots live in:
+Machine-specific manual/local root configuration may live in:
 
 ```text
 config/roots.local.json
 ```
 
-That file is excluded from Git. The local scaffold can define aliases such as:
-
-- `downloads`
-- `documents`
-- `projects`
-
-For the accepted ChatGPT tunnel profile, the remote root remains deliberately bounded to the approved project location rather than a drive root or entire user profile. See [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md).
+For the accepted ChatGPT profile, the remote filesystem root remains deliberately bounded to the approved project location rather than a drive root or whole user profile.
 
 OX repository/subsystem authorization is separate and machine-local:
 
@@ -124,15 +165,15 @@ OX repository/subsystem authorization is separate and machine-local:
 config/ox-repositories.local.json
 ```
 
-That file is also excluded from Git. Start from [`config/ox-repositories.example.json`](config/ox-repositories.example.json).
+That file is Git-ignored. Start from [`config/ox-repositories.example.json`](config/ox-repositories.example.json).
 
-## Supported V1 extraction
+## Supported extraction
 
-Text/source/config formats, PDF, DOCX, XLSX, PPTX, and ZIP metadata listings.
+Text/source/config formats, PDF, DOCX, XLSX, PPTX, and ZIP metadata listings are supported. ZIP archives are listed only; Byte-MCP does not execute files or automatically extract archive contents.
 
-ZIP archives are listed only. Byte-MCP does not execute files or automatically extract archive contents.
+## Manual server run
 
-## Run
+The launcher is the preferred operational path on Windows. For direct development use:
 
 ```powershell
 .\scripts\Run-Server.ps1
@@ -146,39 +187,33 @@ http://127.0.0.1:8000/mcp
 
 The server remains loopback-only. `BYTE_MCP_HOST` accepts only `127.0.0.1`, `localhost`, or `::1`.
 
-OX is optional. Without `AI_GATEWAY_API_KEY`, the OX runtime is `DISABLED` while the four core tools remain available. Invalid optional OX configuration produces a fail-isolated `MISCONFIGURED` OX runtime rather than preventing the core server from starting.
-
-## Inspect
-
-In a second PowerShell terminal:
-
-```powershell
-.\scripts\Run-Inspector.ps1
-```
-
-Connect MCP Inspector to:
-
-```text
-http://127.0.0.1:8000/mcp
-```
+OX is optional. Without `AI_GATEWAY_API_KEY`, OX initializes as `DISABLED` while the four core tools remain available. Invalid optional OX configuration produces a fail-isolated `MISCONFIGURED` OX runtime rather than preventing core startup.
 
 ## Validate the repository
+
+Run the aggregate gate:
 
 ```powershell
 .\scripts\Check.ps1
 ```
 
-CI validates Python 3.12 on Windows and Ubuntu with dependency integrity, compilation, Ruff, and the full pytest suite.
+The Python gate performs dependency integrity, compilation, Ruff, and full pytest validation. On Windows, the aggregate script also runs the launcher Pester suite. The launcher-only gate is:
+
+```powershell
+.\scripts\Check-Launcher.ps1
+```
+
+CI validates Python 3.12 on Windows and Ubuntu and runs the dedicated Windows launcher job.
 
 ## Validate the live core MCP protocol
 
-With Byte-MCP already running, validate discovery and `list_roots`:
+With Byte-MCP running, validate discovery and `list_roots`:
 
 ```powershell
 .\scripts\Run-Smoke-Test.ps1
 ```
 
-Validate a real search-to-fetch flow using the active root profile:
+Validate a real search-to-fetch flow:
 
 ```powershell
 .\scripts\Run-Smoke-Test.ps1 `
@@ -187,57 +222,20 @@ Validate a real search-to-fetch flow using the active root profile:
     -ExpectName "byte-mcp-remote-canary.txt"
 ```
 
-The smoke test emits structured JSON with either `successful_validation` or `failed_validation` classification.
-
 ## Audit and OX evidence
 
-Core runtime audit records are stored locally in:
+Core runtime audit records are stored at the location configured by `BYTE_MCP_AUDIT_FILE`. The accepted ChatGPT profile uses:
 
 ```text
-data/audit.jsonl
+%USERPROFILE%\.byte-mcp\audit.web.jsonl
 ```
 
-A remote validation profile may override that location through `BYTE_MCP_AUDIT_FILE`.
+Fetched content is never written to that ledger. Search terms and opaque references are fingerprinted before audit storage.
 
-Fetched content is never written to the core ledger. Search terms and opaque references are fingerprinted before audit storage.
-
-OX keeps its detailed review evidence separately. By default it uses a user-local data directory rather than the repository; it may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`. OX evidence records prepared scope, manifests, attempts, raw provider responses, natural conversation history, optional Byte-derived findings, Byte adjudication, and revalidation evidence while keeping the reviewed repository read-only.
-
-## Architecture
-
-```text
-ChatGPT / Byte
-    |
-    | OpenAI Secure MCP Tunnel
-    v
-Byte-MCP Streamable HTTP server
-    |
-    +-- Core local capability
-    |     +-- approved root aliases
-    |     +-- containment + secret-denial policy
-    |     +-- read-only search/fetch services
-    |     +-- bounded extractors
-    |     +-- append-only local audit ledger
-    |
-    +-- Optional OX validation capability
-          +-- allowlisted Git repository/subsystem registry
-          +-- deterministic committed-state bundle builder
-          +-- digest-bound two-phase approval
-          +-- exact natural OX response evidence
-          +-- provenance-bound Byte findings/adjudication
-          +-- fixed Vercel AI Gateway client
-                +-- pinned Z.AI
-                      +-- zai/glm-5.3-flash
-```
+OX keeps detailed review evidence separately, outside the reviewed repository. The default is a user-local data directory and can be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`. Evidence includes prepared scope, manifests, attempts, raw provider responses, natural conversation history, optional Byte-derived findings, adjudication, and revalidation records.
 
 ## Authority boundary
 
-The core V1.1 filesystem authority remains frozen. OX is a separately reviewed capability exception for **fixed-purpose outbound validation**, not arbitrary HTTP access.
+The core V1.1 filesystem authority remains frozen. OX is a separately reviewed capability exception for **fixed-purpose outbound validation**, not arbitrary HTTP access. Launcher process control is local operator infrastructure only and does not alter the MCP authority exposed to ChatGPT.
 
-Neither capability grants reviewed-repository mutation. Any future addition of write, rename, move, delete, rollback, shell, process, registry, application-control, arbitrary HTTP, broader filesystem roots, or materially different authentication/provider authority requires a new capability contract and security review.
-
-The separate chess-capability work remains isolated from this release line.
-
-## Planned expansion
-
-Future versions can add separately governed capability modules, authentication, richer document parsing, local application adapters, explicit write approvals, and integration with other systems. New capabilities must remain opt-in, policy-enforced, tested, auditable, and separately releasable.
+Any future addition of write, rename, move, delete, rollback, shell, process, registry, application-control, arbitrary HTTP, broader filesystem roots, or materially different authentication/provider authority requires a new capability contract and security review.

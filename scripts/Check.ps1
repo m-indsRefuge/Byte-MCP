@@ -26,6 +26,14 @@ try {
     Write-Host "`n=== TESTS ==="
     & $Python -m pytest
 
+    Write-Host "`n=== LAUNCHER TESTS ==="
+    if ($IsWindows) {
+        & (Join-Path $PSScriptRoot 'Check-Launcher.ps1')
+    }
+    else {
+        Write-Host 'SKIP: Windows-only launcher tests'
+    }
+
     Write-Host "`nPASS: Byte-MCP repository validation complete"
 }
 finally {

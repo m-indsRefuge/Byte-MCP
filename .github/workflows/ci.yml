@@ -40,3 +40,25 @@ jobs:
 
       - name: Test
         run: python -m pytest
+
+  launcher-test:
+    name: Windows launcher
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure Pester 5+
+        shell: pwsh
+        run: |
+          $pester = Get-Module -ListAvailable -Name Pester |
+            Where-Object { $_.Version -ge [version]'5.0.0' } |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+          if ($null -eq $pester) {
+            Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+
+      - name: Launcher tests
+        shell: pwsh
+        run: .\scripts\Check-Launcher.ps1
