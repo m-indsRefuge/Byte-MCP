@@ -33,7 +33,7 @@ jobs:
           python -m pip check
 
       - name: Compile
-        run: python -m compileall -q src tests scripts/mcp_smoke_test.py scripts/wolfram_qualification.py
+        run: python -m compileall -q src tests scripts/mcp_smoke_test.py scripts/wolfram_qualification.py scripts/wolfram_native_calibration.py
 
       - name: Lint
         run: python -m ruff check .
