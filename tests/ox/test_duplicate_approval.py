@@ -2,9 +2,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from byte_mcp.errors import OXTransportError
+from byte_mcp.ox.live_service import OXReviewService
 from byte_mcp.ox.models import ProviderResult, ProviderUsage
-from tests.ox.test_natural_review_architecture import make_natural_service
-from tests.ox.test_review_service import RecordingClient, prepare
+from tests.ox.test_review_service import RecordingClient, make_service, prepare
 
 
 class UnknownClient:
@@ -52,9 +52,22 @@ class BlockingNaturalClient:
         )
 
 
+def make_live_service(tmp_path, client):
+    base_service, store, repository_path, base, target, registry_path = make_service(
+        tmp_path, client
+    )
+    service = OXReviewService(
+        base_service._settings,
+        store,
+        client,
+        base_service._audit,
+    )
+    return service, store, repository_path, base, target, registry_path
+
+
 def test_sequential_duplicate_after_unknown_replays_a001_without_provider_call(tmp_path) -> None:
     client = UnknownClient()
-    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
+    service, store, _, base, target, _ = make_live_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
     first = service.transmit_review(proposal["review_id"])
@@ -76,7 +89,7 @@ def test_sequential_duplicate_after_unknown_replays_a001_without_provider_call(t
 
 def test_duplicate_after_completed_review_returns_status_without_provider_call(tmp_path) -> None:
     client = RecordingClient()
-    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
+    service, store, _, base, target, _ = make_live_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
     first = service.transmit_review(proposal["review_id"])
@@ -98,7 +111,7 @@ def test_duplicate_after_completed_review_returns_status_without_provider_call(t
 
 def test_concurrent_duplicate_observes_transmitting_a001_without_second_send(tmp_path) -> None:
     client = BlockingNaturalClient()
-    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
+    service, store, _, base, target, _ = make_live_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
