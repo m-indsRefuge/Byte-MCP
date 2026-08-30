@@ -1,5 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from byte_mcp.errors import OXTransportError
 from byte_mcp.ox.models import ProviderResult, ProviderUsage
