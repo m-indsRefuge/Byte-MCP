@@ -244,25 +244,34 @@ class EvidenceStore:
             return self._append_transmission_intent(review_id, manifest_sha256)
 
     def record_attempt_outcome(
-        self, review_id: str, attempt_id: str, outcome: AttemptOutcome | str
+        self,
+        review_id: str,
+        attempt_id: str,
+        outcome: AttemptOutcome | str,
+        *,
+        safe_error_type: str | None = None,
     ) -> None:
         outcome_value = _enum_value(outcome)
         if outcome_value not in {item.value for item in AttemptOutcome}:
             raise OXEvidenceError("attempt outcome is invalid")
+        if safe_error_type is not None and re.fullmatch(
+            r"OX[A-Za-z0-9]+Error", safe_error_type
+        ) is None:
+            raise OXEvidenceError("safe error type is invalid")
         with self._lock_for(review_id):
             try:
                 review = self._ensure_writable_review(review_id)
             except (OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to record attempt outcome") from None
             self._require_current_transmitting_attempt(review, attempt_id)
-            self._append_event(
-                review_id,
-                {
-                    "attempt_id": attempt_id,
-                    "event_type": "ATTEMPT_OUTCOME",
-                    "outcome": outcome_value,
-                },
-            )
+            event: dict[str, object] = {
+                "attempt_id": attempt_id,
+                "event_type": "ATTEMPT_OUTCOME",
+                "outcome": outcome_value,
+            }
+            if safe_error_type is not None:
+                event["safe_error_type"] = safe_error_type
+            self._append_event(review_id, event)
 
     def append_thread_message(
         self, review_id: str, thread_name: str, message: Mapping[str, object]
@@ -741,10 +750,18 @@ class EvidenceStore:
             elif event_type == "ATTEMPT_OUTCOME":
                 attempt_id = event.get("attempt_id")
                 outcome = event.get("outcome")
+                safe_error_type = event.get("safe_error_type")
                 if (
                     not isinstance(attempt_id, str)
                     or not _attempt_belongs_to_review(review_id, attempt_id)
                     or outcome not in {item.value for item in AttemptOutcome}
+                    or (
+                        safe_error_type is not None
+                        and (
+                            not isinstance(safe_error_type, str)
+                            or re.fullmatch(r"OX[A-Za-z0-9]+Error", safe_error_type) is None
+                        )
+                    )
                 ):
                     raise OXEvidenceError("review events are malformed")
                 matching = next(
@@ -753,6 +770,8 @@ class EvidenceStore:
                 if matching is None or "outcome" in matching:
                     raise OXEvidenceError("review events are malformed")
                 matching["outcome"] = outcome
+                if safe_error_type is not None:
+                    matching["safe_error_type"] = safe_error_type
                 state = {
                     AttemptOutcome.COMPLETED.value: ReviewState.REVIEWED.value,
                     AttemptOutcome.OUTCOME_UNKNOWN.value: ReviewState.OUTCOME_UNKNOWN.value,
