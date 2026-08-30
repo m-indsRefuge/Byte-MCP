@@ -1,5 +1,5 @@
-from pathlib import Path
 import runpy
+from pathlib import Path
 
 from byte_mcp import server
 
