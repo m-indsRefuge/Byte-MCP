@@ -62,6 +62,13 @@ class ProviderResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderAttemptResult:
+    outcome: AttemptOutcome
+    provider_result: ProviderResult | None = None
+    safe_error_type: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Finding:
     finding_id: str
     status: FindingStatus
