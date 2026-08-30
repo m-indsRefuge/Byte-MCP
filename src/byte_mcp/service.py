@@ -182,25 +182,26 @@ class FileService:
                     break
 
                 is_directory = stat_module.S_ISDIR(child_stat.st_mode)
-                entries.append(
-                    {
-                        "name": child.name,
-                        "kind": (
-                            "directory"
-                            if is_directory
-                            else "file"
-                        ),
-                        "relative_path": relative.as_posix(),
-                        "size_bytes": (
-                            None
-                            if is_directory
-                            else child_stat.st_size
-                        ),
-                        "modified_utc": self._timestamp(
-                            child_stat.st_mtime
-                        ),
-                    }
-                )
+                entry = {
+                    "name": child.name,
+                    "kind": (
+                        "directory"
+                        if is_directory
+                        else "file"
+                    ),
+                    "relative_path": relative.as_posix(),
+                    "size_bytes": (
+                        None
+                        if is_directory
+                        else child_stat.st_size
+                    ),
+                    "modified_utc": self._timestamp(
+                        child_stat.st_mtime
+                    ),
+                }
+                if not is_directory:
+                    entry["ref"] = encode_ref(root, relative.as_posix())
+                entries.append(entry)
 
             result = {
                 "root": root,
