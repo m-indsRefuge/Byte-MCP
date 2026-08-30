@@ -4,8 +4,8 @@ MODULE_NAME = "byte_mcp.wolfram.native_calibration"
 def _module():
     try:
         return __import__(MODULE_NAME, fromlist=["*"])
-    except ModuleNotFoundError:
-        assert False, "native Wolfram calibration module must exist"
+    except ModuleNotFoundError as exc:
+        raise AssertionError("native Wolfram calibration module must exist") from exc
 
 
 def _expect_value_error(message_fragment: str, operation) -> None:
@@ -14,7 +14,7 @@ def _expect_value_error(message_fragment: str, operation) -> None:
     except ValueError as exc:
         assert message_fragment in str(exc)
     else:
-        assert False, f"expected ValueError containing {message_fragment!r}"
+        raise AssertionError(f"expected ValueError containing {message_fragment!r}")
 
 
 def test_native_calibration_corpus_is_fixed_and_byte_owned() -> None:
