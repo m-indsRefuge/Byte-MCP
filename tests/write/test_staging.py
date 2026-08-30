@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from byte_mcp.errors import WriteIntegrityError, WriteLimitError, WritePathError
 from byte_mcp.write.staging import (
     StagingStore,
     TextFileProfile,
@@ -12,6 +10,8 @@ from byte_mcp.write.staging import (
     encode_with_profile,
     read_utf8_profile,
 )
+
+from byte_mcp.errors import WriteIntegrityError, WriteLimitError, WritePathError
 
 
 def test_utf8_profiles_preserve_bom_and_detect_single_newline_convention() -> None:
@@ -39,7 +39,6 @@ def test_encode_with_profile_normalizes_only_when_source_has_one_newline_style()
 
     mixed = TextFileProfile(has_utf8_bom=False, newline=None)
     assert encode_with_profile("a\nb\rc\r\nd", mixed) == b"a\nb\rc\r\nd"
-
 
 
 def test_staging_store_binds_blob_identity_and_detects_tampering(write_env) -> None:
