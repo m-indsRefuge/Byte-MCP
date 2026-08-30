@@ -1,7 +1,42 @@
+import inspect
 from typing import Any
 
 from byte_mcp import server
 from byte_mcp.ox.models import OXAvailability
+
+
+def test_ox_review_public_contract_and_structured_result_passthrough(monkeypatch: Any) -> None:
+    expected_parameters = [
+        "repository",
+        "subsystem",
+        "target_commit",
+        "base_commit",
+        "objective",
+        "verification",
+        "review_id",
+        "approve",
+        "retry",
+    ]
+    assert list(inspect.signature(server.ox_review).parameters) == expected_parameters
+
+    structured = {
+        "review_id": "OX-000001",
+        "attempt_id": "OX-000001-A001",
+        "state": "OUTCOME_UNKNOWN",
+        "attempt_outcome": "OUTCOME_UNKNOWN",
+        "safe_error_type": "OXTransportError",
+        "response_available": False,
+        "replayed": False,
+    }
+
+    class FakeOXService:
+        def transmit_review(self, review_id: str) -> dict[str, object]:
+            assert review_id == "OX-000001"
+            return structured
+
+    monkeypatch.setattr(server, "_ox_service", lambda: FakeOXService())
+
+    assert server.ox_review(review_id="OX-000001", approve=True) is structured
 
 
 def test_main_initializes_core_then_ox_before_binding_server(monkeypatch: Any) -> None:
