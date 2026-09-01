@@ -1,4 +1,5 @@
 """Byte-MCP Streamable HTTP server."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -321,14 +322,26 @@ def wolfram_query(
     purpose: str = "COENGINEERING",
     route_reason: str = "OTHER_BOUNDED_REASON",
     source_finding_id: str | None = None,
+    assumption: list[str] | None = None,
 ) -> dict[str, object]:
-    """Send one bounded, policy-screened query to Wolfram|Alpha's LLM API."""
+    """Send one bounded query to Wolfram|Alpha's LLM API.
+
+    Form input as a single-line English query and simplify natural language
+    to computational keywords where practical. Express scientific notation
+    like 6*10^14 rather than E-notation, prefer single-letter variables,
+    use named physical constants, and include spaces between compound units.
+
+    If Wolfram reports ambiguity, an explicit follow-up may send selected
+    assumption tokens with the exact same input. Byte-MCP performs no
+    automatic retries and never selects an assumption autonomously.
+    """
     return wolfram_service().query(
         input,
         max_chars,
         purpose,
         route_reason,
         source_finding_id,
+        assumption,
     )
 
 

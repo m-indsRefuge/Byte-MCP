@@ -1,4 +1,5 @@
 """Domain contracts for the Wolfram co-engineering capability."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,23 +38,27 @@ class WolframQueryRequest:
     purpose: WolframPurpose = WolframPurpose.COENGINEERING
     route_reason: WolframRouteReason = WolframRouteReason.OTHER_BOUNDED_REASON
     source_finding_id: str | None = None
+    assumption: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.input.strip():
             raise WolframRequestError("Wolfram input must not be blank.")
+        if not isinstance(self.assumption, tuple):
+            raise WolframRequestError("Wolfram assumption must be a tuple of opaque tokens.")
+        if len(self.assumption) > 8:
+            raise WolframRequestError("Wolfram assumption accepts at most 8 tokens.")
+        for token in self.assumption:
+            if not isinstance(token, str) or not token.strip():
+                raise WolframRequestError("Wolfram assumption tokens must be non-blank text.")
+            if "\r" in token or "\n" in token or "\x00" in token:
+                raise WolframRequestError("Wolfram assumption tokens must be single-line text.")
         if self.route_reason is WolframRouteReason.OX_FALLBACK:
             if self.purpose is not WolframPurpose.FALLBACK_VALIDATION:
-                raise WolframRequestError(
-                    "OX_FALLBACK requires purpose FALLBACK_VALIDATION."
-                )
+                raise WolframRequestError("OX_FALLBACK requires purpose FALLBACK_VALIDATION.")
             if not self.source_finding_id or not self.source_finding_id.strip():
-                raise WolframRequestError(
-                    "OX_FALLBACK requires a local source_finding_id."
-                )
+                raise WolframRequestError("OX_FALLBACK requires a local source_finding_id.")
         elif self.source_finding_id is not None:
-            raise WolframRequestError(
-                "source_finding_id is permitted only for OX_FALLBACK."
-            )
+            raise WolframRequestError("source_finding_id is permitted only for OX_FALLBACK.")
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,5 @@
 """Outbound data policy for Wolfram requests."""
+
 from __future__ import annotations
 
 import hashlib
@@ -43,7 +44,10 @@ class WolframOutboundPolicy:
         if "\x00" in input_text:
             raise WolframPolicyError("Wolfram input contains a prohibited NUL character.")
 
-        normalized = input_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if "\r" in input_text or "\n" in input_text:
+            raise WolframPolicyError("Wolfram input must be a single-line string.")
+
+        normalized = input_text.strip()
         if not normalized:
             raise WolframPolicyError("Wolfram input must not be blank.")
         if len(normalized) > self.max_input_chars:
@@ -64,3 +68,28 @@ class WolframOutboundPolicy:
             transmitted_chars=len(sanitized),
             paths_sanitized=count,
         )
+
+    def prepare_assumptions(
+        self,
+        assumptions: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Screen opaque Wolfram assumption tokens without rewriting them."""
+        prepared: list[str] = []
+
+        for token in assumptions:
+            if not isinstance(token, str):
+                raise WolframPolicyError("Wolfram assumption tokens must be text.")
+            if not token.strip():
+                raise WolframPolicyError("Wolfram assumption tokens must not be blank.")
+            if "\x00" in token:
+                raise WolframPolicyError("Wolfram assumption contains a prohibited NUL character.")
+            if "\r" in token or "\n" in token:
+                raise WolframPolicyError("Wolfram assumption tokens must be single-line text.")
+
+            for pattern in _SECRET_PATTERNS:
+                if pattern.search(token):
+                    raise WolframPolicyError("Wolfram assumption contains sensitive material.")
+
+            prepared.append(token)
+
+        return tuple(prepared)

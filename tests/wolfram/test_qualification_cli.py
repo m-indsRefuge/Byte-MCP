@@ -48,7 +48,7 @@ def test_default_campaign_is_v2() -> None:
     result = _run("list")
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload["campaign"].endswith("qualification/wolfram/llm-api-v2.json")
+    assert Path(payload["campaign"]).as_posix().endswith("qualification/wolfram/llm-api-v2.json")
     assert payload["task_count"] == 30
 
 
@@ -111,13 +111,16 @@ def test_complete_summary_emits_capability_profile(tmp_path: Path) -> None:
                 "hard_label": None,
                 "defect_found": None,
                 "root_cause_correct": (
-                    True if task_id in {
+                    True
+                    if task_id
+                    in {
                         "WA-04-02",
                         "WA-04-03",
                         "WA-05-01",
                         "WA-05-02",
                         "WA-05-03",
-                    } else None
+                    }
+                    else None
                 ),
                 "location_correct": None,
                 "fix_correct": None,

@@ -26,10 +26,9 @@ def test_wolfram_query_argument_surface_has_no_generic_http_authority() -> None:
         "purpose",
         "route_reason",
         "source_finding_id",
+        "assumption",
     }
-    assert parameters.isdisjoint(
-        {"appid", "url", "endpoint", "headers", "method", "assumption"}
-    )
+    assert parameters.isdisjoint({"appid", "url", "endpoint", "headers", "method"})
 
 
 def test_wolfram_query_annotation_marks_external_non_idempotent_read() -> None:

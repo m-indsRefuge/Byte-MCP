@@ -1,4 +1,5 @@
 """Byte-owned orchestration for bounded Wolfram queries."""
+
 from __future__ import annotations
 
 import time
@@ -53,6 +54,7 @@ class WolframService:
         purpose: str,
         route_reason: str,
         source_finding_id: str | None = None,
+        assumption: list[str] | None = None,
     ) -> dict[str, object]:
         request = WolframQueryRequest(
             input=input,
@@ -60,8 +62,12 @@ class WolframService:
             purpose=self._purpose(purpose),
             route_reason=self._route_reason(route_reason),
             source_finding_id=source_finding_id,
+            assumption=tuple(assumption or ()),
         )
         prepared = self.policy.prepare(request.input)
+        prepared_assumptions = (
+            self.policy.prepare_assumptions(request.assumption) if request.assumption else ()
+        )
         applied_max = self.settings.apply_max_chars(request.max_chars)
         reservation = self.quota.reserve_attempt()
         request_id = f"WQ-{uuid.uuid4().hex}"
@@ -75,6 +81,7 @@ class WolframService:
             "input_chars": prepared.original_chars,
             "transmitted_chars": prepared.transmitted_chars,
             "paths_sanitized": prepared.paths_sanitized,
+            "assumption_count": len(prepared_assumptions),
             "max_chars_applied": applied_max,
             "period_utc": reservation.period_utc,
             "period_count": reservation.period_count,
@@ -85,7 +92,17 @@ class WolframService:
         self.audit.record("wolfram_query", outcome="transmitting", **base_audit)
         started = time.monotonic()
         try:
-            result = self.client.query(prepared.text, applied_max)
+            if prepared_assumptions:
+                result = self.client.query(
+                    prepared.text,
+                    applied_max,
+                    assumption=prepared_assumptions,
+                )
+            else:
+                result = self.client.query(
+                    prepared.text,
+                    applied_max,
+                )
         except WolframError as exc:
             self.audit.record(
                 "wolfram_query",

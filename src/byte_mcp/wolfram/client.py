@@ -1,4 +1,5 @@
 """Fixed-purpose Wolfram|Alpha LLM API client."""
+
 from __future__ import annotations
 
 import re
@@ -43,7 +44,12 @@ class WolframLLMClient:
         body = response.text.strip().replace("\r", " ").replace("\n", " ")
         return body[:240]
 
-    def query(self, input_text: str, max_chars: int) -> WolframClientResult:
+    def query(
+        self,
+        input_text: str,
+        max_chars: int,
+        assumption: tuple[str, ...] = (),
+    ) -> WolframClientResult:
         if self._settings.app_id is None:
             raise WolframUnavailableError("Wolfram AppID is not configured.")
 
@@ -58,6 +64,12 @@ class WolframLLMClient:
             "Accept": "text/plain",
             "User-Agent": "Byte-MCP-Wolfram/1",
         }
+        params: list[tuple[str, str]] = [
+            ("input", input_text),
+            ("maxchars", str(max_chars)),
+        ]
+        params.extend(("assumption", token) for token in assumption)
+
         try:
             with httpx.Client(
                 timeout=timeout,
@@ -66,7 +78,7 @@ class WolframLLMClient:
             ) as client:
                 response = client.get(
                     self._settings.endpoint,
-                    params={"input": input_text, "maxchars": str(max_chars)},
+                    params=params,
                     headers=headers,
                 )
         except httpx.ReadTimeout as exc:
@@ -89,13 +101,9 @@ class WolframLLMClient:
                 f"Wolfram rejected the request with HTTP {response.status_code}."
             )
         if response.status_code >= 500:
-            raise WolframProviderError(
-                f"Wolfram provider failed with HTTP {response.status_code}."
-            )
+            raise WolframProviderError(f"Wolfram provider failed with HTTP {response.status_code}.")
         if response.status_code != 200:
-            raise WolframProtocolError(
-                f"Unexpected Wolfram HTTP status {response.status_code}."
-            )
+            raise WolframProtocolError(f"Unexpected Wolfram HTTP status {response.status_code}.")
 
         result = response.text.strip()
         if not result:

@@ -41,10 +41,12 @@ def test_relative_paths_remain_intact() -> None:
 
 
 def test_input_normalization_and_limits() -> None:
-    prepared = WolframOutboundPolicy(max_input_chars=20).prepare("  a\r\nb  ")
-    assert prepared.text == "a\nb"
+    prepared = WolframOutboundPolicy(max_input_chars=20).prepare("  a b  ")
+    assert prepared.text == "a b"
     assert len(prepared.sha256) == 64
 
+    with pytest.raises(WolframPolicyError, match="single-line"):
+        WolframOutboundPolicy().prepare("a\r\nb")
     with pytest.raises(WolframPolicyError, match="NUL"):
         WolframOutboundPolicy().prepare("a\x00b")
     with pytest.raises(WolframPolicyError, match="exceeds"):
