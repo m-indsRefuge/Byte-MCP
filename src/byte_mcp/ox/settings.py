@@ -11,6 +11,7 @@ class OXSettings:
     evidence_root: Path
     max_bundle_bytes: int = 4_000_000
     max_output_tokens: int = 65_536
+    orphan_recovery_seconds: int = 1_800
     gateway_url: str = "https://ai-gateway.vercel.sh/v1/chat/completions"
     model: str = "zai/glm-5.3-flash"
     provider_slug: str = "zai"
@@ -44,9 +45,16 @@ class OXSettings:
             )
         key = os.getenv("AI_GATEWAY_API_KEY", "").strip() or None
         return cls(
-            key,
-            repositories,
-            evidence_root,
-            bounded("BYTE_MCP_OX_MAX_BUNDLE_BYTES", 4_000_000, 16_384, 16_000_000),
-            bounded("BYTE_MCP_OX_MAX_OUTPUT_TOKENS", 65_536, 1_024, 131_072),
+            api_key=key,
+            repositories_file=repositories,
+            evidence_root=evidence_root,
+            max_bundle_bytes=bounded(
+                "BYTE_MCP_OX_MAX_BUNDLE_BYTES", 4_000_000, 16_384, 16_000_000
+            ),
+            max_output_tokens=bounded(
+                "BYTE_MCP_OX_MAX_OUTPUT_TOKENS", 65_536, 1_024, 131_072
+            ),
+            orphan_recovery_seconds=bounded(
+                "BYTE_MCP_OX_ORPHAN_RECOVERY_SECONDS", 1_800, 901, 86_400
+            ),
         )

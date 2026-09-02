@@ -1,8 +1,9 @@
 """Fail-isolated local runtime for the optional OX validation capability."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 
-from byte_mcp.errors import OXUnavailableError
+from byte_mcp.errors import OXEvidenceError, OXUnavailableError
 
 from .client import OXClient
 from .evidence import EvidenceStore
@@ -27,13 +28,17 @@ class OXRuntime:
 
         try:
             validate_ox_local_config(settings)
+            evidence = EvidenceStore(settings.evidence_root)
+            evidence.recover_stale_transmissions(
+                stale_after=timedelta(seconds=settings.orphan_recovery_seconds)
+            )
             service = OXReviewService(
                 settings,
-                EvidenceStore(settings.evidence_root),
+                evidence,
                 OXClient(settings),
                 audit,
             )
-        except (OSError, TypeError, ValueError):
+        except (OSError, OXEvidenceError, TypeError, ValueError):
             return cls(OXAvailability.MISCONFIGURED)
         return cls(OXAvailability.AVAILABLE, service)
 

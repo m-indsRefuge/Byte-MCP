@@ -7,6 +7,7 @@ import shutil
 import threading
 from collections.abc import Mapping
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -169,6 +170,202 @@ class EvidenceStore:
                 raise
             except (OSError, TypeError, ValueError):
                 raise OXEvidenceError("unable to persist prepared revalidation") from None
+
+    def recover_stale_transmissions(
+        self,
+        *,
+        stale_after: timedelta,
+        now: datetime | None = None,
+    ) -> tuple[str, ...]:
+        # Local-only append-only recovery. Never retries a provider request.
+        if not isinstance(stale_after, timedelta) or stale_after <= timedelta(0):
+            raise OXEvidenceError("orphan recovery horizon is invalid")
+        recovery_now = now or datetime.now(UTC)
+        if (
+            not isinstance(recovery_now, datetime)
+            or recovery_now.tzinfo is None
+            or recovery_now.utcoffset() is None
+        ):
+            raise OXEvidenceError("orphan recovery time must be timezone-aware")
+        cutoff = recovery_now.astimezone(UTC) - stale_after
+        recovered: list[str] = []
+
+        if not self._reviews.is_dir():
+            return ()
+        try:
+            review_dirs = sorted(
+                path
+                for path in self._reviews.iterdir()
+                if path.is_dir() and _REVIEW_ID.fullmatch(path.name)
+            )
+        except OSError:
+            raise OXEvidenceError("unable to inspect OX recovery evidence") from None
+
+        for review_dir in review_dirs:
+            review_id = review_dir.name
+            with self._lock_for(review_id):
+                review = self._reconstruct(review_id)
+                self._reject_recovered_review(review)
+                attempts = review.get("attempts")
+                if (
+                    review.get("state") == ReviewState.TRANSMITTING.value
+                    and isinstance(attempts, list)
+                    and attempts
+                ):
+                    latest = attempts[-1]
+                    attempt_id = latest.get("attempt_id")
+                    if isinstance(attempt_id, str) and "outcome" not in latest:
+                        recorded_at = self._review_attempt_recorded_at(
+                            review_id, attempt_id
+                        )
+                        if recorded_at is not None and recorded_at <= cutoff:
+                            self._append_event(
+                                review_id,
+                                {
+                                    "attempt_id": attempt_id,
+                                    "event_type": "ATTEMPT_OUTCOME",
+                                    "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
+                                },
+                            )
+                            recovered.append(attempt_id)
+
+                revalidations = review_dir / "revalidations"
+                if not revalidations.is_dir():
+                    continue
+                try:
+                    revalidation_dirs = sorted(
+                        path
+                        for path in revalidations.iterdir()
+                        if path.is_dir()
+                        and _REVALIDATION_ID.fullmatch(path.name)
+                        and path.name.startswith(f"{review_id}-RV")
+                    )
+                except OSError:
+                    raise OXEvidenceError(
+                        "unable to inspect OX revalidation recovery evidence"
+                    ) from None
+
+                for revalidation_dir in revalidation_dirs:
+                    revalidation_id = revalidation_dir.name
+                    revalidation = self._reconstruct_revalidation(
+                        review_id, revalidation_id
+                    )
+                    self._reject_recovered_revalidation(revalidation)
+                    attempts = revalidation.get("attempts")
+                    if (
+                        revalidation.get("state")
+                        != ReviewState.REVALIDATION_TRANSMITTING.value
+                        or not isinstance(attempts, list)
+                        or not attempts
+                    ):
+                        continue
+                    latest = attempts[-1]
+                    attempt_id = latest.get("attempt_id")
+                    phase = latest.get("phase")
+                    if (
+                        not isinstance(attempt_id, str)
+                        or phase not in {"blind", "targeted"}
+                        or "outcome" in latest
+                    ):
+                        continue
+                    recorded_at = self._revalidation_attempt_recorded_at(
+                        review_id, revalidation_id, attempt_id
+                    )
+                    if recorded_at is None or recorded_at > cutoff:
+                        continue
+                    self._append_jsonl(
+                        revalidation_dir / "events.jsonl",
+                        {
+                            "attempt_id": attempt_id,
+                            "event_type": "REVALIDATION_ATTEMPT_OUTCOME",
+                            "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
+                            "phase": phase,
+                        },
+                    )
+                    recovered.append(attempt_id)
+
+        return tuple(recovered)
+
+    def _review_attempt_recorded_at(
+        self, review_id: str, attempt_id: str
+    ) -> datetime | None:
+        try:
+            events, warnings = self._read_jsonl(
+                self._review_dir(review_id) / "events.jsonl"
+            )
+        except (OSError, TypeError, ValueError, OXEvidenceError):
+            return None
+        if warnings:
+            return None
+        for event in reversed(events):
+            if (
+                isinstance(event, Mapping)
+                and event.get("event_type") == "TRANSMISSION_INTENT"
+                and event.get("attempt_id") == attempt_id
+            ):
+                recorded_at = self._parse_recovery_timestamp(
+                    event.get("recorded_at")
+                )
+                if recorded_at is not None:
+                    return recorded_at
+                break
+        identity_path = (
+            self._review_dir(review_id) / "attempts" / f"{attempt_id}.json"
+        )
+        try:
+            identity = self._read_json(identity_path)
+        except (OSError, TypeError, ValueError, OXEvidenceError):
+            return None
+        if not isinstance(identity, Mapping) or identity.get("attempt_id") != attempt_id:
+            return None
+        return self._parse_recovery_timestamp(identity.get("recorded_at"))
+
+    def _revalidation_attempt_recorded_at(
+        self,
+        review_id: str,
+        revalidation_id: str,
+        attempt_id: str,
+    ) -> datetime | None:
+        directory = self._revalidation_dir(review_id, revalidation_id)
+        try:
+            events, warnings = self._read_jsonl(directory / "events.jsonl")
+        except (OSError, TypeError, ValueError, OXEvidenceError):
+            return None
+        if warnings:
+            return None
+        for event in reversed(events):
+            if (
+                isinstance(event, Mapping)
+                and event.get("event_type")
+                == "REVALIDATION_TRANSMISSION_INTENT"
+                and event.get("attempt_id") == attempt_id
+            ):
+                recorded_at = self._parse_recovery_timestamp(
+                    event.get("recorded_at")
+                )
+                if recorded_at is not None:
+                    return recorded_at
+                break
+        identity_path = directory / "attempts" / f"{attempt_id}.json"
+        try:
+            identity = self._read_json(identity_path)
+        except (OSError, TypeError, ValueError, OXEvidenceError):
+            return None
+        if not isinstance(identity, Mapping) or identity.get("attempt_id") != attempt_id:
+            return None
+        return self._parse_recovery_timestamp(identity.get("recorded_at"))
+
+    @staticmethod
+    def _parse_recovery_timestamp(value: object) -> datetime | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(UTC)
 
     def claim_initial_transmission(self, review_id: str, manifest_sha256: str) -> dict[str, str]:
         self._require_digest(manifest_sha256)
@@ -638,7 +835,14 @@ class EvidenceStore:
     def _append_transmission_intent(self, review_id: str, manifest_sha256: str) -> dict[str, str]:
         attempt_id = self._allocate_attempt_id(review_id)
         attempt = {"attempt_id": attempt_id, "manifest_sha256": manifest_sha256}
-        self._append_event(review_id, {**attempt, "event_type": "TRANSMISSION_INTENT"})
+        self._append_event(
+            review_id,
+            {
+                **attempt,
+                "event_type": "TRANSMISSION_INTENT",
+                "recorded_at": datetime.now(UTC).isoformat(),
+            },
+        )
         return attempt
 
     def _append_revalidation_transmission_intent(
@@ -656,7 +860,11 @@ class EvidenceStore:
         }
         self._append_jsonl(
             self._revalidation_dir(review_id, revalidation_id) / "events.jsonl",
-            {**attempt, "event_type": "REVALIDATION_TRANSMISSION_INTENT"},
+            {
+                **attempt,
+                "event_type": "REVALIDATION_TRANSMISSION_INTENT",
+                "recorded_at": datetime.now(UTC).isoformat(),
+            },
         )
         return attempt
 
