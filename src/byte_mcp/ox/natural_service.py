@@ -88,7 +88,6 @@ class OXReviewService(BaseOXReviewService):
         if (
             isinstance(findings, str | bytes | bytearray)
             or not isinstance(findings, Sequence)
-            or not findings
             or not all(isinstance(item, Mapping) for item in findings)
         ):
             raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)

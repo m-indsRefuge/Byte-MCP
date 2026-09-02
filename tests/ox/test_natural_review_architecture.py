@@ -182,6 +182,37 @@ def test_q03g_findings_view_reports_recorded_state(tmp_path) -> None:
     assert after["protocol_version"] == "byte-derived-findings-v1"
     assert len(after["findings"]) == 1
 
+def test_q03g_record_findings_accepts_explicit_empty_set_without_provider_call(
+    tmp_path,
+) -> None:
+    client = RecordingClient()
+    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review = service.transmit_review(proposal["review_id"])
+    calls_before = len(client.calls)
+
+    result = service.record_findings(proposal["review_id"], [])
+
+    assert len(client.calls) == calls_before
+    assert result["protocol_version"] == "byte-derived-findings-v1"
+    assert result["review_id"] == proposal["review_id"]
+    assert result["source_attempt_id"] == f"{proposal['review_id']}-A001"
+    assert result["source_response_sha256"] == hashlib.sha256(
+        review["response"].encode("utf-8")
+    ).hexdigest()
+    assert result["derivation_authority"] == "byte"
+    assert result["derivation_provenance"] == "derived-from-ox-natural-review"
+    assert result["findings"] == []
+    assert store.findings_recorded(proposal["review_id"]) is True
+
+    view = service.get_review(proposal["review_id"], view="findings")
+    assert view["recorded"] is True
+    assert view["protocol_version"] == "byte-derived-findings-v1"
+    assert view["findings"] == []
+
+    with pytest.raises(OXEvidenceError):
+        service.record_findings(proposal["review_id"], [])
+
 def test_record_findings_is_local_immutable_and_bound_to_exact_ox_response(tmp_path) -> None:
     client = RecordingClient()
     service, store, _, base, target, _ = make_natural_service(tmp_path, client)
