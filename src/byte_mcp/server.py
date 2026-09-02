@@ -195,7 +195,7 @@ async def ox_review(
 
 
 @mcp.tool(annotations=OX_EXTERNAL)
-def ox_continue(
+async def ox_continue(
     review_id: str,
     mode: str = "message",
     message: str | None = None,
@@ -214,7 +214,11 @@ def ox_continue(
             or approve_retry
         ):
             _invalid_ox_mode()
-        return _ox_service().continue_message(review_id, message)
+        return await asyncio.to_thread(
+            _ox_service().continue_message,
+            review_id,
+            message,
+        )
 
     if mode == "record_findings":
         if (
@@ -247,7 +251,8 @@ def ox_continue(
             or not approve_retry
         ):
             _invalid_ox_mode()
-        return _ox_service().retry_continuation(
+        return await asyncio.to_thread(
+            _ox_service().retry_continuation,
             review_id,
             retry_attempt_id,
             renewed_approval=True,

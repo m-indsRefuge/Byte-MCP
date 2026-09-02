@@ -173,47 +173,50 @@ def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeyp
     fake = FakeService()
     monkeypatch.setattr(server, "ox_runtime", lambda: FakeRuntime(fake))
 
-    assert server.ox_continue("OX-000001", message="hello")["operation"] == "continue_message"
     assert (
-        server.ox_continue(
+        asyncio.run(server.ox_continue("OX-000001", message="hello"))["operation"]
+        == "continue_message"
+    )
+    assert (
+        asyncio.run(server.ox_continue(
             "OX-000001",
             mode="record_findings",
             findings=[{"claim": "derived"}],
-        )["operation"]
+        ))["operation"]
         == "record_findings"
     )
     assert (
-        server.ox_continue(
+        asyncio.run(server.ox_continue(
             "OX-000001",
             mode="adjudicate",
             adjudications=[{"finding_id": "OX-000001-F001"}],
-        )["operation"]
+        ))["operation"]
         == "adjudicate"
     )
     assert (
-        server.ox_continue(
+        asyncio.run(server.ox_continue(
             "OX-000001",
             mode="retry",
             retry_attempt_id="OX-000001-A002",
             approve_retry=True,
-        )["operation"]
+        ))["operation"]
         == "retry_continuation"
     )
     with pytest.raises(OXProtocolError):
-        server.ox_continue(
+        asyncio.run(server.ox_continue(
             "OX-000001",
             mode="retry",
             message="replacement is forbidden",
             retry_attempt_id="OX-000001-A002",
             approve_retry=True,
-        )
+        ))
     with pytest.raises(OXProtocolError):
-        server.ox_continue(
+        asyncio.run(server.ox_continue(
             "OX-000001",
             mode="record_findings",
             message="must be local-only",
             findings=[{"claim": "derived"}],
-        )
+        ))
 
     assert (
         server.ox_revalidate(
