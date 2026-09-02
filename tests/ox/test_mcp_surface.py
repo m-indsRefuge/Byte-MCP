@@ -219,48 +219,48 @@ def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeyp
         ))
 
     assert (
-        server.ox_revalidate(
+        asyncio.run(server.ox_revalidate(
             "OX-000001",
             target_commit="c" * 40,
             base_commit="b" * 40,
             verification=[{"id": "v2"}],
-        )["operation"]
+        ))["operation"]
         == "prepare_revalidation"
     )
     assert (
-        server.ox_revalidate(
+        asyncio.run(server.ox_revalidate(
             "OX-000001",
             revalidation_id="OX-000001-RV001",
             approve=True,
-        )["operation"]
+        ))["operation"]
         == "transmit_blind_revalidation"
     )
     assert (
-        server.ox_revalidate(
+        asyncio.run(server.ox_revalidate(
             "OX-000001",
             revalidation_id="OX-000001-RV001",
             approve=True,
             retry=True,
-        )["operation"]
+        ))["operation"]
         == "retry_revalidation"
     )
     assert (
-        server.ox_revalidate(
+        asyncio.run(server.ox_revalidate(
             "OX-000001",
             revalidation_id="OX-000001-RV001",
             targeted=True,
             finding_ids=["OX-000001-F001"],
-        )["operation"]
+        ))["operation"]
         == "run_targeted_revalidation"
     )
     with pytest.raises(OXProtocolError):
-        server.ox_revalidate(
+        asyncio.run(server.ox_revalidate(
             "OX-000001",
             revalidation_id="OX-000001-RV001",
             approve=True,
             targeted=True,
             finding_ids=["OX-000001-F001"],
-        )
+        ))
 
     for view in ("findings", "attempts", "revalidation"):
         result = server.ox_get_review("OX-000001", view)

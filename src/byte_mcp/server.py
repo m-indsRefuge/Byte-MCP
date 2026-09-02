@@ -262,7 +262,7 @@ async def ox_continue(
 
 
 @mcp.tool(annotations=OX_EXTERNAL)
-def ox_revalidate(
+async def ox_revalidate(
     review_id: str,
     revalidation_id: str | None = None,
     target_commit: str | None = None,
@@ -294,7 +294,8 @@ def ox_revalidate(
     if targeted:
         if approve or retry or finding_ids is None:
             _invalid_ox_mode()
-        return _ox_service().run_targeted_revalidation(
+        return await asyncio.to_thread(
+            _ox_service().run_targeted_revalidation,
             revalidation_id,
             finding_ids,
         )
@@ -302,11 +303,15 @@ def ox_revalidate(
     if finding_ids is not None or not approve:
         _invalid_ox_mode()
     if retry:
-        return _ox_service().retry_revalidation(
+        return await asyncio.to_thread(
+            _ox_service().retry_revalidation,
             revalidation_id,
             renewed_approval=True,
         )
-    return _ox_service().transmit_blind_revalidation(revalidation_id)
+    return await asyncio.to_thread(
+        _ox_service().transmit_blind_revalidation,
+        revalidation_id,
+    )
 
 
 @mcp.tool(annotations=READ_ONLY)
