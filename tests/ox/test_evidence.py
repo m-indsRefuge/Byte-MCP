@@ -64,6 +64,23 @@ def test_get_review_ignores_and_reports_a_torn_trailing_event(tmp_path):
     assert review["attempts"] == []
 
 
+def test_findings_recorded_distinguishes_missing_from_explicit_empty_artifact(tmp_path):
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+
+    assert store.findings_recorded(review_id) is False
+
+    store.persist_findings(
+        review_id,
+        {
+            "protocol_version": "byte-derived-findings-v1",
+            "review_id": review_id,
+            "findings": [],
+        },
+    )
+
+    assert store.findings_recorded(review_id) is True
+
 def test_provider_messages_and_adjudication_are_separate_evidence(tmp_path):
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)

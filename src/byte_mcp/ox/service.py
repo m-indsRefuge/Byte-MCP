@@ -695,7 +695,16 @@ class OXReviewService:
                 ],
             }
         elif view == "findings":
-            result = {"review_id": review_id, **self._evidence.read_findings(review_id)}
+            recorded = self._evidence.findings_recorded(review_id)
+            result = {
+                "review_id": review_id,
+                "recorded": recorded,
+                **(
+                    self._evidence.read_findings(review_id)
+                    if recorded
+                    else {"findings": []}
+                ),
+            }
         elif view == "thread":
             result = {
                 "review_id": review_id,

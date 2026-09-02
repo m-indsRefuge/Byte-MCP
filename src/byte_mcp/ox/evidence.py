@@ -523,6 +523,19 @@ class EvidenceStore:
                 raise OXEvidenceError("thread evidence requires recovery")
             return [dict(record) for record in records]
 
+    def findings_recorded(self, review_id: str) -> bool:
+        with self._lock_for(review_id):
+            self._require_review_dir(review_id)
+            path = self._review_dir(review_id) / "findings" / "findings.json"
+            try:
+                value = self._read_json(path)
+            except FileNotFoundError:
+                return False
+            except (OSError, TypeError, ValueError):
+                raise OXEvidenceError("unable to read findings") from None
+            if not isinstance(value, dict):
+                raise OXEvidenceError("findings evidence is malformed")
+            return True
     def read_findings(self, review_id: str) -> dict[str, object]:
         with self._lock_for(review_id):
             self._require_review_dir(review_id)

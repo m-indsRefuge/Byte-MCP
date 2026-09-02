@@ -158,6 +158,30 @@ def test_q03g_initial_approval_replay_while_transmitting_never_resends(tmp_path)
     assert len(attempts) == 1
     assert attempts[0]["attempt_id"] == f"{proposal['review_id']}-A001"
 
+def test_q03g_findings_view_reports_recorded_state(tmp_path) -> None:
+    client = RecordingClient()
+    service, _, _, base, target, _ = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review_id = proposal["review_id"]
+    service.transmit_review(review_id)
+
+    before = service.get_review(review_id, view="findings")
+
+    assert before == {
+        "review_id": review_id,
+        "recorded": False,
+        "findings": [],
+    }
+
+    service.record_findings(review_id, [derived_finding()])
+
+    after = service.get_review(review_id, view="findings")
+
+    assert after["review_id"] == review_id
+    assert after["recorded"] is True
+    assert after["protocol_version"] == "byte-derived-findings-v1"
+    assert len(after["findings"]) == 1
+
 def test_record_findings_is_local_immutable_and_bound_to_exact_ox_response(tmp_path) -> None:
     client = RecordingClient()
     service, store, _, base, target, _ = make_natural_service(tmp_path, client)
