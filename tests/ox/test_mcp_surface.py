@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 from typing import Any
 
@@ -144,28 +145,28 @@ def test_review_modes_are_strict_and_dispatch_without_scope_redefinition(monkeyp
     fake = FakeService()
     monkeypatch.setattr(server, "ox_runtime", lambda: FakeRuntime(fake))
 
-    result = server.ox_review(
+    result = asyncio.run(server.ox_review(
         repository="fixture",
         subsystem="validation",
         target_commit="a" * 40,
         base_commit="b" * 40,
         objective="Review it.",
         verification=[{"id": "v1"}],
-    )
+    ))
     assert result["operation"] == "prepare_review"
-    result = server.ox_review(review_id="OX-000001", approve=True)
+    result = asyncio.run(server.ox_review(review_id="OX-000001", approve=True))
     assert result["operation"] == "transmit_review"
-    result = server.ox_review(review_id="OX-000001", approve=True, retry=True)
+    result = asyncio.run(server.ox_review(review_id="OX-000001", approve=True, retry=True))
     assert result["operation"] == "retry_review"
 
     with pytest.raises(OXProtocolError):
-        server.ox_review(
+        asyncio.run(server.ox_review(
             review_id="OX-000001",
             approve=True,
             target_commit="c" * 40,
-        )
+        ))
     with pytest.raises(OXProtocolError):
-        server.ox_review(review_id="OX-000001", retry=True)
+        asyncio.run(server.ox_review(review_id="OX-000001", retry=True))
 
 
 def test_continue_revalidate_and_get_review_modes_are_mutually_exclusive(monkeypatch) -> None:
@@ -271,11 +272,11 @@ def test_disabled_ox_review_fails_at_runtime_boundary(monkeypatch) -> None:
     monkeypatch.setattr(server, "ox_runtime", lambda: runtime)
 
     with pytest.raises(OXUnavailableError):
-        server.ox_review(
+        asyncio.run(server.ox_review(
             repository="fixture",
             subsystem="validation",
             target_commit="a" * 40,
             base_commit="b" * 40,
             objective="Review it.",
             verification=[{"id": "v1"}],
-        )
+        ))

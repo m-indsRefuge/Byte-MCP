@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -145,7 +146,7 @@ def fetch(
 
 
 @mcp.tool(annotations=OX_EXTERNAL)
-def ox_review(
+async def ox_review(
     repository: str | None = None,
     subsystem: str | None = None,
     target_commit: str | None = None,
@@ -182,8 +183,15 @@ def ox_review(
     if any(value is not None for value in scoped_values) or not approve:
         _invalid_ox_mode()
     if retry:
-        return _ox_service().retry_review(review_id, renewed_approval=True)
-    return _ox_service().transmit_review(review_id)
+        return await asyncio.to_thread(
+            _ox_service().retry_review,
+            review_id,
+            renewed_approval=True,
+        )
+    return await asyncio.to_thread(
+        _ox_service().transmit_review,
+        review_id,
+    )
 
 
 @mcp.tool(annotations=OX_EXTERNAL)
