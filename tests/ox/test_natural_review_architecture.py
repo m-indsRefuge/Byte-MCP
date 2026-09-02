@@ -1,5 +1,7 @@
 import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -40,6 +42,18 @@ def make_natural_service(tmp_path, client: RecordingClient):
     return service, store, repository_path, base, target, registry_path
 
 
+class BlockingNaturalClient(RecordingClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def complete(self, messages, *, json_mode: bool, attempt_id: str):
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("blocked provider fixture was not released")
+        return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
+
 def test_initial_prompt_requests_natural_engineering_review() -> None:
     messages = build_initial_messages({"artifact": "value"}, objective="Review it.")
 
@@ -65,6 +79,84 @@ def test_initial_review_uses_natural_provider_response_without_findings_parse(tm
     assert "findings" not in result
     assert store.get_review(proposal["review_id"])["attempts"][-1]["outcome"] == "COMPLETED"
 
+
+def test_q03g_initial_natural_review_returns_receipt_metadata(tmp_path) -> None:
+    client = RecordingClient()
+    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    result = service.transmit_review(proposal["review_id"])
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["json_mode"] is False
+    assert result["review_id"] == proposal["review_id"]
+    assert result["attempt_id"] == f"{proposal['review_id']}-A001"
+    assert result["state"] == ReviewState.REVIEWED.value
+    assert result["manifest_sha256"] == proposal["manifest_sha256"]
+    assert result["review_text"] == store.read_thread(
+        proposal["review_id"], "initial"
+    )[-1]["content"]
+    assert result["findings_recorded"] is False
+    assert result["replayed"] is False
+    assert result["provider_request_performed"] is True
+
+    attempt = store.get_review(proposal["review_id"])["attempts"][-1]
+    assert attempt["attempt_id"] == f"{proposal['review_id']}-A001"
+    assert attempt["manifest_sha256"] == proposal["manifest_sha256"]
+    assert attempt["outcome"] == "COMPLETED"
+
+
+def test_q03g_replayed_initial_approval_after_reviewed_uses_local_receipt_without_resend(
+    tmp_path,
+) -> None:
+    client = RecordingClient()
+    service, _, _, base, target, _ = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    first = service.transmit_review(proposal["review_id"])
+    assert first["state"] == ReviewState.REVIEWED.value
+    assert len(client.calls) == 1
+
+    replayed = service.transmit_review(proposal["review_id"])
+
+    assert len(client.calls) == 1
+    assert replayed["review_id"] == proposal["review_id"]
+    assert replayed["attempt_id"] == f"{proposal['review_id']}-A001"
+    assert replayed["state"] == ReviewState.REVIEWED.value
+    assert replayed["review_text"]
+    assert replayed["replayed"] is True
+    assert replayed["provider_request_performed"] is False
+
+
+def test_q03g_initial_approval_replay_while_transmitting_never_resends(tmp_path) -> None:
+    client = BlockingNaturalClient()
+    service, store, _, base, target, _ = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(service.transmit_review, proposal["review_id"])
+        assert client.entered.wait(timeout=5)
+
+        try:
+            replayed = service.transmit_review(proposal["review_id"])
+
+            assert replayed["review_id"] == proposal["review_id"]
+            assert replayed["attempt_id"] == f"{proposal['review_id']}-A001"
+            assert replayed["state"] == ReviewState.TRANSMITTING.value
+            assert replayed["review_text"] is None
+            assert replayed["findings_recorded"] is False
+            assert replayed["replayed"] is True
+            assert replayed["provider_request_performed"] is False
+            assert len(client.calls) == 0
+        finally:
+            client.release.set()
+            first_result = first.result(timeout=5)
+
+    assert first_result["state"] == ReviewState.REVIEWED.value
+    assert len(client.calls) == 1
+    attempts = store.get_review(proposal["review_id"])["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == f"{proposal['review_id']}-A001"
 
 def test_record_findings_is_local_immutable_and_bound_to_exact_ox_response(tmp_path) -> None:
     client = RecordingClient()
