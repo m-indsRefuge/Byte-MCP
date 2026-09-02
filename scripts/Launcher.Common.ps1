@@ -380,7 +380,16 @@ function Get-ByteMcpStatus {
     $tunnelProcess = Test-ManagedTunnelProcess -State $State
     $tunnelHealth = Test-TunnelHealth
     $tunnelReady = Test-TunnelReady
-    $overall = if ($serverProcess -and $mcpEndpoint -and $tunnelProcess -and $tunnelHealth -and $tunnelReady) {
+
+    $failedComponents = @(
+        if (-not $serverProcess) { 'ServerProcess' }
+        if (-not $mcpEndpoint) { 'McpEndpoint' }
+        if (-not $tunnelProcess) { 'TunnelProcess' }
+        if (-not $tunnelHealth) { 'TunnelHealth' }
+        if (-not $tunnelReady) { 'TunnelReady' }
+    )
+
+    $overall = if ($failedComponents.Count -eq 0) {
         'READY'
     }
     else {
@@ -394,6 +403,7 @@ function Get-ByteMcpStatus {
         TunnelProcess = $tunnelProcess
         TunnelHealth = $tunnelHealth
         TunnelReady = $tunnelReady
+        FailedComponents = $failedComponents
     }
 }
 
