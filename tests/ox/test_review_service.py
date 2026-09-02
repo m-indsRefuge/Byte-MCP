@@ -86,6 +86,44 @@ class RecordingClient:
         )
 
 
+class NaturalReviewClient(RecordingClient):
+    def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        self.calls.append(
+            {
+                "messages": [dict(message) for message in messages],
+                "json_mode": json_mode,
+                "attempt_id": attempt_id,
+            }
+        )
+        content = """# OX Review — fixture
+
+## Verdict summary
+
+I found no substantiated defect.
+
+## Observation
+
+The supplied implementation satisfies the stated contract.
+"""
+        raw = {
+            "id": f"response-{attempt_id}",
+            "model": "zai/glm-5.3-flash",
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 10,
+                "total_tokens": 30,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            },
+        }
+        return ProviderResult(
+            content=content,
+            usage=ProviderUsage(20, 10, 30, 4),
+            response_id=raw["id"],
+            model=raw["model"],
+            raw_response=raw,
+        )
+
 class MalformedClient(RecordingClient):
     def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
         self.calls.append(
@@ -345,6 +383,81 @@ def test_malformed_findings_fail_only_after_raw_response_is_durable(tmp_path) ->
     assert (directory / "findings" / "FINDINGS_INVALID-OX-000001-A001.json").is_file()
     assert store.get_review("OX-000001")["state"] == ReviewState.REVIEWED.value
 
+
+def test_initial_natural_review_returns_reviewed_receipt_without_findings_parse(
+    tmp_path,
+) -> None:
+    client = NaturalReviewClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    result = service.transmit_review(proposal["review_id"])
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["json_mode"] is False
+    assert result["state"] == ReviewState.REVIEWED.value
+    assert result["review_text"].startswith("# OX Review")
+    assert result["findings_recorded"] is False
+    assert result["replayed"] is False
+    assert result["provider_request_performed"] is True
+
+    review = store.get_review(proposal["review_id"])
+    assert review["attempts"] == [
+        {
+            "attempt_id": "OX-000001-A001",
+            "manifest_sha256": proposal["manifest_sha256"],
+            "outcome": "COMPLETED",
+        }
+    ]
+
+
+def test_replayed_initial_approval_after_reviewed_returns_existing_result_without_resend(
+    tmp_path,
+) -> None:
+    client = NaturalReviewClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    with pytest.raises(OXFindingValidationError):
+        service.transmit_review(proposal["review_id"])
+
+    assert len(client.calls) == 1
+    assert store.get_review(proposal["review_id"])["state"] == ReviewState.REVIEWED.value
+
+    replayed = service.transmit_review(proposal["review_id"])
+
+    assert len(client.calls) == 1
+    assert replayed["state"] == ReviewState.REVIEWED.value
+    assert replayed["attempt_id"] == "OX-000001-A001"
+    assert replayed["replayed"] is True
+    assert replayed["provider_request_performed"] is False
+
+
+def test_initial_approval_replay_while_transmitting_never_resends(tmp_path) -> None:
+    client = BlockingClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(service.transmit_review, proposal["review_id"])
+        assert client.entered.wait(timeout=5)
+
+        second = pool.submit(service.transmit_review, proposal["review_id"])
+        replayed = second.result(timeout=5)
+
+        assert replayed["state"] == ReviewState.TRANSMITTING.value
+        assert replayed["attempt_id"] == "OX-000001-A001"
+        assert replayed["replayed"] is True
+        assert replayed["provider_request_performed"] is False
+        assert len(client.calls) == 0
+
+        client.release.set()
+        first.result(timeout=5)
+
+    assert len(client.calls) == 1
+    attempts = store.get_review(proposal["review_id"])["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == "OX-000001-A001"
 
 def test_changed_scope_invalidates_approval_before_provider(tmp_path) -> None:
     client = RecordingClient()
