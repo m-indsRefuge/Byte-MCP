@@ -1,9 +1,9 @@
 # Q03G — Natural Review Authority and Replay-Safe Initial Approval
 
-Date: 2026-09-02  
-Status: Approved design  
-Repository: Byte-MCP  
-Subsystem: OX validation  
+Date: 2026-09-02
+Status: Approved design
+Repository: Byte-MCP
+Subsystem: OX validation
 Base checkpoint: `d152a9cf8409f8b294c30b7ad8fce327dc23aa61`
 
 ## 1. Context
