@@ -1,5 +1,6 @@
 """Fixed, single-attempt HTTP client for the OX validation provider."""
 
+import asyncio
 import json
 import math
 import re
@@ -27,6 +28,7 @@ _GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
 _MODEL = "zai/glm-5.3-flash"
 _PROVIDER_OPTIONS = {"gateway": {"only": ["zai"]}}
 _TIMEOUT = httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=10.0)
+_TOTAL_DEADLINE_SECONDS = 900.0
 _ATTEMPT_ID_PATTERN = re.compile(r"^OX-\d{6}-A\d{3}$")
 _SAFE_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
@@ -47,11 +49,26 @@ _QUOTA_ERROR_CODES = frozenset(
 )
 
 
+async def _post_with_total_deadline(
+    *,
+    transport: httpx.AsyncBaseTransport | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=transport,
+        timeout=_TIMEOUT,
+        follow_redirects=False,
+    ) as client:
+        async with asyncio.timeout(_TOTAL_DEADLINE_SECONDS):
+            return await client.post(_GATEWAY_URL, headers=headers, json=body)
+
+
 class OXClient:
     """Make one fixed, non-streaming OX provider request at a time."""
 
     def __init__(
-        self, settings: OXSettings, *, transport: httpx.BaseTransport | None = None
+        self, settings: OXSettings, *, transport: httpx.AsyncBaseTransport | None = None
     ) -> None:
         self._api_key = settings.api_key
         self._max_output_tokens = settings.max_output_tokens
@@ -87,10 +104,15 @@ class OXClient:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         request_error = None
         try:
-            with httpx.Client(
-                transport=self._transport, timeout=_TIMEOUT, follow_redirects=False
-            ) as client:
-                response = client.post(_GATEWAY_URL, headers=headers, json=body)
+            response = asyncio.run(
+                _post_with_total_deadline(
+                    transport=self._transport,
+                    headers=headers,
+                    body=body,
+                )
+            )
+        except TimeoutError:
+            request_error = OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
             request_error = OXTransportError(attempt_outcome="NOT_SENT")
         except (
