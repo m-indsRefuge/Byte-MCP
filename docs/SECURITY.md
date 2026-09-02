@@ -224,7 +224,7 @@ Initial review, blind revalidation, targeted revalidation, and ordinary continua
 
 The exact raw provider response is persisted before a successful phase is treated as durably evidenced. Natural assistant text is separately preserved in the corresponding native thread.
 
-Structured findings are created only by an explicit local Byte operation. Canonical local findings evidence uses `byte-derived-findings-v1`, identifies `derivation_authority` as `byte`, identifies the derivation source as `derived-from-ox-natural-review`, and binds to both the completed OX source attempt and the SHA-256 of the exact OX response text.
+Structured findings are created only by an explicit local Byte operation. Canonical local findings evidence uses `byte-derived-findings-v1`, identifies `derivation_authority` as `byte`, identifies the derivation source as `derived-from-ox-natural-review`, and binds to both the completed OX source attempt and the SHA-256 of the exact OX response text. No artifact means no canonical findings decision has been recorded; an explicitly persisted empty findings set means Byte deliberately recorded zero canonical findings.
 
 Targeted revalidation may consume those findings only when this provenance is present. The outbound targeted packet labels them as Byte-derived context so OX is never told that Byte's structured interpretation was verbatim prior OX output.
 
@@ -233,6 +233,8 @@ This is a trust-boundary rule, not merely a formatting preference.
 ## OX attempts, failures, and retries
 
 Every outbound attempt receives an identity and durable local intent/evidence before the provider boundary is crossed. If pre-request evidence persistence fails, the provider is not called.
+
+Ordinary initial-review approval is idempotent once A001 has been claimed. A repeated approval while the review is `TRANSMITTING` or already `REVIEWED` is satisfied entirely from local evidence: it performs no second provider request and creates no A002. This replay-safe behavior does not weaken retry authorization for terminal uncertainty or failure states.
 
 V1 performs no automatic retries. Transport/provider outcomes distinguish successful completion from failures and from `OUTCOME_UNKNOWN`, where a timeout or connection failure may have occurred after request upload. Byte-MCP never assumes an ambiguous attempt was not received.
 

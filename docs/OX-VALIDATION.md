@@ -222,7 +222,11 @@ Any mismatch fails before the provider boundary.
 
 Only after those checks does Byte-MCP claim a transmission attempt, persist attempt identity, append the native request messages, and invoke the fixed OX client.
 
-A successful initial provider call uses natural text mode. The exact raw provider response is persisted before the review is treated as successfully evidenced. The assistant response text is stored in the native review thread and returned as `response`; OX is not required to satisfy a local findings schema.
+A successful initial provider call uses natural text mode. The exact raw provider response is persisted before the review is treated as successfully evidenced. The assistant response text is stored in the native review thread and returned in the initial-review receipt as `review_text`; OX is not required to satisfy a local findings schema.
+
+The initial-review receipt also reports `findings_recorded`, `replayed`, and `provider_request_performed`. On the first successful transmission, `replayed=false` and `provider_request_performed=true`.
+
+Ordinary repeated approval is replay-safe. If the initial attempt is already `TRANSMITTING`, Byte-MCP performs no new provider request and creates no new attempt; it returns a local receipt for the in-flight A001 with `replayed=true`, `provider_request_performed=false`, and `review_text=null` until durable assistant response evidence exists. If the review is already `REVIEWED`, Byte-MCP again performs no provider request and returns a local receipt reconstructed from the immutable provider-response evidence and cross-checked against the persisted native thread. `FAILED` and `OUTCOME_UNKNOWN` remain retry states and require the explicit retry path with renewed human approval.
 
 ## Continuation
 
@@ -261,6 +265,8 @@ The record also binds to:
 - `source_response_sha256`, the SHA-256 of the exact natural OX response text used as the derivation source.
 
 Each local finding is still validated against the strict finding-field contract before persistence. Invalid severity/confidence/fields, non-finite numeric values, malformed values, or configured credentials fail closed before findings evidence is written.
+
+An explicit empty findings list is valid. `record_findings([])` persists an immutable `byte-derived-findings-v1` artifact with `findings=[]`; this means Byte explicitly recorded zero canonical findings. It is distinct from the absence of a canonical findings artifact.
 
 This distinction is important: the structured finding is **Byte's evidence-based interpretation of OX**, not a claim that OX emitted the same JSON object verbatim.
 
@@ -363,7 +369,7 @@ Raw provider responses, native messages, Byte-derived findings, adjudication, at
 
 Unsupported views fail explicitly. Every returned view is checked for the configured gateway credential before it crosses the MCP boundary, including legacy/tampered evidence.
 
-The `findings` view reflects local findings evidence when Byte has explicitly recorded it; it must not be read as a verbatim rendering of natural OX output.
+The `findings` view reflects local findings evidence when Byte has explicitly recorded it; it must not be read as a verbatim rendering of natural OX output. The view reports `recorded=false` with `findings=[]` when no canonical findings artifact exists. After any explicit `record_findings(...)` call, including `record_findings([])`, it reports `recorded=true` and returns the persisted Byte-derived findings payload.
 
 ## Provider boundary
 
