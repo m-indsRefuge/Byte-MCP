@@ -75,7 +75,7 @@ def test_initial_review_uses_natural_provider_response_without_findings_parse(tm
     assert len(client.calls) == 1
     assert client.calls[0]["json_mode"] is False
     assert result["state"] == ReviewState.REVIEWED.value
-    assert result["response"]
+    assert result["review_text"]
     assert "findings" not in result
     assert store.get_review(proposal["review_id"])["attempts"][-1]["outcome"] == "COMPLETED"
 
@@ -127,6 +127,24 @@ def test_q03g_replayed_initial_approval_after_reviewed_uses_local_receipt_withou
     assert replayed["replayed"] is True
     assert replayed["provider_request_performed"] is False
 
+
+def test_q03g_replayed_receipt_reflects_current_findings_recorded_state(tmp_path) -> None:
+    client = RecordingClient()
+    service, _, _, base, target, _ = make_natural_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review_id = proposal["review_id"]
+
+    service.transmit_review(review_id)
+    service.record_findings(review_id, [])
+    calls_before = len(client.calls)
+
+    replayed = service.transmit_review(review_id)
+
+    assert len(client.calls) == calls_before
+    assert replayed["state"] == ReviewState.REVIEWED.value
+    assert replayed["findings_recorded"] is True
+    assert replayed["replayed"] is True
+    assert replayed["provider_request_performed"] is False
 
 def test_q03g_initial_approval_replay_while_transmitting_never_resends(tmp_path) -> None:
     client = BlockingNaturalClient()
@@ -198,7 +216,7 @@ def test_q03g_record_findings_accepts_explicit_empty_set_without_provider_call(
     assert result["review_id"] == proposal["review_id"]
     assert result["source_attempt_id"] == f"{proposal['review_id']}-A001"
     assert result["source_response_sha256"] == hashlib.sha256(
-        review["response"].encode("utf-8")
+        review["review_text"].encode("utf-8")
     ).hexdigest()
     assert result["derivation_authority"] == "byte"
     assert result["derivation_provenance"] == "derived-from-ox-natural-review"
@@ -227,7 +245,7 @@ def test_record_findings_is_local_immutable_and_bound_to_exact_ox_response(tmp_p
     assert result["review_id"] == proposal["review_id"]
     assert result["source_attempt_id"] == f"{proposal['review_id']}-A001"
     assert result["source_response_sha256"] == hashlib.sha256(
-        review["response"].encode("utf-8")
+        review["review_text"].encode("utf-8")
     ).hexdigest()
     assert result["derivation_authority"] == "byte"
     assert result["derivation_provenance"] == "derived-from-ox-natural-review"

@@ -21,6 +21,141 @@ from .service import OXReviewService as BaseOXReviewService
 class OXReviewService(BaseOXReviewService):
     """Use natural OX review text while retaining base approval/evidence controls."""
 
+    def transmit_review(self, review_id: str) -> dict[str, object]:
+        """Send a fresh initial review or replay its local receipt without resending."""
+        try:
+            review = self._evidence.get_review(review_id)
+        except OXEvidenceError as exc:
+            raise OXApprovalError("review evidence is unavailable") from exc
+
+        state = review.get("state")
+        if state == ReviewState.PREPARED.value:
+            return super().transmit_review(review_id)
+
+        if state == ReviewState.TRANSMITTING.value:
+            attempt = self._select_initial_receipt_attempt(review, current_only=True)
+            if attempt is None:
+                return super().transmit_review(review_id)
+            return self._initial_review_receipt(
+                review,
+                attempt,
+                review_text=None,
+                usage=None,
+                replayed=True,
+                provider_request_performed=False,
+            )
+
+        if state == ReviewState.REVIEWED.value:
+            attempt = self._select_initial_receipt_attempt(review, current_only=False)
+            if attempt is None:
+                raise OXEvidenceError("completed initial OX attempt evidence is unavailable")
+            attempt_id = attempt["attempt_id"]
+            if not isinstance(attempt_id, str):
+                raise OXEvidenceError("initial OX attempt evidence is malformed")
+            review_text = self._read_initial_review_text(review_id, attempt_id)
+            return self._initial_review_receipt(
+                review,
+                attempt,
+                review_text=review_text,
+                usage=None,
+                replayed=True,
+                provider_request_performed=False,
+            )
+
+        return super().transmit_review(review_id)
+
+    def _select_initial_receipt_attempt(
+        self,
+        review: Mapping[str, object],
+        *,
+        current_only: bool,
+    ) -> Mapping[str, object] | None:
+        review_id = review.get("review_id")
+        attempts = review.get("attempts")
+        if not isinstance(review_id, str) or not isinstance(attempts, list) or not attempts:
+            raise OXEvidenceError("review attempt evidence is malformed")
+
+        candidates = attempts[-1:] if current_only else list(reversed(attempts))
+        for attempt in candidates:
+            if not isinstance(attempt, Mapping):
+                raise OXEvidenceError("review attempt evidence is malformed")
+            attempt_id = attempt.get("attempt_id")
+            manifest_sha256 = attempt.get("manifest_sha256")
+            if not isinstance(attempt_id, str) or not isinstance(manifest_sha256, str):
+                raise OXEvidenceError("review attempt evidence is malformed")
+            identity = self._evidence.read_attempt_identity(review_id, attempt_id)
+            if identity.get("phase") not in {"initial", "initial-retry"}:
+                if current_only:
+                    return None
+                continue
+            if (
+                not current_only
+                and attempt.get("outcome") != AttemptOutcome.COMPLETED.value
+            ):
+                continue
+            return attempt
+
+        return None
+
+    def _read_initial_review_text(self, review_id: str, attempt_id: str) -> str:
+        raw = self._evidence.read_provider_response(review_id, attempt_id)
+        choices = raw.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise OXEvidenceError("provider response evidence is malformed")
+        choice = choices[0]
+        if not isinstance(choice, Mapping):
+            raise OXEvidenceError("provider response evidence is malformed")
+        message = choice.get("message")
+        if not isinstance(message, Mapping):
+            raise OXEvidenceError("provider response evidence is malformed")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise OXEvidenceError("provider response evidence is malformed")
+
+        thread = self._evidence.read_thread(review_id, "initial")
+        if not any(
+            item.get("role") == "assistant" and item.get("content") == content
+            for item in thread
+        ):
+            raise OXEvidenceError("provider response evidence does not match review thread")
+        return content
+
+    def _initial_review_receipt(
+        self,
+        review: Mapping[str, object],
+        attempt: Mapping[str, object],
+        *,
+        review_text: str | None,
+        usage: Mapping[str, object] | None,
+        replayed: bool,
+        provider_request_performed: bool,
+    ) -> dict[str, object]:
+        review_id = review.get("review_id")
+        state = review.get("state")
+        attempt_id = attempt.get("attempt_id")
+        manifest_sha256 = attempt.get("manifest_sha256")
+        if (
+            not isinstance(review_id, str)
+            or state not in {
+                ReviewState.TRANSMITTING.value,
+                ReviewState.REVIEWED.value,
+            }
+            or not isinstance(attempt_id, str)
+            or not isinstance(manifest_sha256, str)
+        ):
+            raise OXEvidenceError("initial review receipt evidence is malformed")
+
+        return {
+            "review_id": review_id,
+            "attempt_id": attempt_id,
+            "state": state,
+            "manifest_sha256": manifest_sha256,
+            "review_text": review_text,
+            "findings_recorded": self._evidence.findings_recorded(review_id),
+            "usage": dict(usage) if usage is not None else None,
+            "replayed": replayed,
+            "provider_request_performed": provider_request_performed,
+        }
     def _perform_attempt(
         self,
         *,
@@ -69,14 +204,18 @@ class OXReviewService(BaseOXReviewService):
             manifest_sha256,
             AttemptOutcome.COMPLETED.value,
         )
-        return {
-            "review_id": review_id,
-            "attempt_id": attempt_id,
-            "state": ReviewState.REVIEWED.value,
-            "manifest_sha256": manifest_sha256,
-            "response": result.content,
-            "usage": asdict(result.usage) if result.usage is not None else None,
-        }
+        completed_review = self._evidence.get_review(review_id)
+        return self._initial_review_receipt(
+            completed_review,
+            {
+                "attempt_id": attempt_id,
+                "manifest_sha256": manifest_sha256,
+            },
+            review_text=result.content,
+            usage=asdict(result.usage) if result.usage is not None else None,
+            replayed=False,
+            provider_request_performed=True,
+        )
 
     def record_findings(
         self,

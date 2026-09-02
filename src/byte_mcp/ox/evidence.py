@@ -494,6 +494,21 @@ class EvidenceStore:
             except (OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to persist provider response") from None
 
+    def read_provider_response(self, review_id: str, attempt_id: str) -> dict[str, object]:
+        self._require_attempt_id(review_id, attempt_id)
+        with self._lock_for(review_id):
+            self._require_review_dir(review_id)
+            try:
+                value = self._read_json(
+                    self._review_dir(review_id) / "responses" / f"{attempt_id}.json"
+                )
+            except FileNotFoundError:
+                raise OXEvidenceError("provider response evidence was not found") from None
+            except (OSError, TypeError, ValueError):
+                raise OXEvidenceError("unable to read provider response") from None
+            if not isinstance(value, dict):
+                raise OXEvidenceError("provider response evidence is malformed")
+            return value
     def persist_findings(self, review_id: str, findings: Mapping[str, object]) -> None:
         with self._lock_for(review_id):
             try:
