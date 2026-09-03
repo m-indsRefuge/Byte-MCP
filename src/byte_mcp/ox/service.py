@@ -21,8 +21,8 @@ from byte_mcp.errors import (
     OXUnavailableError,
 )
 
-from ._service_q03g import OXReviewService as _Q03GReviewService
 from ._service_q03g import _PROVIDER_ERRORS, _history_sha256
+from ._service_q03g import OXReviewService as _Q03GReviewService
 from .jobs import (
     OXActiveLaunch,
     OXLaneLease,
