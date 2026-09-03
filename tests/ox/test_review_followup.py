@@ -1,16 +1,23 @@
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import pytest
 
 from byte_mcp.errors import (
     OXApprovalError,
+    OXEvidenceError,
     OXFindingValidationError,
     OXProtocolError,
     OXTransportError,
+    OXUnavailableError,
 )
-from byte_mcp.ox.models import ProviderResult, ProviderUsage, ReviewState
+from byte_mcp.ox.evidence import EvidenceStore
+from byte_mcp.ox.jobs import OXLaneLease, OXOperationKey
+from byte_mcp.ox.models import AttemptOutcome, ProviderResult, ProviderUsage, ReviewState
+from byte_mcp.ox.service import _history_sha256
 from tests.ox.helpers import commit_files
-from tests.ox.q03h_initial_support import wait_for_state
+from tests.ox.q03h_initial_support import wait_for_lane_release, wait_for_state
 from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
 
 
@@ -107,6 +114,71 @@ class UnknownTargetedClient(RecordingClient):
             )
             raise OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
         return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
+
+
+class BlockingContinuationClient(TextClient):
+    def __init__(self, order: list[str] | None = None) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.order = order
+
+    def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        if json_mode:
+            return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
+        self.calls.append(
+            {
+                "messages": [dict(message) for message in messages],
+                "json_mode": json_mode,
+                "attempt_id": attempt_id,
+            }
+        )
+        if self.order is not None:
+            self.order.append("client.complete")
+        self.entered.set()
+        if not self.release.wait(timeout=5):
+            raise AssertionError("blocked continuation fixture was not released")
+        raw = {
+            "id": f"response-{attempt_id}",
+            "model": "zai/glm-5.3-flash",
+            "choices": [{"message": {"role": "assistant", "content": "Continued."}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }
+        return ProviderResult(
+            "Continued.",
+            ProviderUsage(5, 2, 7, 0),
+            response_id=raw["id"],
+            model=raw["model"],
+            raw_response=raw,
+        )
+
+
+class OrderedContinuationStore(EvidenceStore):
+    def __init__(self, root, order: list[str]) -> None:
+        super().__init__(root)
+        self.order = order
+        self.record_continuation = False
+
+    def record_provider_request_started(self, *args, **kwargs) -> None:
+        if self.record_continuation:
+            self.order.append("provider-start")
+        super().record_provider_request_started(*args, **kwargs)
+
+    def persist_provider_response(self, *args, **kwargs) -> None:
+        if self.record_continuation:
+            self.order.append("raw-response")
+        super().persist_provider_response(*args, **kwargs)
+
+    def append_thread_message(self, review_id, thread_name, message) -> None:
+        if self.record_continuation and message.get("role") == "assistant":
+            self.order.append("assistant-thread")
+        super().append_thread_message(review_id, thread_name, message)
+
+    def record_attempt_outcome(self, review_id, attempt_id, outcome) -> None:
+        if self.record_continuation:
+            value = outcome.value if isinstance(outcome, AttemptOutcome) else outcome
+            self.order.append(f"outcome:{value}")
+        super().record_attempt_outcome(review_id, attempt_id, outcome)
 
 
 def _establish_review(service, base: str, target: str) -> str:
@@ -371,3 +443,202 @@ def test_targeted_revalidation_blocked_after_malformed_blind_findings(tmp_path) 
         )
 
     assert len(client.calls) == calls_before_targeted
+
+
+def test_q03h_ac13_continuation_launch_preserves_history_and_natural_response(
+    tmp_path,
+) -> None:
+    order: list[str] = []
+    client = BlockingContinuationClient(order)
+    store = OrderedContinuationStore(tmp_path / "evidence", order)
+    service, _, _, base, target, _ = make_service(tmp_path, client, evidence=store)
+    review_id = _establish_review(service, base, target)
+    store.record_continuation = True
+    calls_before = len(client.calls)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            service.continue_message,
+            review_id,
+            "Explain the evidence for F001.",
+        )
+        assert client.entered.wait(timeout=5)
+        try:
+            receipt = future.result(timeout=0.25)
+        except TimeoutError:
+            client.release.set()
+            future.result(timeout=5)
+            raise
+
+    assert receipt["review_id"] == review_id
+    assert receipt["attempt_id"] == f"{review_id}-A002"
+    assert receipt["state"] == ReviewState.TRANSMITTING.value
+    assert receipt["launch_accepted"] is True
+    assert receipt["replayed"] is False
+    assert receipt["provider_request_performed"] is False
+    assert len(client.calls) == calls_before + 1
+    assert client.calls[-1]["json_mode"] is False
+
+    thread = service.get_review(review_id, view="thread")["messages"]
+    assert thread[-1] == {
+        "role": "user",
+        "content": "Explain the evidence for F001.",
+    }
+    assert sum(
+        message == {
+            "role": "user",
+            "content": "Explain the evidence for F001.",
+        }
+        for message in thread
+    ) == 1
+    identity = store.read_attempt_identity(review_id, receipt["attempt_id"])
+    assert identity["history_sha256"] == _history_sha256(client.calls[-1]["messages"])
+
+    replay = service.continue_message(review_id, "Explain the evidence for F001.")
+    assert replay["attempt_id"] == receipt["attempt_id"]
+    assert replay["launch_accepted"] is False
+    assert replay["replayed"] is True
+    assert len(client.calls) == calls_before + 1
+
+    client.release.set()
+    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
+    final_thread = service.get_review(review_id, view="thread")["messages"]
+    assert final_thread[-1] == {"role": "assistant", "content": "Continued."}
+    assert order.index("provider-start") < order.index("client.complete")
+    assert order.index("client.complete") < order.index("raw-response")
+    assert order.index("raw-response") < order.index("assistant-thread")
+    assert order.index("assistant-thread") < order.index("outcome:COMPLETED")
+
+
+def test_q03h_ac14_continuation_retry_requires_latest_attempt_and_approval(
+    tmp_path,
+) -> None:
+    client = UnknownContinuationClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    review_id = _establish_review(service, base, target)
+    calls_before = len(client.calls)
+
+    first = service.continue_message(review_id, "Please test the disproof condition.")
+    assert first["attempt_id"] == f"{review_id}-A002"
+    assert first["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, review_id, ReviewState.OUTCOME_UNKNOWN)
+    wait_for_lane_release(service._jobs)
+    assert len(client.calls) == calls_before + 1
+
+    with pytest.raises(OXApprovalError):
+        service.retry_continuation(
+            review_id,
+            first["attempt_id"],
+            renewed_approval=False,
+        )
+    with pytest.raises(OXApprovalError):
+        service.retry_continuation(
+            review_id,
+            f"{review_id}-A001",
+            renewed_approval=True,
+        )
+    assert len(client.calls) == calls_before + 1
+    assert len(store.get_review(review_id)["attempts"]) == 2
+
+    retry = service.retry_continuation(
+        review_id,
+        first["attempt_id"],
+        renewed_approval=True,
+    )
+    assert retry["attempt_id"] == f"{review_id}-A003"
+    assert retry["state"] == ReviewState.TRANSMITTING.value
+    assert retry["launch_accepted"] is True
+    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
+
+    assert len(client.calls) == calls_before + 2
+    assert client.calls[-1]["json_mode"] is False
+    attempts = store.get_review(review_id)["attempts"]
+    assert [attempt["attempt_id"] for attempt in attempts] == [
+        f"{review_id}-A001",
+        f"{review_id}-A002",
+        f"{review_id}-A003",
+    ]
+    assert all(
+        attempt["runtime_session_id"] == service._jobs.runtime_session_id
+        for attempt in attempts
+    )
+
+
+@pytest.mark.parametrize("path", ["continuation", "retry"])
+def test_continuation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane(
+    tmp_path,
+    monkeypatch,
+    path: str,
+) -> None:
+    client = UnknownContinuationClient() if path == "retry" else TextClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    review_id = _establish_review(service, base, target)
+
+    retry_of: str | None = None
+    if path == "retry":
+        launch = service.continue_message(review_id, "Create one failed continuation.")
+        wait_for_state(store, review_id, ReviewState.OUTCOME_UNKNOWN)
+        wait_for_lane_release(service._jobs)
+        retry_of = launch["attempt_id"]
+
+    calls_before = len(client.calls)
+
+    def fail_identity(*_args, **_kwargs) -> None:
+        raise OXEvidenceError("synthetic continuation identity failure")
+
+    monkeypatch.setattr(service, "_persist_attempt_identity", fail_identity)
+
+    with pytest.raises(OXEvidenceError, match="synthetic continuation identity failure"):
+        if path == "continuation":
+            service.continue_message(review_id, "This launch must not escape.")
+        else:
+            assert retry_of is not None
+            service.retry_continuation(
+                review_id,
+                retry_of,
+                renewed_approval=True,
+            )
+
+    failed = store.get_review(review_id)["attempts"][-1]
+    assert failed["outcome"] == AttemptOutcome.NOT_SENT.value
+    assert "provider_started_at" not in failed
+    assert len(client.calls) == calls_before
+    key = OXOperationKey(
+        operation="continuation-probe",
+        subject_id=review_id,
+        input_sha256="a" * 64,
+    )
+    lease = service._jobs.reserve(key)
+    assert isinstance(lease, OXLaneLease)
+    service._jobs.abandon(lease)
+
+
+def test_continuation_terminalization_failure_faults_lane_closed(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    client = TextClient()
+    service, _, _, base, target, _ = make_service(tmp_path, client)
+    review_id = _establish_review(service, base, target)
+
+    def fail_identity(*_args, **_kwargs) -> None:
+        raise OXEvidenceError("synthetic continuation identity failure")
+
+    def fail_terminal(*_args, **_kwargs) -> None:
+        raise OXEvidenceError("synthetic continuation terminal failure")
+
+    monkeypatch.setattr(service, "_persist_attempt_identity", fail_identity)
+    monkeypatch.setattr(service._evidence, "record_attempt_outcome", fail_terminal)
+
+    with pytest.raises(OXEvidenceError):
+        service.continue_message(review_id, "This launch must fault closed.")
+
+    key = OXOperationKey(
+        operation="continuation-probe",
+        subject_id=review_id,
+        input_sha256="b" * 64,
+    )
+    with pytest.raises(OXUnavailableError):
+        service._jobs.reserve(key)
