@@ -3,8 +3,18 @@
 import asyncio
 import inspect
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from byte_mcp import server
+from byte_mcp.ox.models import ReviewState
+from tests.ox.q03h_revalidation_support import (
+    RevalidationNaturalClient,
+    establish_initial_review,
+    make_revalidation_service,
+    prepare_revalidation,
+    wait_for_lane_release,
+    wait_for_revalidation_state,
+)
 
 
 def test_ox_revalidate_provider_path_is_async() -> None:
@@ -14,7 +24,6 @@ def test_ox_revalidate_provider_path_is_async() -> None:
         "revalidation work can be offloaded from the MCP v1 "
         "event-loop thread"
     )
-
 
 
 async def _invoke_revalidate(**kwargs):
@@ -60,6 +69,57 @@ def test_prepare_revalidation_remains_local_and_inline(monkeypatch) -> None:
     )
 
     assert result["path"] == "prepare"
+
+
+def test_q03h_ac15_blind_revalidation_launches_promptly_in_natural_mode(tmp_path) -> None:
+    client = RevalidationNaturalClient()
+    service, store, jobs, repository_path, base, target = make_revalidation_service(
+        tmp_path,
+        client,
+    )
+    review_id = establish_initial_review(service, store, jobs, base, target)
+    revalidation_id = prepare_revalidation(
+        service,
+        repository_path,
+        review_id,
+        target,
+    )
+    calls_before = len(client.calls)
+    client.block_next = True
+    client.entered.clear()
+    client.release.clear()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(service.transmit_blind_revalidation, revalidation_id)
+        assert client.entered.wait(timeout=5)
+        try:
+            receipt = future.result(timeout=0.25)
+        except TimeoutError:
+            client.release.set()
+            future.result(timeout=5)
+            raise
+
+    assert receipt["revalidation_id"] == revalidation_id
+    assert receipt["state"] == ReviewState.TRANSMITTING.value
+    assert receipt["launch_accepted"] is True
+    assert receipt["replayed"] is False
+    assert receipt["provider_request_performed"] is False
+    assert len(client.calls) == calls_before + 1
+    assert client.calls[-1]["json_mode"] is False
+    attempts = store.get_revalidation(revalidation_id)["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["runtime_session_id"] == jobs.runtime_session_id
+
+    replay = service.transmit_blind_revalidation(revalidation_id)
+    assert replay["attempt_id"] == receipt["attempt_id"]
+    assert replay["launch_accepted"] is False
+    assert replay["replayed"] is True
+    assert len(client.calls) == calls_before + 1
+    assert len(store.get_revalidation(revalidation_id)["attempts"]) == 1
+
+    client.release.set()
+    wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
+    wait_for_lane_release(jobs)
 
 
 def test_targeted_revalidation_slow_provider_does_not_block_event_loop(
