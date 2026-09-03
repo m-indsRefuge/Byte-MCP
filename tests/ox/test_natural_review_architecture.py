@@ -441,3 +441,30 @@ def test_q03h_ac11_initial_worker_is_natural_exactly_once_and_orders_evidence(tm
     attempt = store.get_review(review_id)["attempts"][-1]
     assert attempt["runtime_session_id"] == jobs.runtime_session_id
     assert "provider_started_at" in attempt
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "initial",
+        "initial-retry",
+        "continuation",
+        "continuation-retry",
+        "blind",
+        "revalidation-retry",
+        "targeted",
+    ],
+)
+def test_q03h_ac06_all_provider_workers_record_start_immediately_before_call(
+    tmp_path,
+    path: str,
+) -> None:
+    order, attempt_id, runtime_session_id, phase = q03hr.exercise_provider_path(
+        tmp_path,
+        path,
+    )
+
+    assert order == [
+        ("provider-start", attempt_id, runtime_session_id, phase),
+        ("client.complete", attempt_id, False),
+    ]
