@@ -1,6 +1,7 @@
 import hashlib
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import pytest
 
@@ -11,6 +12,7 @@ from byte_mcp.ox.natural_service import OXReviewService
 from byte_mcp.ox.protocol import build_initial_messages
 from byte_mcp.ox.settings import OXSettings
 from tests.ox import q03h_initial_support as q03h
+from tests.ox import q03h_revalidation_support as q03hr
 from tests.ox.helpers import commit_files, create_repository
 from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
 
@@ -284,52 +286,75 @@ def test_record_findings_rejects_malformed_local_interpretation_without_provider
     assert len(client.calls) == calls_before
 
 
-def test_natural_blind_and_targeted_revalidation_preserve_byte_provenance(tmp_path) -> None:
-    client = RecordingClient()
-    service, store, repository_path, base, target, _ = make_natural_service(tmp_path, client)
-    proposal = prepare(service, base, target)
-    review_id = proposal["review_id"]
-    _complete_initial(service, store, review_id)
-    service.record_findings(review_id, [derived_finding()])
-    remediation = commit_files(
+def test_q03h_ac17_targeted_revalidation_preserves_byte_provenance_and_launches_once(
+    tmp_path,
+) -> None:
+    client = q03hr.RevalidationNaturalClient()
+    service, store, jobs, repository_path, base, target = q03hr.make_revalidation_service(
+        tmp_path,
+        client,
+    )
+    review_id = q03hr.establish_initial_review(service, store, jobs, base, target)
+    finding_id = q03hr.establish_byte_provenance(service, review_id)
+    revalidation_id = q03hr.prepare_revalidation(
+        service,
         repository_path,
-        {"src/alpha.py": b"value = 'remediated'\n"},
-        b"remediation",
-    )
-    revalidation = service.prepare_revalidation(
         review_id,
-        target_commit=remediation,
-        base_commit=target,
-        verification=verification(),
+        target,
     )
 
-    with pytest.raises(OXApprovalError):
-        service.run_targeted_revalidation(
-            revalidation["revalidation_id"], [f"{review_id}-F001"]
+    blind = service.transmit_blind_revalidation(revalidation_id)
+    if blind["state"] == ReviewState.TRANSMITTING.value:
+        q03hr.wait_for_revalidation_state(
+            store,
+            revalidation_id,
+            ReviewState.BLIND_REVALIDATED,
         )
+        q03hr.wait_for_lane_release(jobs)
+    calls_before_targeted = len(client.calls)
+    client.block_next = True
+    client.entered.clear()
+    client.release.clear()
 
-    blind = service.transmit_blind_revalidation(revalidation["revalidation_id"])
-    blind_call = client.calls[-1]
-    assert blind_call["json_mode"] is False
-    assert blind["state"] == ReviewState.BLIND_REVALIDATED.value
-    assert blind["response"]
-    assert "findings" not in blind
-    assert "derived-from-ox-natural-review" not in json.dumps(blind_call["messages"])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            service.run_targeted_revalidation,
+            revalidation_id,
+            [finding_id],
+        )
+        assert client.entered.wait(timeout=5)
+        try:
+            targeted = future.result(timeout=0.25)
+        except TimeoutError:
+            client.release.set()
+            future.result(timeout=5)
+            raise
 
-    targeted = service.run_targeted_revalidation(
-        revalidation["revalidation_id"], [f"{review_id}-F001"]
-    )
+    assert targeted["state"] == ReviewState.TRANSMITTING.value
+    assert targeted["launch_accepted"] is True
+    assert targeted["replayed"] is False
+    assert targeted["provider_request_performed"] is False
+    assert len(client.calls) == calls_before_targeted + 1
     targeted_call = client.calls[-1]
+    assert targeted_call["json_mode"] is False
     targeted_payload = json.loads(targeted_call["messages"][-1]["content"])
     targeted_context = targeted_payload["review_packet"]["targeted_context"]
     provenance = targeted_context["byte_derived_findings_provenance"]
-    assert targeted_call["json_mode"] is False
-    assert targeted["state"] == ReviewState.REVALIDATED.value
-    assert targeted["response"]
-    assert "findings" not in targeted
     assert provenance["derivation_authority"] == "byte"
     assert provenance["derivation_provenance"] == "derived-from-ox-natural-review"
     assert len(targeted_context["byte_derived_findings"]) == 1
+    assert targeted_context["byte_derived_findings"][0]["finding_id"] == finding_id
+    assert len(targeted_context["byte_adjudications"]) == 1
+
+    replay = service.run_targeted_revalidation(revalidation_id, [finding_id])
+    assert replay["attempt_id"] == targeted["attempt_id"]
+    assert replay["launch_accepted"] is False
+    assert replay["replayed"] is True
+    assert len(client.calls) == calls_before_targeted + 1
+
+    client.release.set()
+    q03hr.wait_for_revalidation_state(store, revalidation_id, ReviewState.REVALIDATED)
+    q03hr.wait_for_lane_release(jobs)
 
 
 def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blind(
