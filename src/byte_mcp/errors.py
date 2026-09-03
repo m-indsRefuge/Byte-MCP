@@ -1,5 +1,7 @@
 """Domain errors for Byte-MCP."""
 
+from enum import StrEnum
+
 
 class ByteMCPError(Exception):
     """Base error for expected Byte-MCP failures."""
@@ -143,8 +145,34 @@ class OXProviderUnavailableError(_ProviderCallError):
     pass
 
 
+class OXTransportFailureKind(StrEnum):
+    ABSOLUTE_DEADLINE = "ABSOLUTE_DEADLINE"
+    READ_TIMEOUT = "READ_TIMEOUT"
+    READ_ERROR = "READ_ERROR"
+    WRITE_TIMEOUT = "WRITE_TIMEOUT"
+    WRITE_ERROR = "WRITE_ERROR"
+    REMOTE_PROTOCOL_ERROR = "REMOTE_PROTOCOL_ERROR"
+    HTTP_TRANSPORT_ERROR = "HTTP_TRANSPORT_ERROR"
+    CONNECT_TIMEOUT = "CONNECT_TIMEOUT"
+    CONNECT_ERROR = "CONNECT_ERROR"
+    POOL_TIMEOUT = "POOL_TIMEOUT"
+
+
 class OXTransportError(_ProviderCallError):
-    pass
+    def __init__(
+        self,
+        *,
+        attempt_outcome: str = "OUTCOME_UNKNOWN",
+        transport_failure_kind: OXTransportFailureKind | None = None,
+        provider_started_at: str | None = None,
+        provider_finished_at: str | None = None,
+        elapsed_ms: int | None = None,
+    ) -> None:
+        self.transport_failure_kind = transport_failure_kind
+        self.provider_started_at = provider_started_at
+        self.provider_finished_at = provider_finished_at
+        self.elapsed_ms = elapsed_ms
+        super().__init__(attempt_outcome=attempt_outcome)
 
 
 class OXProtocolError(_ProviderCallError):

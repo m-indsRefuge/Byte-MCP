@@ -1,5 +1,6 @@
 import json
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -16,6 +17,7 @@ from byte_mcp.errors import (
     OXRequestError,
     OXTransportError,
 )
+from byte_mcp.ox import client as client_module
 from byte_mcp.ox.client import OXClient
 from byte_mcp.ox.models import ProviderUsage
 from byte_mcp.ox.settings import OXSettings
@@ -167,6 +169,86 @@ def test_complete_maps_transport_failure_without_retry(exception_type, outcome):
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
     assert SECRET not in repr(raised.value)
+
+
+def test_q03h_ac08_ambiguous_transport_diagnostic_is_bounded_and_timed():
+    sentinel = "Q03H-READ-ERROR-SENTINEL"
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadError(sentinel, request=request)
+
+    earliest = datetime.now(UTC)
+    with pytest.raises(OXTransportError) as raised:
+        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+    latest = datetime.now(UTC)
+
+    assert calls == 1
+    assert raised.value.attempt_outcome == "OUTCOME_UNKNOWN"
+    assert raised.value.transport_failure_kind == "READ_ERROR"
+    started_at = datetime.fromisoformat(raised.value.provider_started_at)
+    finished_at = datetime.fromisoformat(raised.value.provider_finished_at)
+    assert started_at.tzinfo == UTC
+    assert finished_at.tzinfo == UTC
+    assert earliest <= started_at <= finished_at <= latest
+    assert raised.value.elapsed_ms >= 0
+    assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert sentinel not in repr(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "outcome", "kind"),
+    [
+        (TimeoutError, "OUTCOME_UNKNOWN", "ABSOLUTE_DEADLINE"),
+        (httpx.ConnectTimeout, "NOT_SENT", "CONNECT_TIMEOUT"),
+        (httpx.ConnectError, "NOT_SENT", "CONNECT_ERROR"),
+        (httpx.PoolTimeout, "NOT_SENT", "POOL_TIMEOUT"),
+        (httpx.ReadTimeout, "OUTCOME_UNKNOWN", "READ_TIMEOUT"),
+        (httpx.ReadError, "OUTCOME_UNKNOWN", "READ_ERROR"),
+        (httpx.WriteTimeout, "OUTCOME_UNKNOWN", "WRITE_TIMEOUT"),
+        (httpx.WriteError, "OUTCOME_UNKNOWN", "WRITE_ERROR"),
+        (httpx.RemoteProtocolError, "OUTCOME_UNKNOWN", "REMOTE_PROTOCOL_ERROR"),
+        (httpx.HTTPError, "OUTCOME_UNKNOWN", "HTTP_TRANSPORT_ERROR"),
+    ],
+)
+def test_q03h_ac09_transport_exception_matrix_preserves_outcome_and_kind(
+    monkeypatch, exception_type, outcome, kind
+):
+    sentinel = f"Q03H-{exception_type.__name__}-SENTINEL"
+    calls = 0
+
+    if exception_type in (TimeoutError, httpx.HTTPError):
+
+        async def raise_from_boundary(**kwargs):
+            nonlocal calls
+            calls += 1
+            raise exception_type(sentinel)
+
+        monkeypatch.setattr(client_module, "_post_with_total_deadline", raise_from_boundary)
+        client = OXClient(make_settings())
+    else:
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            raise exception_type(sentinel, request=request)
+
+        client = make_client(handler)
+
+    with pytest.raises(OXTransportError) as raised:
+        client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+
+    assert calls == 1
+    assert raised.value.attempt_outcome == outcome
+    assert raised.value.transport_failure_kind == kind
+    assert raised.value.args == ()
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert sentinel not in repr(raised.value)
 
 
 @pytest.mark.parametrize(

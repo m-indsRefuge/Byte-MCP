@@ -5,6 +5,8 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from time import monotonic_ns
 
 import httpx
 
@@ -19,6 +21,7 @@ from byte_mcp.errors import (
     OXRateLimitError,
     OXRequestError,
     OXTransportError,
+    OXTransportFailureKind,
 )
 
 from .models import ProviderResult, ProviderUsage
@@ -103,6 +106,10 @@ class OXClient:
         _validate_json(body)
         headers = {"Authorization": f"Bearer {self._api_key}"}
         request_error = None
+        transport_outcome = None
+        transport_failure_kind = None
+        provider_started_at = datetime.now(UTC).isoformat()
+        started_monotonic_ns = monotonic_ns()
         try:
             response = asyncio.run(
                 _post_with_total_deadline(
@@ -112,21 +119,44 @@ class OXClient:
                 )
             )
         except TimeoutError:
-            request_error = OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
-            request_error = OXTransportError(attempt_outcome="NOT_SENT")
-        except (
-            httpx.WriteTimeout,
-            httpx.ReadTimeout,
-            httpx.ReadError,
-            httpx.WriteError,
-            httpx.RemoteProtocolError,
-        ):
-            request_error = OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.ABSOLUTE_DEADLINE
+        except httpx.ConnectTimeout:
+            transport_outcome = "NOT_SENT"
+            transport_failure_kind = OXTransportFailureKind.CONNECT_TIMEOUT
+        except httpx.ConnectError:
+            transport_outcome = "NOT_SENT"
+            transport_failure_kind = OXTransportFailureKind.CONNECT_ERROR
+        except httpx.PoolTimeout:
+            transport_outcome = "NOT_SENT"
+            transport_failure_kind = OXTransportFailureKind.POOL_TIMEOUT
+        except httpx.ReadTimeout:
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.READ_TIMEOUT
+        except httpx.ReadError:
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.READ_ERROR
+        except httpx.WriteTimeout:
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.WRITE_TIMEOUT
+        except httpx.WriteError:
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.WRITE_ERROR
+        except httpx.RemoteProtocolError:
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.REMOTE_PROTOCOL_ERROR
         except httpx.HTTPError:
-            request_error = OXTransportError(attempt_outcome="OUTCOME_UNKNOWN")
+            transport_outcome = "OUTCOME_UNKNOWN"
+            transport_failure_kind = OXTransportFailureKind.HTTP_TRANSPORT_ERROR
         except (TypeError, ValueError, OverflowError, RecursionError):
             request_error = OXRequestError(attempt_outcome="NOT_SENT")
+        if transport_failure_kind is not None:
+            request_error = _transport_error(
+                attempt_outcome=transport_outcome,
+                transport_failure_kind=transport_failure_kind,
+                provider_started_at=provider_started_at,
+                started_monotonic_ns=started_monotonic_ns,
+            )
         if request_error is not None:
             raise request_error
 
@@ -179,6 +209,23 @@ class OXClient:
         if status >= 500:
             raise OXProviderUnavailableError(attempt_outcome="REJECTED")
         raise OXRequestError(attempt_outcome="REJECTED")
+
+
+def _transport_error(
+    *,
+    attempt_outcome: str,
+    transport_failure_kind: OXTransportFailureKind,
+    provider_started_at: str,
+    started_monotonic_ns: int,
+) -> OXTransportError:
+    finished_monotonic_ns = monotonic_ns()
+    return OXTransportError(
+        attempt_outcome=attempt_outcome,
+        transport_failure_kind=transport_failure_kind,
+        provider_started_at=provider_started_at,
+        provider_finished_at=datetime.now(UTC).isoformat(),
+        elapsed_ms=max(0, (finished_monotonic_ns - started_monotonic_ns) // 1_000_000),
+    )
 
 
 def _safe_error_code(response: httpx.Response) -> str | None:
