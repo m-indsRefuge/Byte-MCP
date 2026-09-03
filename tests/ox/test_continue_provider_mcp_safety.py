@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-import time
 
 from byte_mcp import server
 
@@ -18,76 +17,58 @@ async def _invoke_continue(**kwargs):
 
 
 def test_ox_continue_provider_path_is_async() -> None:
-    """Provider-capable continuation must not remain a sync MCP handler."""
-    assert inspect.iscoroutinefunction(server.ox_continue), (
-        "ox_continue must be async before provider-capable continuation "
-        "work can be offloaded from the MCP v1 event-loop thread"
-    )
+    """Provider-capable continuation must remain an async MCP handler."""
+    assert inspect.iscoroutinefunction(server.ox_continue)
 
 
-def test_continue_message_slow_provider_does_not_block_event_loop(
+def test_continue_message_routes_directly_to_background_service(
     monkeypatch,
 ) -> None:
-    """A slow continuation message must not block the MCP event loop."""
+    """The service owns provider lifetime; the MCP task must not own a thread hop."""
 
-    class SlowService:
-        def continue_message(
-            self,
-            review_id: str,
-            message: str,
-        ):
-            time.sleep(0.20)
+    class LaunchService:
+        def __init__(self) -> None:
+            self.calls = []
 
+        def continue_message(self, review_id: str, message: str):
+            self.calls.append((review_id, message))
             return {
                 "review_id": review_id,
-                "message": message,
-                "path": "message",
+                "attempt_id": "OX-000001-A002",
+                "state": "TRANSMITTING",
+                "launch_accepted": True,
             }
 
-    monkeypatch.setattr(
-        server,
-        "_ox_service",
-        lambda: SlowService(),
-    )
+    service = LaunchService()
 
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        started = loop.time()
+    async def forbidden_to_thread(*args, **kwargs):
+        raise AssertionError("background continuation must not use asyncio.to_thread")
 
-        task = asyncio.create_task(
-            _invoke_continue(
-                review_id="OX-TEST-001",
-                message="continue",
-            )
+    monkeypatch.setattr(server, "_ox_service", lambda: service)
+    monkeypatch.setattr(server.asyncio, "to_thread", forbidden_to_thread)
+
+    result = asyncio.run(
+        _invoke_continue(
+            review_id="OX-000001",
+            message="continue",
         )
-
-        await asyncio.sleep(0.02)
-
-        event_loop_delay = loop.time() - started
-        result = await task
-
-        return event_loop_delay, result
-
-    delay, result = asyncio.run(scenario())
-
-    assert delay < 0.10, (
-        "slow OX continuation message blocked the MCP event loop "
-        f"for {delay:.3f}s"
     )
 
-    assert result == {
-        "review_id": "OX-TEST-001",
-        "message": "continue",
-        "path": "message",
-    }
+    assert service.calls == [("OX-000001", "continue")]
+    assert result["attempt_id"] == "OX-000001-A002"
+    assert result["state"] == "TRANSMITTING"
+    assert result["launch_accepted"] is True
 
 
-def test_retry_continuation_slow_provider_does_not_block_event_loop(
+def test_retry_continuation_routes_directly_with_renewed_approval(
     monkeypatch,
 ) -> None:
-    """An explicitly approved continuation retry must also be offloaded."""
+    """Explicit continuation retry is launched directly by the background-owning service."""
 
-    class SlowService:
+    class LaunchService:
+        def __init__(self) -> None:
+            self.calls = []
+
         def retry_continuation(
             self,
             review_id: str,
@@ -95,54 +76,35 @@ def test_retry_continuation_slow_provider_does_not_block_event_loop(
             *,
             renewed_approval: bool,
         ):
-            assert renewed_approval is True
-
-            time.sleep(0.20)
-
+            self.calls.append((review_id, retry_attempt_id, renewed_approval))
             return {
                 "review_id": review_id,
-                "attempt_id": retry_attempt_id,
-                "path": "retry",
+                "attempt_id": "OX-000001-A003",
+                "state": "TRANSMITTING",
+                "launch_accepted": True,
             }
 
-    monkeypatch.setattr(
-        server,
-        "_ox_service",
-        lambda: SlowService(),
-    )
+    service = LaunchService()
 
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        started = loop.time()
+    async def forbidden_to_thread(*args, **kwargs):
+        raise AssertionError("background continuation retry must not use asyncio.to_thread")
 
-        task = asyncio.create_task(
-            _invoke_continue(
-                review_id="OX-TEST-001",
-                mode="retry",
-                retry_attempt_id="OX-TEST-001-A002",
-                approve_retry=True,
-            )
+    monkeypatch.setattr(server, "_ox_service", lambda: service)
+    monkeypatch.setattr(server.asyncio, "to_thread", forbidden_to_thread)
+
+    result = asyncio.run(
+        _invoke_continue(
+            review_id="OX-000001",
+            mode="retry",
+            retry_attempt_id="OX-000001-A002",
+            approve_retry=True,
         )
-
-        await asyncio.sleep(0.02)
-
-        event_loop_delay = loop.time() - started
-        result = await task
-
-        return event_loop_delay, result
-
-    delay, result = asyncio.run(scenario())
-
-    assert delay < 0.10, (
-        "slow OX continuation retry blocked the MCP event loop "
-        f"for {delay:.3f}s"
     )
 
-    assert result == {
-        "review_id": "OX-TEST-001",
-        "attempt_id": "OX-TEST-001-A002",
-        "path": "retry",
-    }
+    assert service.calls == [("OX-000001", "OX-000001-A002", True)]
+    assert result["attempt_id"] == "OX-000001-A003"
+    assert result["state"] == "TRANSMITTING"
+    assert result["launch_accepted"] is True
 
 
 def test_record_findings_remains_local_and_inline(
