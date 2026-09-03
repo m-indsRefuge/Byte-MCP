@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from byte_mcp.ox import client as client_module
 from byte_mcp.ox.client import OXClient
 from byte_mcp.ox.settings import OXSettings
 
@@ -49,7 +48,7 @@ def test_q03i_provider_request_is_attributed_by_component_review_and_attempt(mon
         captured_headers = dict(headers)
         return SuccessfulResponse()
 
-    monkeypatch.setattr(client_module, "_post_with_total_deadline", capture_post)
+    monkeypatch.setattr("byte_mcp.ox.client._post_with_total_deadline", capture_post)
 
     make_client().complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
 
