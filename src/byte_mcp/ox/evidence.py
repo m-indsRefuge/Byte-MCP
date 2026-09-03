@@ -11,13 +11,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from byte_mcp.errors import OXEvidenceError
+from byte_mcp.errors import OXEvidenceError, OXTransportFailureKind
 from byte_mcp.ox.models import AttemptOutcome, ReviewState
 
 _REVIEW_ID = re.compile(r"OX-(\d{6})")
 _ATTEMPT_ID = re.compile(r"(OX-\d{6})-A(\d{3})")
 _REVALIDATION_ID = re.compile(r"(OX-\d{6})-RV(\d{3})")
 _RESERVATION_ID = re.compile(r"\.OX-(\d{6})\.reserve")
+_RUNTIME_SESSION_ID = re.compile(r"[0-9a-f]{32}")
+_REVIEW_PROVIDER_PHASES = frozenset({"initial", "continuation"})
+_REVALIDATION_PROVIDER_PHASES = frozenset({"blind", "targeted"})
+_TRANSPORT_FAILURE_KINDS = frozenset(item.value for item in OXTransportFailureKind)
 _RETRYABLE_OUTCOMES = frozenset(
     {
         AttemptOutcome.NOT_SENT.value,
@@ -73,10 +77,16 @@ class EvidenceStore:
                     raise OXEvidenceError("review preparation staging already exists")
                 staging.mkdir(parents=True)
                 (staging / "bundles").mkdir()
-                payload = {**identity, "review_id": review_id, "state": ReviewState.PREPARED.value}
+                payload = {
+                    **identity,
+                    "review_id": review_id,
+                    "state": ReviewState.PREPARED.value,
+                }
                 self._write_immutable_json(staging / "review.json", payload)
                 self._write_immutable_json(staging / "manifest.json", manifest)
-                self._write_immutable_json(staging / "bundles" / "prepared.json", bundle)
+                self._write_immutable_json(
+                    staging / "bundles" / "prepared.json", bundle
+                )
                 self._append_jsonl(
                     staging / "events.jsonl",
                     {
@@ -99,7 +109,9 @@ class EvidenceStore:
                 self._remove_staging(staging)
                 if allocated:
                     self._remove_reservation(reservation)
-                raise OXEvidenceError("unable to persist prepared review evidence") from None
+                raise OXEvidenceError(
+                    "unable to persist prepared review evidence"
+                ) from None
         return review_id
 
     def allocate_revalidation_id(self, review_id: str) -> str:
@@ -121,14 +133,18 @@ class EvidenceStore:
                         default=0,
                     )
                     if maximum >= 999:
-                        raise OXEvidenceError("revalidation identity space is exhausted")
+                        raise OXEvidenceError(
+                            "revalidation identity space is exhausted"
+                        )
                     result = f"{review_id}-RV{maximum + 1:03d}"
                     (revalidations / result).mkdir()
                     return result
             except OXEvidenceError:
                 raise
             except (OSError, TypeError, ValueError, KeyError):
-                raise OXEvidenceError("unable to allocate revalidation identity") from None
+                raise OXEvidenceError(
+                    "unable to allocate revalidation identity"
+                ) from None
 
     def persist_prepared_revalidation(
         self,
@@ -155,9 +171,13 @@ class EvidenceStore:
                     "revalidation_id": revalidation_id,
                     "state": ReviewState.REVALIDATION_PREPARED.value,
                 }
-                self._write_immutable_json(directory / "revalidation.json", payload)
+                self._write_immutable_json(
+                    directory / "revalidation.json", payload
+                )
                 self._write_immutable_json(directory / "manifest.json", manifest)
-                self._write_immutable_json(directory / "bundles" / "prepared.json", bundle)
+                self._write_immutable_json(
+                    directory / "bundles" / "prepared.json", bundle
+                )
                 self._append_jsonl(
                     directory / "events.jsonl",
                     {
@@ -169,17 +189,22 @@ class EvidenceStore:
             except OXEvidenceError:
                 raise
             except (OSError, TypeError, ValueError):
-                raise OXEvidenceError("unable to persist prepared revalidation") from None
+                raise OXEvidenceError(
+                    "unable to persist prepared revalidation"
+                ) from None
 
     def recover_stale_transmissions(
         self,
         *,
         stale_after: timedelta,
+        runtime_session_id: str | None = None,
         now: datetime | None = None,
     ) -> tuple[str, ...]:
         # Local-only append-only recovery. Never retries a provider request.
         if not isinstance(stale_after, timedelta) or stale_after <= timedelta(0):
             raise OXEvidenceError("orphan recovery horizon is invalid")
+        if runtime_session_id is not None:
+            self._require_runtime_session_id(runtime_session_id)
         recovery_now = now or datetime.now(UTC)
         if (
             not isinstance(recovery_now, datetime)
@@ -199,7 +224,9 @@ class EvidenceStore:
                 if path.is_dir() and _REVIEW_ID.fullmatch(path.name)
             )
         except OSError:
-            raise OXEvidenceError("unable to inspect OX recovery evidence") from None
+            raise OXEvidenceError(
+                "unable to inspect OX recovery evidence"
+            ) from None
 
         for review_dir in review_dirs:
             review_id = review_dir.name
@@ -215,10 +242,14 @@ class EvidenceStore:
                     latest = attempts[-1]
                     attempt_id = latest.get("attempt_id")
                     if isinstance(attempt_id, str) and "outcome" not in latest:
-                        recorded_at = self._review_attempt_recorded_at(
-                            review_id, attempt_id
-                        )
-                        if recorded_at is not None and recorded_at <= cutoff:
+                        if self._attempt_requires_recovery(
+                            owner=latest.get("runtime_session_id"),
+                            current_runtime_session_id=runtime_session_id,
+                            recorded_at=self._review_attempt_recorded_at(
+                                review_id, attempt_id
+                            ),
+                            cutoff=cutoff,
+                        ):
                             self._append_event(
                                 review_id,
                                 {
@@ -264,14 +295,18 @@ class EvidenceStore:
                     phase = latest.get("phase")
                     if (
                         not isinstance(attempt_id, str)
-                        or phase not in {"blind", "targeted"}
+                        or phase not in _REVALIDATION_PROVIDER_PHASES
                         or "outcome" in latest
                     ):
                         continue
-                    recorded_at = self._revalidation_attempt_recorded_at(
-                        review_id, revalidation_id, attempt_id
-                    )
-                    if recorded_at is None or recorded_at > cutoff:
+                    if not self._attempt_requires_recovery(
+                        owner=latest.get("runtime_session_id"),
+                        current_runtime_session_id=runtime_session_id,
+                        recorded_at=self._revalidation_attempt_recorded_at(
+                            review_id, revalidation_id, attempt_id
+                        ),
+                        cutoff=cutoff,
+                    ):
                         continue
                     self._append_jsonl(
                         revalidation_dir / "events.jsonl",
@@ -285,6 +320,18 @@ class EvidenceStore:
                     recovered.append(attempt_id)
 
         return tuple(recovered)
+
+    @staticmethod
+    def _attempt_requires_recovery(
+        *,
+        owner: object,
+        current_runtime_session_id: str | None,
+        recorded_at: datetime | None,
+        cutoff: datetime,
+    ) -> bool:
+        if current_runtime_session_id is not None and isinstance(owner, str):
+            return owner != current_runtime_session_id
+        return recorded_at is not None and recorded_at <= cutoff
 
     def _review_attempt_recorded_at(
         self, review_id: str, attempt_id: str
@@ -367,7 +414,14 @@ class EvidenceStore:
             return None
         return parsed.astimezone(UTC)
 
-    def claim_initial_transmission(self, review_id: str, manifest_sha256: str) -> dict[str, str]:
+    def claim_initial_transmission(
+        self,
+        review_id: str,
+        manifest_sha256: str,
+        *,
+        runtime_session_id: str,
+    ) -> dict[str, str]:
+        self._require_runtime_session_id(runtime_session_id)
         self._require_digest(manifest_sha256)
         with self._lock_for(review_id):
             review = self._reconstruct(review_id)
@@ -375,11 +429,19 @@ class EvidenceStore:
             if review["state"] != ReviewState.PREPARED.value:
                 raise OXEvidenceError("review is not prepared for transmission")
             self._verify_manifest_digest(review_id, manifest_sha256)
-            return self._append_transmission_intent(review_id, manifest_sha256)
+            return self._append_transmission_intent(
+                review_id, manifest_sha256, runtime_session_id
+            )
 
     def claim_retry_transmission(
-        self, review_id: str, manifest_sha256: str, *, renewed_approval: bool
+        self,
+        review_id: str,
+        manifest_sha256: str,
+        *,
+        renewed_approval: bool,
+        runtime_session_id: str,
     ) -> dict[str, str]:
+        self._require_runtime_session_id(runtime_session_id)
         self._require_digest(manifest_sha256)
         if not renewed_approval:
             raise OXEvidenceError("retry requires renewed approval")
@@ -396,11 +458,18 @@ class EvidenceStore:
             if previous.get("outcome") not in _RETRYABLE_OUTCOMES:
                 raise OXEvidenceError("review has no eligible attempt for retry")
             self._verify_manifest_digest(review_id, manifest_sha256)
-            return self._append_transmission_intent(review_id, manifest_sha256)
+            return self._append_transmission_intent(
+                review_id, manifest_sha256, runtime_session_id
+            )
 
     def claim_continuation_transmission(
-        self, review_id: str, manifest_sha256: str
+        self,
+        review_id: str,
+        manifest_sha256: str,
+        *,
+        runtime_session_id: str,
     ) -> dict[str, str]:
+        self._require_runtime_session_id(runtime_session_id)
         self._require_digest(manifest_sha256)
         with self._lock_for(review_id):
             review = self._reconstruct(review_id)
@@ -408,7 +477,9 @@ class EvidenceStore:
             if review["state"] != ReviewState.REVIEWED.value:
                 raise OXEvidenceError("review is not available for continuation")
             self._verify_manifest_digest(review_id, manifest_sha256)
-            return self._append_transmission_intent(review_id, manifest_sha256)
+            return self._append_transmission_intent(
+                review_id, manifest_sha256, runtime_session_id
+            )
 
     def claim_continuation_retry(
         self,
@@ -417,7 +488,9 @@ class EvidenceStore:
         previous_attempt_id: str,
         *,
         renewed_approval: bool,
+        runtime_session_id: str,
     ) -> dict[str, str]:
+        self._require_runtime_session_id(runtime_session_id)
         self._require_digest(manifest_sha256)
         self._require_attempt_id(review_id, previous_attempt_id)
         if not renewed_approval:
@@ -430,15 +503,101 @@ class EvidenceStore:
                 ReviewState.FAILED.value,
                 ReviewState.OUTCOME_UNKNOWN.value,
             }:
-                raise OXEvidenceError("continuation has no eligible attempt for retry")
+                raise OXEvidenceError(
+                    "continuation has no eligible attempt for retry"
+                )
             previous = attempts[-1]
             if (
                 previous.get("attempt_id") != previous_attempt_id
                 or previous.get("outcome") not in _RETRYABLE_OUTCOMES
             ):
-                raise OXEvidenceError("continuation retry does not match latest attempt")
+                raise OXEvidenceError(
+                    "continuation retry does not match latest attempt"
+                )
             self._verify_manifest_digest(review_id, manifest_sha256)
-            return self._append_transmission_intent(review_id, manifest_sha256)
+            return self._append_transmission_intent(
+                review_id, manifest_sha256, runtime_session_id
+            )
+
+    def record_provider_request_started(
+        self,
+        review_id: str,
+        attempt_id: str,
+        *,
+        runtime_session_id: str,
+        phase: str,
+    ) -> None:
+        self._require_runtime_session_id(runtime_session_id)
+        if phase not in _REVIEW_PROVIDER_PHASES:
+            raise OXEvidenceError("provider request phase is invalid")
+        with self._lock_for(review_id):
+            try:
+                review = self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError(
+                    "unable to record provider request start"
+                ) from None
+            self._require_current_transmitting_attempt(review, attempt_id)
+            attempt = review["attempts"][-1]
+            self._require_attempt_owner(attempt, runtime_session_id)
+            if "provider_started_at" in attempt:
+                raise OXEvidenceError("provider request start already recorded")
+            self._append_event(
+                review_id,
+                {
+                    "attempt_id": attempt_id,
+                    "event_type": "PROVIDER_REQUEST_STARTED",
+                    "phase": phase,
+                    "recorded_at": datetime.now(UTC).isoformat(),
+                    "runtime_session_id": runtime_session_id,
+                },
+            )
+
+    def record_provider_transport_metadata(
+        self,
+        review_id: str,
+        attempt_id: str,
+        *,
+        runtime_session_id: str,
+        provider_finished_at: str,
+        elapsed_ms: int,
+        transport_failure_kind: str | None,
+    ) -> None:
+        self._require_runtime_session_id(runtime_session_id)
+        finished_at = self._require_provider_timestamp(provider_finished_at)
+        failure_kind = self._require_transport_failure_kind(
+            transport_failure_kind
+        )
+        self._require_elapsed_ms(elapsed_ms)
+        with self._lock_for(review_id):
+            try:
+                review = self._ensure_writable_review(review_id)
+            except (OSError, TypeError, ValueError, KeyError):
+                raise OXEvidenceError(
+                    "unable to record provider transport metadata"
+                ) from None
+            attempt = self._require_current_attempt(review, attempt_id)
+            self._require_attempt_owner(attempt, runtime_session_id)
+            if "outcome" not in attempt:
+                raise OXEvidenceError(
+                    "provider transport metadata requires terminal outcome"
+                )
+            if "provider_finished_at" in attempt:
+                raise OXEvidenceError(
+                    "provider transport metadata already recorded"
+                )
+            self._require_finish_not_before_start(attempt, finished_at)
+            self._append_event(
+                review_id,
+                {
+                    "attempt_id": attempt_id,
+                    "elapsed_ms": elapsed_ms,
+                    "event_type": "PROVIDER_TRANSPORT_METADATA",
+                    "provider_finished_at": provider_finished_at,
+                    "runtime_session_id": runtime_session_id,
+                    "transport_failure_kind": failure_kind,
+                },
+            )
 
     def record_attempt_outcome(
         self, review_id: str, attempt_id: str, outcome: AttemptOutcome | str
@@ -472,7 +631,10 @@ class EvidenceStore:
                 raise OXEvidenceError("unable to append thread message") from None
             try:
                 self._append_jsonl(
-                    self._review_dir(review_id) / "threads" / f"{thread_name}.jsonl", message
+                    self._review_dir(review_id)
+                    / "threads"
+                    / f"{thread_name}.jsonl",
+                    message,
                 )
             except (OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to append thread message") from None
@@ -485,54 +647,81 @@ class EvidenceStore:
             try:
                 review = self._ensure_writable_review(review_id)
             except (OSError, TypeError, ValueError, KeyError):
-                raise OXEvidenceError("unable to persist provider response") from None
+                raise OXEvidenceError(
+                    "unable to persist provider response"
+                ) from None
             self._require_current_transmitting_attempt(review, attempt_id)
             try:
                 self._write_immutable_json(
-                    self._review_dir(review_id) / "responses" / f"{attempt_id}.json", response
+                    self._review_dir(review_id)
+                    / "responses"
+                    / f"{attempt_id}.json",
+                    response,
                 )
             except (OSError, TypeError, ValueError, KeyError):
-                raise OXEvidenceError("unable to persist provider response") from None
+                raise OXEvidenceError(
+                    "unable to persist provider response"
+                ) from None
 
-    def read_provider_response(self, review_id: str, attempt_id: str) -> dict[str, object]:
+    def read_provider_response(
+        self, review_id: str, attempt_id: str
+    ) -> dict[str, object]:
         self._require_attempt_id(review_id, attempt_id)
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
             try:
                 value = self._read_json(
-                    self._review_dir(review_id) / "responses" / f"{attempt_id}.json"
+                    self._review_dir(review_id)
+                    / "responses"
+                    / f"{attempt_id}.json"
                 )
             except FileNotFoundError:
-                raise OXEvidenceError("provider response evidence was not found") from None
+                raise OXEvidenceError(
+                    "provider response evidence was not found"
+                ) from None
             except (OSError, TypeError, ValueError):
-                raise OXEvidenceError("unable to read provider response") from None
+                raise OXEvidenceError(
+                    "unable to read provider response"
+                ) from None
             if not isinstance(value, dict):
                 raise OXEvidenceError("provider response evidence is malformed")
             return value
-    def persist_findings(self, review_id: str, findings: Mapping[str, object]) -> None:
+
+    def persist_findings(
+        self, review_id: str, findings: Mapping[str, object]
+    ) -> None:
         with self._lock_for(review_id):
             try:
                 self._ensure_writable_review(review_id)
                 self._write_immutable_json(
-                    self._review_dir(review_id) / "findings" / "findings.json", findings
+                    self._review_dir(review_id) / "findings" / "findings.json",
+                    findings,
                 )
             except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to persist findings") from None
 
-    def append_adjudication(self, review_id: str, event: Mapping[str, object]) -> None:
+    def append_adjudication(
+        self, review_id: str, event: Mapping[str, object]
+    ) -> None:
         with self._lock_for(review_id):
             try:
                 self._ensure_writable_review(review_id)
-                self._append_jsonl(self._review_dir(review_id) / "adjudication.jsonl", event)
+                self._append_jsonl(
+                    self._review_dir(review_id) / "adjudication.jsonl", event
+                )
             except (OXEvidenceError, OSError, TypeError, ValueError, KeyError):
                 raise OXEvidenceError("unable to append adjudication") from None
 
-    def read_thread(self, review_id: str, thread_name: str = "initial") -> list[dict[str, object]]:
+    def read_thread(
+        self, review_id: str, thread_name: str = "initial"
+    ) -> list[dict[str, object]]:
         self._require_thread_name(thread_name)
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
             records, warnings = self._read_jsonl(
-                self._review_dir(review_id) / "threads" / f"{thread_name}.jsonl"
+                self._review_dir(review_id)
+                / "threads"
+                / f"{thread_name}.jsonl"
             )
             if warnings or not all(isinstance(record, dict) for record in records):
                 raise OXEvidenceError("thread evidence requires recovery")
@@ -551,11 +740,14 @@ class EvidenceStore:
             if not isinstance(value, dict):
                 raise OXEvidenceError("findings evidence is malformed")
             return True
+
     def read_findings(self, review_id: str) -> dict[str, object]:
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
             try:
-                value = self._read_json(self._review_dir(review_id) / "findings" / "findings.json")
+                value = self._read_json(
+                    self._review_dir(review_id) / "findings" / "findings.json"
+                )
             except FileNotFoundError:
                 return {"protocol_version": "ox-findings-v1", "findings": []}
             except (OSError, TypeError, ValueError):
@@ -567,7 +759,9 @@ class EvidenceStore:
     def read_adjudications(self, review_id: str) -> list[dict[str, object]]:
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
-            records, warnings = self._read_jsonl(self._review_dir(review_id) / "adjudication.jsonl")
+            records, warnings = self._read_jsonl(
+                self._review_dir(review_id) / "adjudication.jsonl"
+            )
             if warnings or not all(isinstance(record, dict) for record in records):
                 raise OXEvidenceError("adjudication evidence requires recovery")
             return [dict(record) for record in records]
@@ -575,7 +769,9 @@ class EvidenceStore:
     def read_manifest(self, review_id: str) -> dict[str, object]:
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
-            value = self._read_json(self._review_dir(review_id) / "manifest.json")
+            value = self._read_json(
+                self._review_dir(review_id) / "manifest.json"
+            )
             if not isinstance(value, dict):
                 raise OXEvidenceError("manifest evidence is malformed")
             return value
@@ -583,18 +779,24 @@ class EvidenceStore:
     def read_bundle(self, review_id: str) -> dict[str, object]:
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
-            value = self._read_json(self._review_dir(review_id) / "bundles" / "prepared.json")
+            value = self._read_json(
+                self._review_dir(review_id) / "bundles" / "prepared.json"
+            )
             if not isinstance(value, dict):
                 raise OXEvidenceError("prepared bundle evidence is malformed")
             return value
 
-    def read_attempt_identity(self, review_id: str, attempt_id: str) -> dict[str, object]:
+    def read_attempt_identity(
+        self, review_id: str, attempt_id: str
+    ) -> dict[str, object]:
         self._require_attempt_id(review_id, attempt_id)
         with self._lock_for(review_id):
             self._require_review_dir(review_id)
             try:
                 value = self._read_json(
-                    self._review_dir(review_id) / "attempts" / f"{attempt_id}.json"
+                    self._review_dir(review_id)
+                    / "attempts"
+                    / f"{attempt_id}.json"
                 )
             except (OSError, TypeError, ValueError):
                 raise OXEvidenceError("attempt evidence was not found") from None
@@ -623,17 +825,26 @@ class EvidenceStore:
                     continue
                 if not (path / "revalidation.json").is_file():
                     continue
-                results.append(self._reconstruct_revalidation(review_id, path.name))
+                results.append(
+                    self._reconstruct_revalidation(review_id, path.name)
+                )
             return results
 
     def claim_revalidation_transmission(
-        self, revalidation_id: str, *, phase: str
+        self,
+        revalidation_id: str,
+        *,
+        phase: str,
+        runtime_session_id: str,
     ) -> dict[str, str]:
-        if phase not in {"blind", "targeted"}:
+        self._require_runtime_session_id(runtime_session_id)
+        if phase not in _REVALIDATION_PROVIDER_PHASES:
             raise OXEvidenceError("revalidation phase is invalid")
         review_id = self._review_id_from_revalidation(revalidation_id)
         with self._lock_for(review_id):
-            revalidation = self._reconstruct_revalidation(review_id, revalidation_id)
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
             self._reject_recovered_revalidation(revalidation)
             required_state = (
                 ReviewState.REVALIDATION_PREPARED.value
@@ -641,10 +852,16 @@ class EvidenceStore:
                 else ReviewState.BLIND_REVALIDATED.value
             )
             if revalidation["state"] != required_state:
-                raise OXEvidenceError("revalidation phase is not available for transmission")
+                raise OXEvidenceError(
+                    "revalidation phase is not available for transmission"
+                )
             digest = revalidation["manifest"]["manifest_sha256"]
             return self._append_revalidation_transmission_intent(
-                review_id, revalidation_id, digest, phase
+                review_id,
+                revalidation_id,
+                digest,
+                phase,
+                runtime_session_id,
             )
 
     def claim_revalidation_retry(
@@ -653,32 +870,129 @@ class EvidenceStore:
         previous_attempt_id: str,
         *,
         renewed_approval: bool,
+        runtime_session_id: str,
     ) -> dict[str, str]:
+        self._require_runtime_session_id(runtime_session_id)
         review_id = self._review_id_from_revalidation(revalidation_id)
         self._require_attempt_id(review_id, previous_attempt_id)
         if not renewed_approval:
             raise OXEvidenceError("retry requires renewed approval")
         with self._lock_for(review_id):
-            revalidation = self._reconstruct_revalidation(review_id, revalidation_id)
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
             self._reject_recovered_revalidation(revalidation)
             attempts = revalidation["attempts"]
             if not attempts or revalidation["state"] not in {
                 ReviewState.FAILED.value,
                 ReviewState.OUTCOME_UNKNOWN.value,
             }:
-                raise OXEvidenceError("revalidation has no eligible attempt for retry")
+                raise OXEvidenceError(
+                    "revalidation has no eligible attempt for retry"
+                )
             previous = attempts[-1]
             if (
                 previous.get("attempt_id") != previous_attempt_id
                 or previous.get("outcome") not in _RETRYABLE_OUTCOMES
             ):
-                raise OXEvidenceError("revalidation retry does not match latest attempt")
+                raise OXEvidenceError(
+                    "revalidation retry does not match latest attempt"
+                )
             digest = revalidation["manifest"]["manifest_sha256"]
             return self._append_revalidation_transmission_intent(
                 review_id,
                 revalidation_id,
                 digest,
                 str(previous["phase"]),
+                runtime_session_id,
+            )
+
+    def record_revalidation_provider_request_started(
+        self,
+        revalidation_id: str,
+        attempt_id: str,
+        *,
+        runtime_session_id: str,
+        phase: str,
+    ) -> None:
+        self._require_runtime_session_id(runtime_session_id)
+        if phase not in _REVALIDATION_PROVIDER_PHASES:
+            raise OXEvidenceError("revalidation provider request phase is invalid")
+        review_id = self._review_id_from_revalidation(revalidation_id)
+        self._require_attempt_id(review_id, attempt_id)
+        with self._lock_for(review_id):
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
+            self._reject_recovered_revalidation(revalidation)
+            attempt = self._require_current_revalidation_transmitting_attempt(
+                revalidation, attempt_id
+            )
+            self._require_attempt_owner(attempt, runtime_session_id)
+            if attempt.get("phase") != phase:
+                raise OXEvidenceError(
+                    "revalidation provider request phase does not match attempt"
+                )
+            if "provider_started_at" in attempt:
+                raise OXEvidenceError("provider request start already recorded")
+            self._append_jsonl(
+                self._revalidation_dir(review_id, revalidation_id)
+                / "events.jsonl",
+                {
+                    "attempt_id": attempt_id,
+                    "event_type": "PROVIDER_REQUEST_STARTED",
+                    "phase": phase,
+                    "recorded_at": datetime.now(UTC).isoformat(),
+                    "runtime_session_id": runtime_session_id,
+                },
+            )
+
+    def record_revalidation_provider_transport_metadata(
+        self,
+        revalidation_id: str,
+        attempt_id: str,
+        *,
+        runtime_session_id: str,
+        provider_finished_at: str,
+        elapsed_ms: int,
+        transport_failure_kind: str | None,
+    ) -> None:
+        self._require_runtime_session_id(runtime_session_id)
+        finished_at = self._require_provider_timestamp(provider_finished_at)
+        failure_kind = self._require_transport_failure_kind(
+            transport_failure_kind
+        )
+        self._require_elapsed_ms(elapsed_ms)
+        review_id = self._review_id_from_revalidation(revalidation_id)
+        self._require_attempt_id(review_id, attempt_id)
+        with self._lock_for(review_id):
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
+            self._reject_recovered_revalidation(revalidation)
+            attempt = self._require_current_attempt(revalidation, attempt_id)
+            self._require_attempt_owner(attempt, runtime_session_id)
+            if "outcome" not in attempt:
+                raise OXEvidenceError(
+                    "provider transport metadata requires terminal outcome"
+                )
+            if "provider_finished_at" in attempt:
+                raise OXEvidenceError(
+                    "provider transport metadata already recorded"
+                )
+            self._require_finish_not_before_start(attempt, finished_at)
+            self._append_jsonl(
+                self._revalidation_dir(review_id, revalidation_id)
+                / "events.jsonl",
+                {
+                    "attempt_id": attempt_id,
+                    "elapsed_ms": elapsed_ms,
+                    "event_type": "PROVIDER_TRANSPORT_METADATA",
+                    "phase": attempt["phase"],
+                    "provider_finished_at": provider_finished_at,
+                    "runtime_session_id": runtime_session_id,
+                    "transport_failure_kind": failure_kind,
+                },
             )
 
     def record_revalidation_attempt_outcome(
@@ -693,15 +1007,23 @@ class EvidenceStore:
         if outcome_value not in {item.value for item in AttemptOutcome}:
             raise OXEvidenceError("attempt outcome is invalid")
         with self._lock_for(review_id):
-            revalidation = self._reconstruct_revalidation(review_id, revalidation_id)
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
             self._reject_recovered_revalidation(revalidation)
             attempts = revalidation["attempts"]
             if not attempts or attempts[-1].get("attempt_id") != attempt_id:
                 raise OXEvidenceError("revalidation attempt is not current")
-            if revalidation["state"] != ReviewState.REVALIDATION_TRANSMITTING.value:
-                raise OXEvidenceError("revalidation attempt is not transmitting")
+            if (
+                revalidation["state"]
+                != ReviewState.REVALIDATION_TRANSMITTING.value
+            ):
+                raise OXEvidenceError(
+                    "revalidation attempt is not transmitting"
+                )
             self._append_jsonl(
-                self._revalidation_dir(review_id, revalidation_id) / "events.jsonl",
+                self._revalidation_dir(review_id, revalidation_id)
+                / "events.jsonl",
                 {
                     "attempt_id": attempt_id,
                     "event_type": "REVALIDATION_ATTEMPT_OUTCOME",
@@ -719,12 +1041,15 @@ class EvidenceStore:
         review_id = self._review_id_from_revalidation(revalidation_id)
         self._require_attempt_id(review_id, attempt_id)
         with self._lock_for(review_id):
-            revalidation = self._reconstruct_revalidation(review_id, revalidation_id)
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
             attempts = revalidation["attempts"]
             if (
                 not attempts
                 or attempts[-1].get("attempt_id") != attempt_id
-                or revalidation["state"] != ReviewState.REVALIDATION_TRANSMITTING.value
+                or revalidation["state"]
+                != ReviewState.REVALIDATION_TRANSMITTING.value
             ):
                 raise OXEvidenceError("revalidation attempt is not current")
             self._write_immutable_json(
@@ -776,12 +1101,15 @@ class EvidenceStore:
         review_id = self._review_id_from_revalidation(revalidation_id)
         self._require_attempt_id(review_id, attempt_id)
         with self._lock_for(review_id):
-            revalidation = self._reconstruct_revalidation(review_id, revalidation_id)
+            revalidation = self._reconstruct_revalidation(
+                review_id, revalidation_id
+            )
             attempts = revalidation["attempts"]
             if (
                 not attempts
                 or attempts[-1].get("attempt_id") != attempt_id
-                or revalidation["state"] != ReviewState.REVALIDATION_TRANSMITTING.value
+                or revalidation["state"]
+                != ReviewState.REVALIDATION_TRANSMITTING.value
             ):
                 raise OXEvidenceError("revalidation attempt is not current")
             self._write_immutable_json(
@@ -797,7 +1125,7 @@ class EvidenceStore:
         phase: str,
         findings: Mapping[str, object],
     ) -> None:
-        if phase not in {"blind", "targeted"}:
+        if phase not in _REVALIDATION_PROVIDER_PHASES:
             raise OXEvidenceError("revalidation phase is invalid")
         review_id = self._review_id_from_revalidation(revalidation_id)
         with self._lock_for(review_id):
@@ -809,15 +1137,21 @@ class EvidenceStore:
                 findings,
             )
 
-    def read_revalidation_bundle(self, revalidation_id: str) -> dict[str, object]:
+    def read_revalidation_bundle(
+        self, revalidation_id: str
+    ) -> dict[str, object]:
         review_id = self._review_id_from_revalidation(revalidation_id)
         with self._lock_for(review_id):
             self._reconstruct_revalidation(review_id, revalidation_id)
             value = self._read_json(
-                self._revalidation_dir(review_id, revalidation_id) / "bundles" / "prepared.json"
+                self._revalidation_dir(review_id, revalidation_id)
+                / "bundles"
+                / "prepared.json"
             )
             if not isinstance(value, dict):
-                raise OXEvidenceError("revalidation bundle evidence is malformed")
+                raise OXEvidenceError(
+                    "revalidation bundle evidence is malformed"
+                )
             return value
 
     def _allocate_review_id(self) -> str:
@@ -860,9 +1194,18 @@ class EvidenceStore:
             except (OSError, TypeError, ValueError):
                 raise OXEvidenceError("unable to allocate review identity") from None
 
-    def _append_transmission_intent(self, review_id: str, manifest_sha256: str) -> dict[str, str]:
+    def _append_transmission_intent(
+        self,
+        review_id: str,
+        manifest_sha256: str,
+        runtime_session_id: str,
+    ) -> dict[str, str]:
         attempt_id = self._allocate_attempt_id(review_id)
-        attempt = {"attempt_id": attempt_id, "manifest_sha256": manifest_sha256}
+        attempt = {
+            "attempt_id": attempt_id,
+            "manifest_sha256": manifest_sha256,
+            "runtime_session_id": runtime_session_id,
+        }
         self._append_event(
             review_id,
             {
@@ -879,12 +1222,14 @@ class EvidenceStore:
         revalidation_id: str,
         manifest_sha256: str,
         phase: str,
+        runtime_session_id: str,
     ) -> dict[str, str]:
         attempt_id = self._allocate_attempt_id(review_id)
         attempt = {
             "attempt_id": attempt_id,
             "manifest_sha256": manifest_sha256,
             "phase": phase,
+            "runtime_session_id": runtime_session_id,
         }
         self._append_jsonl(
             self._revalidation_dir(review_id, revalidation_id) / "events.jsonl",
@@ -916,10 +1261,14 @@ class EvidenceStore:
                         continue
                     records, warnings = self._read_jsonl(events_path)
                     if warnings:
-                        raise OXEvidenceError("revalidation evidence requires recovery")
+                        raise OXEvidenceError(
+                            "revalidation evidence requires recovery"
+                        )
                     for event in records:
                         if not isinstance(event, dict):
-                            raise OXEvidenceError("revalidation events are malformed")
+                            raise OXEvidenceError(
+                                "revalidation events are malformed"
+                            )
                         attempt_id = event.get("attempt_id")
                         match = _ATTEMPT_ID.fullmatch(str(attempt_id))
                         if match is not None and match.group(1) == review_id:
@@ -928,9 +1277,13 @@ class EvidenceStore:
                 raise OXEvidenceError("attempt identity space is exhausted")
             return f"{review_id}-A{maximum + 1:03d}"
 
-    def _append_event(self, review_id: str, event: Mapping[str, object]) -> None:
+    def _append_event(
+        self, review_id: str, event: Mapping[str, object]
+    ) -> None:
         try:
-            self._append_jsonl(self._review_dir(review_id) / "events.jsonl", event)
+            self._append_jsonl(
+                self._review_dir(review_id) / "events.jsonl", event
+            )
         except (OSError, TypeError, ValueError):
             raise OXEvidenceError("unable to append review event") from None
 
@@ -957,7 +1310,7 @@ class EvidenceStore:
         ):
             raise OXEvidenceError("review events are malformed")
         state = ReviewState.PREPARED.value
-        attempts: list[dict[str, str]] = []
+        attempts: list[dict[str, object]] = []
         prepared_seen = False
         for event in events:
             if not isinstance(event, dict):
@@ -966,14 +1319,33 @@ class EvidenceStore:
             if event_type == "TRANSMISSION_INTENT":
                 attempt_id = event.get("attempt_id")
                 digest = event.get("manifest_sha256")
+                runtime_session_id = event.get("runtime_session_id")
                 if (
                     not isinstance(attempt_id, str)
                     or not _attempt_belongs_to_review(review_id, attempt_id)
                     or digest != manifest_digest
+                    or (
+                        runtime_session_id is not None
+                        and not _is_runtime_session_id(runtime_session_id)
+                    )
                 ):
                     raise OXEvidenceError("review events are malformed")
-                attempts.append({"attempt_id": attempt_id, "manifest_sha256": digest})
+                attempt: dict[str, object] = {
+                    "attempt_id": attempt_id,
+                    "manifest_sha256": digest,
+                }
+                if runtime_session_id is not None:
+                    attempt["runtime_session_id"] = runtime_session_id
+                attempts.append(attempt)
                 state = ReviewState.TRANSMITTING.value
+            elif event_type == "PROVIDER_REQUEST_STARTED":
+                self._apply_provider_started_event(
+                    attempts,
+                    event,
+                    review_id=review_id,
+                    expected_phase=None,
+                    valid_phases=_REVIEW_PROVIDER_PHASES,
+                )
             elif event_type == "ATTEMPT_OUTCOME":
                 attempt_id = event.get("attempt_id")
                 outcome = event.get("outcome")
@@ -984,15 +1356,29 @@ class EvidenceStore:
                 ):
                     raise OXEvidenceError("review events are malformed")
                 matching = next(
-                    (attempt for attempt in attempts if attempt["attempt_id"] == attempt_id), None
+                    (
+                        attempt
+                        for attempt in attempts
+                        if attempt["attempt_id"] == attempt_id
+                    ),
+                    None,
                 )
                 if matching is None or "outcome" in matching:
                     raise OXEvidenceError("review events are malformed")
                 matching["outcome"] = outcome
                 state = {
                     AttemptOutcome.COMPLETED.value: ReviewState.REVIEWED.value,
-                    AttemptOutcome.OUTCOME_UNKNOWN.value: ReviewState.OUTCOME_UNKNOWN.value,
+                    AttemptOutcome.OUTCOME_UNKNOWN.value: (
+                        ReviewState.OUTCOME_UNKNOWN.value
+                    ),
                 }.get(outcome, ReviewState.FAILED.value)
+            elif event_type == "PROVIDER_TRANSPORT_METADATA":
+                self._apply_transport_metadata_event(
+                    attempts,
+                    event,
+                    review_id=review_id,
+                    expected_phase=None,
+                )
             elif event_type == "PREPARED":
                 if prepared_seen:
                     raise OXEvidenceError("review events are malformed")
@@ -1025,7 +1411,9 @@ class EvidenceStore:
             manifest = self._read_json(directory / "manifest.json")
             events, warnings = self._read_jsonl(directory / "events.jsonl")
         except (OSError, TypeError, ValueError):
-            raise OXEvidenceError("unable to read revalidation evidence") from None
+            raise OXEvidenceError(
+                "unable to read revalidation evidence"
+            ) from None
         if (
             not isinstance(identity, dict)
             or not isinstance(manifest, dict)
@@ -1036,14 +1424,17 @@ class EvidenceStore:
             raise OXEvidenceError("revalidation evidence is malformed")
         manifest_digest = manifest["manifest_sha256"]
         state = ReviewState.REVALIDATION_PREPARED.value
-        attempts: list[dict[str, str]] = []
+        attempts: list[dict[str, object]] = []
         prepared_seen = False
         for event in events:
             if not isinstance(event, dict):
                 raise OXEvidenceError("revalidation events are malformed")
             event_type = event.get("event_type")
             if event_type == "REVALIDATION_PREPARED":
-                if prepared_seen or event.get("revalidation_id") != revalidation_id:
+                if (
+                    prepared_seen
+                    or event.get("revalidation_id") != revalidation_id
+                ):
                     raise OXEvidenceError("revalidation events are malformed")
                 if event.get("manifest_sha256") != manifest_digest:
                     raise OXEvidenceError("revalidation events are malformed")
@@ -1051,21 +1442,38 @@ class EvidenceStore:
             elif event_type == "REVALIDATION_TRANSMISSION_INTENT":
                 attempt_id = event.get("attempt_id")
                 phase = event.get("phase")
+                runtime_session_id = event.get("runtime_session_id")
                 if (
                     not isinstance(attempt_id, str)
                     or not _attempt_belongs_to_review(review_id, attempt_id)
                     or event.get("manifest_sha256") != manifest_digest
-                    or phase not in {"blind", "targeted"}
+                    or phase not in _REVALIDATION_PROVIDER_PHASES
+                    or (
+                        runtime_session_id is not None
+                        and not _is_runtime_session_id(runtime_session_id)
+                    )
                 ):
                     raise OXEvidenceError("revalidation events are malformed")
-                attempts.append(
-                    {
-                        "attempt_id": attempt_id,
-                        "manifest_sha256": manifest_digest,
-                        "phase": phase,
-                    }
-                )
+                attempt = {
+                    "attempt_id": attempt_id,
+                    "manifest_sha256": manifest_digest,
+                    "phase": phase,
+                }
+                if runtime_session_id is not None:
+                    attempt["runtime_session_id"] = runtime_session_id
+                attempts.append(attempt)
                 state = ReviewState.REVALIDATION_TRANSMITTING.value
+            elif event_type == "PROVIDER_REQUEST_STARTED":
+                phase = event.get("phase")
+                self._apply_provider_started_event(
+                    attempts,
+                    event,
+                    review_id=review_id,
+                    expected_phase=phase if isinstance(phase, str) else None,
+                    valid_phases=_REVALIDATION_PROVIDER_PHASES,
+                )
+                if not attempts or attempts[-1].get("phase") != phase:
+                    raise OXEvidenceError("revalidation events are malformed")
             elif event_type == "REVALIDATION_ATTEMPT_OUTCOME":
                 attempt_id = event.get("attempt_id")
                 outcome = event.get("outcome")
@@ -1073,13 +1481,22 @@ class EvidenceStore:
                 if (
                     not isinstance(attempt_id, str)
                     or outcome not in {item.value for item in AttemptOutcome}
-                    or phase not in {"blind", "targeted"}
+                    or phase not in _REVALIDATION_PROVIDER_PHASES
                 ):
                     raise OXEvidenceError("revalidation events are malformed")
                 matching = next(
-                    (attempt for attempt in attempts if attempt["attempt_id"] == attempt_id), None
+                    (
+                        attempt
+                        for attempt in attempts
+                        if attempt["attempt_id"] == attempt_id
+                    ),
+                    None,
                 )
-                if matching is None or matching.get("phase") != phase or "outcome" in matching:
+                if (
+                    matching is None
+                    or matching.get("phase") != phase
+                    or "outcome" in matching
+                ):
                     raise OXEvidenceError("revalidation events are malformed")
                 matching["outcome"] = outcome
                 if outcome == AttemptOutcome.COMPLETED.value:
@@ -1092,6 +1509,16 @@ class EvidenceStore:
                     state = ReviewState.OUTCOME_UNKNOWN.value
                 else:
                     state = ReviewState.FAILED.value
+            elif event_type == "PROVIDER_TRANSPORT_METADATA":
+                phase = event.get("phase")
+                self._apply_transport_metadata_event(
+                    attempts,
+                    event,
+                    review_id=review_id,
+                    expected_phase=phase if isinstance(phase, str) else None,
+                )
+                if not attempts or attempts[-1].get("phase") != phase:
+                    raise OXEvidenceError("revalidation events are malformed")
             else:
                 raise OXEvidenceError("revalidation events are malformed")
         if not prepared_seen:
@@ -1106,11 +1533,94 @@ class EvidenceStore:
             "state": state,
         }
 
-    def _verify_manifest_digest(self, review_id: str, manifest_sha256: str) -> None:
+    @classmethod
+    def _apply_provider_started_event(
+        cls,
+        attempts: list[dict[str, object]],
+        event: Mapping[str, object],
+        *,
+        review_id: str,
+        expected_phase: str | None,
+        valid_phases: frozenset[str],
+    ) -> None:
+        attempt_id = event.get("attempt_id")
+        runtime_session_id = event.get("runtime_session_id")
+        phase = event.get("phase")
+        recorded_at = event.get("recorded_at")
+        if (
+            not isinstance(attempt_id, str)
+            or not _attempt_belongs_to_review(review_id, attempt_id)
+            or not _is_runtime_session_id(runtime_session_id)
+            or phase not in valid_phases
+            or (expected_phase is not None and phase != expected_phase)
+            or cls._safe_provider_timestamp(recorded_at) is None
+        ):
+            raise OXEvidenceError("review events are malformed")
+        if not attempts or attempts[-1].get("attempt_id") != attempt_id:
+            raise OXEvidenceError("review events are malformed")
+        matching = attempts[-1]
+        if (
+            matching.get("runtime_session_id") != runtime_session_id
+            or "outcome" in matching
+            or "provider_started_at" in matching
+        ):
+            raise OXEvidenceError("review events are malformed")
+        matching["provider_started_at"] = recorded_at
+
+    @classmethod
+    def _apply_transport_metadata_event(
+        cls,
+        attempts: list[dict[str, object]],
+        event: Mapping[str, object],
+        *,
+        review_id: str,
+        expected_phase: str | None,
+    ) -> None:
+        attempt_id = event.get("attempt_id")
+        runtime_session_id = event.get("runtime_session_id")
+        provider_finished_at = event.get("provider_finished_at")
+        elapsed_ms = event.get("elapsed_ms")
+        failure_kind = event.get("transport_failure_kind")
+        phase = event.get("phase")
+        parsed_finished_at = cls._safe_provider_timestamp(provider_finished_at)
+        if (
+            not isinstance(attempt_id, str)
+            or not _attempt_belongs_to_review(review_id, attempt_id)
+            or not _is_runtime_session_id(runtime_session_id)
+            or parsed_finished_at is None
+            or not _is_elapsed_ms(elapsed_ms)
+            or not _is_transport_failure_kind(failure_kind)
+            or (expected_phase is not None and phase != expected_phase)
+        ):
+            raise OXEvidenceError("review events are malformed")
+        if not attempts or attempts[-1].get("attempt_id") != attempt_id:
+            raise OXEvidenceError("review events are malformed")
+        matching = attempts[-1]
+        if (
+            matching.get("runtime_session_id") != runtime_session_id
+            or "outcome" not in matching
+            or "provider_finished_at" in matching
+        ):
+            raise OXEvidenceError("review events are malformed")
+        cls._require_finish_not_before_start(matching, parsed_finished_at)
+        matching["provider_finished_at"] = provider_finished_at
+        matching["elapsed_ms"] = elapsed_ms
+        matching["transport_failure_kind"] = failure_kind
+
+    def _verify_manifest_digest(
+        self, review_id: str, manifest_sha256: str
+    ) -> None:
         try:
-            manifest = self._read_json(self._review_dir(review_id) / "manifest.json")
-            if not isinstance(manifest, dict) or manifest.get("manifest_sha256") != manifest_sha256:
-                raise OXEvidenceError("manifest digest does not match prepared review")
+            manifest = self._read_json(
+                self._review_dir(review_id) / "manifest.json"
+            )
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("manifest_sha256") != manifest_sha256
+            ):
+                raise OXEvidenceError(
+                    "manifest digest does not match prepared review"
+                )
         except OXEvidenceError:
             raise
         except (OSError, TypeError, ValueError):
@@ -1122,26 +1632,80 @@ class EvidenceStore:
         return review
 
     @staticmethod
-    def _require_current_transmitting_attempt(
-        review: Mapping[str, object], attempt_id: str
-    ) -> None:
-        attempts = review["attempts"]
-        if not any(attempt["attempt_id"] == attempt_id for attempt in attempts):
+    def _require_current_attempt(
+        record: Mapping[str, object], attempt_id: str
+    ) -> dict[str, object]:
+        attempts = record["attempts"]
+        if not isinstance(attempts, list) or not attempts:
             raise OXEvidenceError("attempt identity is unknown")
-        if not attempts or attempts[-1]["attempt_id"] != attempt_id:
-            raise OXEvidenceError("attempt is not the current transmission")
+        current = attempts[-1]
+        if not isinstance(current, dict) or current.get("attempt_id") != attempt_id:
+            if any(
+                isinstance(attempt, Mapping)
+                and attempt.get("attempt_id") == attempt_id
+                for attempt in attempts
+            ):
+                raise OXEvidenceError("attempt is not the current transmission")
+            raise OXEvidenceError("attempt identity is unknown")
+        return current
+
+    @classmethod
+    def _require_current_transmitting_attempt(
+        cls, review: Mapping[str, object], attempt_id: str
+    ) -> None:
+        cls._require_current_attempt(review, attempt_id)
         if review["state"] != ReviewState.TRANSMITTING.value:
             raise OXEvidenceError("attempt is not currently transmitting")
+
+    @classmethod
+    def _require_current_revalidation_transmitting_attempt(
+        cls,
+        revalidation: Mapping[str, object],
+        attempt_id: str,
+    ) -> dict[str, object]:
+        current = cls._require_current_attempt(revalidation, attempt_id)
+        if (
+            revalidation["state"]
+            != ReviewState.REVALIDATION_TRANSMITTING.value
+        ):
+            raise OXEvidenceError("revalidation attempt is not transmitting")
+        return current
+
+    @staticmethod
+    def _require_attempt_owner(
+        attempt: Mapping[str, object], runtime_session_id: str
+    ) -> None:
+        if attempt.get("runtime_session_id") != runtime_session_id:
+            raise OXEvidenceError("attempt runtime session owner does not match")
+
+    @classmethod
+    def _require_finish_not_before_start(
+        cls,
+        attempt: Mapping[str, object],
+        finished_at: datetime,
+    ) -> None:
+        started_value = attempt.get("provider_started_at")
+        if started_value is None:
+            return
+        started_at = cls._safe_provider_timestamp(started_value)
+        if started_at is None or finished_at < started_at:
+            raise OXEvidenceError("provider timing metadata is invalid")
 
     @staticmethod
     def _reject_recovered_review(review: Mapping[str, object]) -> None:
         if review["recovery_warnings"]:
-            raise OXEvidenceError("review evidence requires recovery before mutation")
+            raise OXEvidenceError(
+                "review evidence requires recovery before mutation"
+            )
 
     @staticmethod
-    def _reject_recovered_revalidation(revalidation: Mapping[str, object]) -> None:
+    def _reject_recovered_revalidation(
+        revalidation: Mapping[str, object]
+    ) -> None:
         if revalidation["recovery_warnings"]:
-            raise OXEvidenceError("revalidation evidence requires recovery before mutation")
+            raise OXEvidenceError(
+                "revalidation evidence requires recovery before mutation"
+            )
 
     def _lock_for(self, review_id: str) -> threading.Lock:
         self._require_review_id(review_id)
@@ -1151,7 +1715,9 @@ class EvidenceStore:
     def _review_dir(self, review_id: str) -> Path:
         return self._reviews / review_id
 
-    def _revalidation_dir(self, review_id: str, revalidation_id: str) -> Path:
+    def _revalidation_dir(
+        self, review_id: str, revalidation_id: str
+    ) -> Path:
         return self._review_dir(review_id) / "revalidations" / revalidation_id
 
     def _reservation_path(self, review_id: str) -> Path:
@@ -1178,7 +1744,10 @@ class EvidenceStore:
 
     @staticmethod
     def _require_review_id(review_id: str) -> None:
-        if not isinstance(review_id, str) or _REVIEW_ID.fullmatch(review_id) is None:
+        if (
+            not isinstance(review_id, str)
+            or _REVIEW_ID.fullmatch(review_id) is None
+        ):
             raise OXEvidenceError("review identity is invalid")
 
     @staticmethod
@@ -1188,7 +1757,9 @@ class EvidenceStore:
             raise OXEvidenceError("attempt identity is invalid")
 
     @staticmethod
-    def _require_revalidation_id(review_id: str, revalidation_id: str) -> None:
+    def _require_revalidation_id(
+        review_id: str, revalidation_id: str
+    ) -> None:
         match = _REVALIDATION_ID.fullmatch(revalidation_id)
         if match is None or match.group(1) != review_id:
             raise OXEvidenceError("revalidation identity is invalid")
@@ -1204,7 +1775,10 @@ class EvidenceStore:
 
     @staticmethod
     def _require_thread_name(thread_name: str) -> None:
-        if not isinstance(thread_name, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", thread_name):
+        if (
+            not isinstance(thread_name, str)
+            or not re.fullmatch(r"[a-z][a-z0-9-]*", thread_name)
+        ):
             raise OXEvidenceError("thread identity is invalid")
 
     @staticmethod
@@ -1213,13 +1787,56 @@ class EvidenceStore:
             raise OXEvidenceError("manifest digest is invalid")
 
     @staticmethod
-    def _write_immutable_json(path: Path, value: Mapping[str, object]) -> None:
+    def _require_runtime_session_id(runtime_session_id: str) -> None:
+        if not _is_runtime_session_id(runtime_session_id):
+            raise OXEvidenceError("runtime session identity is invalid")
+
+    @classmethod
+    def _require_provider_timestamp(cls, value: str) -> datetime:
+        parsed = cls._safe_provider_timestamp(value)
+        if parsed is None:
+            raise OXEvidenceError("provider timing metadata is invalid")
+        return parsed
+
+    @staticmethod
+    def _safe_provider_timestamp(value: object) -> datetime | None:
+        if not isinstance(value, str) or len(value) > 64:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+            return None
+        return parsed.astimezone(UTC)
+
+    @staticmethod
+    def _require_elapsed_ms(elapsed_ms: int) -> None:
+        if not _is_elapsed_ms(elapsed_ms):
+            raise OXEvidenceError("provider elapsed time is invalid")
+
+    @staticmethod
+    def _require_transport_failure_kind(value: str | None) -> str | None:
+        if isinstance(value, OXTransportFailureKind):
+            return value.value
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in _TRANSPORT_FAILURE_KINDS:
+            raise OXEvidenceError("transport failure kind is invalid")
+        return value
+
+    @staticmethod
+    def _write_immutable_json(
+        path: Path, value: Mapping[str, object]
+    ) -> None:
         if path.exists():
             raise OXEvidenceError("immutable evidence already exists")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = _canonical_json(value)
-            with NamedTemporaryFile("wb", dir=path.parent, delete=False) as handle:
+            with NamedTemporaryFile(
+                "wb", dir=path.parent, delete=False
+            ) as handle:
                 temporary_path = Path(handle.name)
                 handle.write(payload)
                 handle.flush()
@@ -1231,7 +1848,9 @@ class EvidenceStore:
         except OXEvidenceError:
             raise
         except (OSError, TypeError, ValueError):
-            raise OXEvidenceError("unable to persist immutable evidence") from None
+            raise OXEvidenceError(
+                "unable to persist immutable evidence"
+            ) from None
 
     @staticmethod
     def _append_jsonl(path: Path, value: Mapping[str, object]) -> None:
@@ -1261,14 +1880,20 @@ class EvidenceStore:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 is_trailing = index == len(lines) - 1 and not raw.endswith(b"\n")
                 if is_trailing:
-                    return records, ["ignored malformed trailing events record"]
+                    return records, [
+                        "ignored malformed trailing events record"
+                    ]
                 raise OXEvidenceError("review events are malformed") from None
         return records, []
 
 
 def _canonical_json(value: Mapping[str, object]) -> bytes:
     serialized = json.dumps(
-        value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     )
     return serialized.encode("utf-8")
 
@@ -1278,7 +1903,27 @@ def _enum_value(value: AttemptOutcome | str) -> str:
 
 
 def _is_digest(value: object) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    )
+
+
+def _is_runtime_session_id(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and _RUNTIME_SESSION_ID.fullmatch(value) is not None
+    )
+
+
+def _is_elapsed_ms(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_transport_failure_kind(value: object) -> bool:
+    return value is None or (
+        isinstance(value, str) and value in _TRANSPORT_FAILURE_KINDS
+    )
 
 
 def _attempt_belongs_to_review(review_id: str, attempt_id: str) -> bool:
