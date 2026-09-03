@@ -18,6 +18,14 @@ from byte_mcp.ox.models import AttemptOutcome, ProviderResult, ProviderUsage, Re
 from byte_mcp.ox.service import _history_sha256
 from tests.ox.helpers import commit_files
 from tests.ox.q03h_initial_support import wait_for_lane_release, wait_for_state
+from tests.ox.q03h_revalidation_support import (
+    RevalidationNaturalClient,
+    establish_initial_review as establish_natural_initial_review,
+    make_revalidation_service,
+    prepare_revalidation as prepare_natural_revalidation,
+    wait_for_lane_release as wait_for_natural_lane_release,
+    wait_for_revalidation_state,
+)
 from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
 
 
@@ -652,3 +660,57 @@ def test_continuation_terminalization_failure_faults_lane_closed(
     )
     with pytest.raises(OXUnavailableError):
         service._jobs.reserve(key)
+
+
+def test_q03h_ac16_revalidation_retry_requires_renewed_approval_and_never_auto_retries(
+    tmp_path,
+) -> None:
+    client = RevalidationNaturalClient()
+    service, store, jobs, repository_path, base, target = make_revalidation_service(
+        tmp_path,
+        client,
+    )
+    review_id = establish_natural_initial_review(service, store, jobs, base, target)
+    revalidation_id = prepare_natural_revalidation(
+        service,
+        repository_path,
+        review_id,
+        target,
+    )
+    calls_before = len(client.calls)
+    client.fail_next = True
+
+    first = service.transmit_blind_revalidation(revalidation_id)
+    assert first["state"] == ReviewState.TRANSMITTING.value
+    wait_for_revalidation_state(store, revalidation_id, ReviewState.OUTCOME_UNKNOWN)
+    wait_for_natural_lane_release(jobs)
+    assert len(client.calls) == calls_before + 1
+    first_attempt = first["attempt_id"]
+    attempts = store.get_revalidation(revalidation_id)["attempts"]
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == first_attempt
+    assert attempts[0]["outcome"] == AttemptOutcome.OUTCOME_UNKNOWN.value
+
+    with pytest.raises(OXApprovalError):
+        service.retry_revalidation(revalidation_id, renewed_approval=False)
+    assert len(client.calls) == calls_before + 1
+    assert len(store.get_revalidation(revalidation_id)["attempts"]) == 1
+
+    retry = service.retry_revalidation(revalidation_id, renewed_approval=True)
+    assert retry["state"] == ReviewState.TRANSMITTING.value
+    assert retry["launch_accepted"] is True
+    wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
+    wait_for_natural_lane_release(jobs)
+
+    assert len(client.calls) == calls_before + 2
+    final_attempts = store.get_revalidation(revalidation_id)["attempts"]
+    assert len(final_attempts) == 2
+    assert final_attempts[0]["attempt_id"] == first_attempt
+    assert final_attempts[1]["attempt_id"] == retry["attempt_id"]
+    assert final_attempts[1]["phase"] == "blind"
+    assert final_attempts[1]["outcome"] == AttemptOutcome.COMPLETED.value
+    assert all(
+        attempt["runtime_session_id"] == jobs.runtime_session_id
+        for attempt in final_attempts
+    )
+    assert all(call["json_mode"] is False for call in client.calls[-2:])
