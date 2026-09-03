@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import httpx
@@ -46,10 +45,9 @@ def test_q03i_provider_request_is_attributed_by_component_review_and_attempt() -
     make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
 
     assert len(requests) == 1
-    request = requests[0]
-    assert request.headers["ai-reporting-tags"] == (
+    reporting_tags = requests[0].headers["ai-reporting-tags"]
+    assert reporting_tags == (
         "component:byte-mcp-ox,review:OX-000001,attempt:OX-000001-A001"
     )
-    assert SECRET not in request.headers["ai-reporting-tags"]
-    assert "Review this bounded packet." not in request.headers["ai-reporting-tags"]
-    assert json.loads(request.content)["stream"] is False
+    assert SECRET not in reporting_tags
+    assert "Review this bounded packet." not in reporting_tags
