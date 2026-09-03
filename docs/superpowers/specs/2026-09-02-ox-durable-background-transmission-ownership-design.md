@@ -65,7 +65,7 @@ Q03H does not:
 - add public MCP tools or broaden existing tool argument schemas;
 - modify historical OX evidence;
 - modify Wolfram source, schemas, routing, or provider behavior;
-- modify runtime deployment, daemon ownership, Scheduled Tasks, or production configuration;
+- modify the deployed Byte-MCP daemon process state or control, Scheduled Tasks, runtime deployment, or production configuration; this prohibition does not alter Q03H's approved daemon-runtime ownership of in-process provider jobs;
 - authorize merge, push, promotion, deployment, restart, or a live canary.
 
 ## 5. Immutable historical evidence
@@ -99,7 +99,7 @@ The runtime session identifier must be local, bounded, non-secret, safe to persi
 
 There is no queue. A different operation presented while the lane is reserved or active is rejected locally before transmission intent or attempt allocation. That rejection makes no provider request and leaves the prepared operation eligible. A same-operation replay after durable launch acceptance returns or reconstructs the active launch receipt and does not create another worker, attempt, or provider request.
 
-Short-lived reservation of the lane is distinct from accepted provider work. If validation or durable claim fails before acceptance, the reservation is released and the original evidence error remains authoritative. If thread submission fails after claim but before provider-boundary entry, the attempt is terminalized `NOT_SENT`, no provider call occurs, the lane is released once, and any future resend still requires the existing explicit retry controls.
+Short-lived reservation of the lane is distinct from accepted provider work. Every provider-bearing caller owns its reservation until launch acceptance and must unwind it on every validation, claim, identity, thread-persistence, descriptor, or submission failure. A failure before durable claim preserves the original error, writes no attempt or transmission intent, makes no provider call, and abandons the reservation. A failure after durable claim but before provider-boundary entry terminalizes the claimed attempt `NOT_SENT` when terminal evidence can be written, makes no provider call, and releases the reservation exactly once. If that terminalization cannot be persisted, the manager faults the sole lane closed for the runtime rather than reopening it over unresolved `TRANSMITTING` evidence. The same rule applies to all seven provider-bearing paths; it adds no queue or retry, and any later resend still requires the existing explicit retry controls.
 
 ## 7. The seven provider-bearing paths
 
@@ -134,8 +134,8 @@ The local stage:
 1. validates or rebuilds the exact approved scope;
 2. derives a bounded operation identity without retaining secret or unbounded content in manager state;
 3. reserves the shared provider lane before a conflicting attempt can be claimed;
-4. claims exactly one attempt atomically;
-5. persists transmission intent and runtime-session ownership together;
+4. claims exactly one attempt atomically through a live claim API that requires a valid `runtime_session_id`;
+5. persists transmission intent and runtime-session ownership together, rejecting a missing or invalid owner before append;
 6. persists immutable attempt identity and exact history binding;
 7. persists required system or user thread content exactly once;
 8. creates an internal immutable launch descriptor;
@@ -211,6 +211,8 @@ Every new Q03H transmission intent atomically includes:
 - phase where required.
 
 The immutable attempt identity also records the runtime session and exact history digest. Persisting ownership in the intent event closes the crash window that would otherwise exist between attempt allocation and writing the separate identity file.
+
+Runtime ownership is mandatory at every live claim boundary. Historical compatibility permits reconstruction of already-existing ownerless Q03G JSONL only; it never permits a Q03H claim API to create a new ownerless attempt. Tests for legacy evidence construct canonical pre-Q03H events directly under disposable evidence roots rather than calling a live claim method without an owner.
 
 Immediately before calling `OXClient.complete(...)`, the worker appends exactly one event whose logical and persisted event type is:
 
@@ -362,9 +364,9 @@ Each identifier has exactly one primary owning test in the implementation plan.
 - **Q03H-AC02:** Cancelling the outer MCP task after launch does not terminate runtime ownership or cause a duplicate worker, attempt, or provider call.
 - **Q03H-AC03:** While one provider job is active, a different review, continuation, or revalidation launch fails locally with zero new attempts and zero provider calls.
 - **Q03H-AC04:** Repeating the same active operation returns its active receipt with zero new attempts, jobs, or provider calls.
-- **Q03H-AC05:** Every newly claimed Q03H provider attempt persists its owning runtime session ID.
-- **Q03H-AC06:** `PROVIDER_REQUEST_STARTED` is written exactly once immediately before the one external request boundary.
-- **Q03H-AC07:** Submission failure before provider-boundary entry terminalizes the claimed attempt `NOT_SENT` and makes no provider call.
+- **Q03H-AC05:** Every newly claimed Q03H provider attempt requires and persists its owning runtime session ID; a missing or invalid owner is rejected before intent append.
+- **Q03H-AC06:** Across initial, continuation, and revalidation workers, `PROVIDER_REQUEST_STARTED` is written exactly once on the statement immediately before the one external request boundary.
+- **Q03H-AC07:** A submission failure forced after durable claim but before provider-boundary entry durably reconstructs as `NOT_SENT`, records no provider-start event, makes no provider call, and leaves the lane reusable only after that terminal evidence succeeds.
 - **Q03H-AC08:** A representative ambiguous transport failure records `OUTCOME_UNKNOWN`, a fixed bounded failure kind, and safe timing without arbitrary exception text.
 - **Q03H-AC09:** Every currently handled HTTPX transport exception category maps to the correct authoritative outcome and fixed diagnostic kind.
 - **Q03H-AC10:** Startup recovers a prior runtime's unfinished transmitting attempt to `OUTCOME_UNKNOWN` with zero provider requests, zero new attempts, and zero retries.

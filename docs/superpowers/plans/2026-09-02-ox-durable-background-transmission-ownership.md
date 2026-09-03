@@ -21,8 +21,10 @@
 - The raw provider response is canonical and precedes natural assistant thread persistence and terminal completion.
 - Byte-derived findings remain a separate local immutable operation; absent findings remain distinct from an explicitly recorded empty set.
 - One runtime owns one provider lane across all seven provider-bearing operations. There is no queue and no lane per operation type.
+- Every live claim API requires a valid `runtime_session_id`; backward compatibility applies only to reconstructing directly seeded pre-Q03H evidence and never authorizes an ownerless new claim.
 - A different active operation is rejected before attempt claim, transmission intent, or provider contact.
 - Same-operation active replay makes no attempt, worker, or provider call and returns bounded local launch evidence.
+- Every caller that reserves the lane owns pre-acceptance cleanup: abandon after a pre-claim failure, durably record `NOT_SENT` before release after a post-claim/pre-boundary failure, and fault the lane closed if that terminal write fails.
 - No automatic retry exists. Initial and revalidation retry require explicit retry mode plus renewed human approval; continuation retry additionally requires the exact latest failed attempt ID.
 - Provider ambiguity is never downgraded to `NOT_SENT`; `AttemptOutcome` remains authoritative.
 - Historical `OX-000007-A001`, `OX-000008-A001`, `OX-000009-A001`, and `OX-000010-A001` remain immutable and are never retried.
@@ -30,6 +32,7 @@
 - No task authorizes merge, push, promotion, deployment, daemon restart, live OX canary, or live Wolfram request.
 - Shared service, evidence, runtime, and job-manager interfaces are changed sequentially. Tasks 4 through 7 must not run in parallel.
 - Each behavioral task completes a focused RED/GREEN cycle, related regression, lint or syntax check, self-review, local commit, and fresh independent review before the next shared-interface task starts.
+- Before each task commit, every test module created or modified by that task must pass as a complete module, in addition to its focused primary-owner nodes.
 - If a frozen requirement conflicts with live code or immutable evidence, stop and report the exact file/line conflict and smallest Nolan decision required.
 
 ---
@@ -63,7 +66,7 @@ runtime, deployment, merge, or push action.
 - `src/byte_mcp/ox/jobs.py`
   - Owns the runtime session identifier, single provider lane, reservation state, active launch record, thread submission, crash containment, and exact-once lane release.
 - `tests/ox/test_background_job_manager.py`
-  - Uses deterministic events and barriers to prove reservation, busy, replay, submission failure, crash release, and no-queue behavior without any provider.
+  - Uses deterministic events and barriers to prove reservation, busy, replay, submission callback, closed-lane faulting, crash release, and no-queue behavior without any provider.
 
 ### Modified production files
 
@@ -89,7 +92,7 @@ runtime, deployment, merge, or push action.
 - `tests/ox/test_client.py`
   - Owns the transport outcome/kind matrix and bounded diagnostic timing.
 - `tests/ox/test_evidence.py`
-  - Locks runtime ownership, provider-start uniqueness, metadata reconstruction, current-attempt validation, and historical optional fields.
+  - Locks mandatory runtime ownership and missing-owner rejection, provider-start storage uniqueness, metadata reconstruction, current-attempt validation, and directly seeded historical optional fields.
 - `tests/ox/test_orphaned_transmission_recovery.py`
   - Locks immediate cross-runtime recovery, current-runtime exclusion, legacy stale fallback, idempotency, and zero retry.
 - `tests/ox/test_long_provider_mcp_safety.py`
@@ -101,9 +104,9 @@ runtime, deployment, merge, or push action.
 - `tests/ox/test_runtime.py`
   - Locks one manager/session per initialized runtime and recovery before service exposure without network use.
 - `tests/ox/test_natural_review_architecture.py`
-  - Locks `json_mode=False`, natural authority, initial success ordering, active replay, and targeted Byte provenance.
+  - Locks `json_mode=False`, natural authority, initial success ordering, active replay, targeted Byte provenance, and the unique cross-path AC06 provider-start-to-call adjacency proof.
 - `tests/ox/test_review_service.py`
-  - Updates shared fixtures for the job manager and locks claim/worker separation, submission failure, terminal evidence, and explicit initial retry.
+  - Updates shared fixtures for the job manager and locks claim/worker separation, pre-acceptance cleanup, durable service-level submission failure, terminal evidence, and explicit initial retry.
 - `tests/ox/test_review_followup.py`
   - Locks exact continuation history, retry identity, blind/targeted phase behavior, and no duplicate message persistence.
 - `tests/ox/test_mcp_surface.py`
@@ -155,14 +158,18 @@ class OXTransportError(_ProviderCallError):
 
 ### Durable evidence calls
 
-Final Q03H production claim call sites supply `runtime_session_id` to the existing claim methods. The store permits a missing owner only when reconstructing or deliberately constructing legacy-format test evidence.
+Every live claim method requires a valid, bounded `runtime_session_id`; there is
+no default and `None` is rejected before an intent append. Ownerless
+compatibility exists only in reconstruction. Legacy tests write canonical
+pre-Q03H JSONL directly under disposable evidence roots and never use a live
+claim API to manufacture ownerless evidence.
 
 ```python
 EvidenceStore.claim_initial_transmission(
     review_id: str,
     manifest_sha256: str,
     *,
-    runtime_session_id: str | None = None,
+    runtime_session_id: str,
 ) -> dict[str, str]
 
 EvidenceStore.claim_retry_transmission(
@@ -170,14 +177,14 @@ EvidenceStore.claim_retry_transmission(
     manifest_sha256: str,
     *,
     renewed_approval: bool,
-    runtime_session_id: str | None = None,
+    runtime_session_id: str,
 ) -> dict[str, str]
 
 EvidenceStore.claim_continuation_transmission(
     review_id: str,
     manifest_sha256: str,
     *,
-    runtime_session_id: str | None = None,
+    runtime_session_id: str,
 ) -> dict[str, str]
 
 EvidenceStore.claim_continuation_retry(
@@ -186,14 +193,14 @@ EvidenceStore.claim_continuation_retry(
     previous_attempt_id: str,
     *,
     renewed_approval: bool,
-    runtime_session_id: str | None = None,
+    runtime_session_id: str,
 ) -> dict[str, str]
 
 EvidenceStore.claim_revalidation_transmission(
     revalidation_id: str,
     *,
     phase: str,
-    runtime_session_id: str | None = None,
+    runtime_session_id: str,
 ) -> dict[str, str]
 
 EvidenceStore.claim_revalidation_retry(
@@ -201,11 +208,13 @@ EvidenceStore.claim_revalidation_retry(
     previous_attempt_id: str,
     *,
     renewed_approval: bool,
-    runtime_session_id: str | None = None,
+    runtime_session_id: str,
 ) -> dict[str, str]
 ```
 
-The owner is written in the same JSONL intent append as the attempt allocation. Separate initial/continuation and revalidation methods validate and append boundary/metadata events:
+The store validates the owner before mutation and writes it in the same JSONL
+intent append as attempt allocation. Separate initial/continuation and
+revalidation methods validate and append boundary/metadata events:
 
 ```python
 EvidenceStore.record_provider_request_started(
@@ -252,7 +261,28 @@ EvidenceStore.recover_stale_transmissions(
 ) -> tuple[str, ...]
 ```
 
-With `runtime_session_id` supplied, foreign Q03H owners recover immediately; the current owner is preserved; ownerless legacy evidence uses the existing timestamp and stale horizon.
+The recovery API's optional `runtime_session_id` is not a claim escape hatch.
+Startup supplies the current owner: foreign Q03H owners recover immediately,
+the current owner is preserved, and reconstructed ownerless legacy evidence
+uses the existing timestamp and stale horizon.
+
+The live call-site migration is explicit and sequential:
+
+- Task 2 updates every direct claim in `tests/ox/test_evidence.py` and
+  `tests/ox/test_orphaned_transmission_recovery.py` to supply a fixed safe test
+  owner. Tests that need ownerless legacy evidence seed canonical JSONL directly.
+- Task 4 supplies `jobs.runtime_session_id` at the initial and initial-retry
+  claim sites in `src/byte_mcp/ox/service.py`. It adapts the shared constructors
+  in `tests/ox/test_review_service.py`,
+  `tests/ox/test_natural_review_architecture.py`, and
+  `tests/ox/test_security_invariants.py` to inject the same manager instance.
+- Task 5 supplies the owner at continuation and continuation-retry claim sites
+  in `src/byte_mcp/ox/service.py`.
+- Task 6 supplies the owner at blind, revalidation-retry, and targeted claim
+  sites in `src/byte_mcp/ox/service.py`, including the targeted override in
+  `src/byte_mcp/ox/natural_service.py`.
+
+No other claim call sites exist under `src/` or `tests/` at the frozen base.
 
 ### Job manager calls
 
@@ -297,10 +327,13 @@ The concrete call surface is:
   on_worker_crash: Callable[[OXLaunchDescriptor], None]) -> None` accepts the
   durably claimed launch and starts its worker.
 - `abandon(lease: OXLaneLease) -> None` releases an unsubmitted reservation.
+- `fault_closed(lease: OXLaneLease) -> None` consumes the matching reservation
+  and permanently rejects later reservations in this runtime after terminal
+  evidence for a claimed attempt could not be persisted.
 - `snapshot() -> OXActiveLaunch | None` returns the immutable active launch or
   no launch.
 
-`OXProviderJobManager()` creates `uuid.uuid4().hex`, yielding a bounded 32-character non-secret runtime ID. `reserve` returns the existing `OXActiveLaunch` only for the exact same operation key after accepted submission; it raises a local bounded busy error for a different key or a same-key reservation not yet durably accepted. `submit` catches thread-start failure synchronously, invokes `on_submission_failure`, and releases once. Its wrapper invokes `on_worker_crash` for any escaping exception, releases only after terminalization, and enters a fail-closed fault state if terminal evidence cannot be written. No submitted job can wait behind another job.
+`OXProviderJobManager()` creates `uuid.uuid4().hex`, yielding a bounded 32-character non-secret runtime ID. `reserve` returns the existing `OXActiveLaunch` only for the exact same operation key after accepted submission; it raises a local bounded busy error for a different key or a same-key reservation not yet durably accepted. `submit` catches thread-start failure synchronously and invokes `on_submission_failure`. It releases only after that callback durably terminalizes the claimed attempt; if the callback raises because terminal evidence cannot be written, it calls the same closed-lane transition as `fault_closed` rather than reopening the lane. Its worker wrapper applies the equivalent rule to any escaping exception. No submitted job can wait behind another job.
 
 Operation keys use the existing durable subject ID plus a SHA-256 of exact immutable inputs:
 
@@ -323,6 +356,16 @@ OXReviewService._run_claimed_revalidation_attempt(descriptor: OXLaunchDescriptor
 ```
 
 Each run method writes `PROVIDER_REQUEST_STARTED` on the immediately preceding statement before `self._client.complete(..., json_mode=False, attempt_id=...)`. Expected provider errors are terminalized inside the worker and do not escape as unowned work. A submission failure records `NOT_SENT`; an escaping crash is conservatively `OUTCOME_UNKNOWN`. Terminal metadata is appended after the authoritative outcome and before exact-once lane release.
+
+Every public provider-bearing claim path uses one pre-acceptance cleanup guard.
+Before claim, validation or claim failure calls `abandon`, preserves the
+original domain error, and leaves no attempt. After claim, any identity,
+thread-persistence, descriptor, or submission failure must first append
+`NOT_SENT`; only successful terminalization permits `abandon`/release. If that
+append fails, the caller invokes `fault_closed` and surfaces a bounded evidence
+failure. Initial, retry, continuation, continuation retry, blind revalidation,
+revalidation retry, and targeted revalidation all use this rule without queue
+or retry behavior.
 
 ---
 
@@ -392,13 +435,14 @@ Capture UTC start/finish plus `time.monotonic_ns()` elapsed around the single `_
 & $Python -m pytest `
   'tests/ox/test_client.py::test_q03h_ac08_ambiguous_transport_diagnostic_is_bounded_and_timed' `
   'tests/ox/test_client.py::test_q03h_ac09_transport_exception_matrix_preserves_outcome_and_kind' `
-  'tests/ox/test_client.py::test_complete_maps_provider_status_to_safe_domain_error' `
-  'tests/ox/test_client.py::test_complete_maps_transport_failure_without_retry' `
+  tests/test_errors.py `
+  tests/ox/test_client.py `
   'tests/ox/test_provider_total_deadline.py' `
   -vv
 ```
 
-Expected: all selected tests pass, with one fake transport call per case.
+Expected: both complete modified test modules and the related deadline module
+pass, with one fake transport call per transport case.
 
 - [ ] **Step 5: Validate and self-review Task 1**
 
@@ -432,28 +476,34 @@ Fresh review checks exception hierarchy, outcome preservation, branch ordering, 
 - Modify: `tests/ox/test_orphaned_transmission_recovery.py`
 
 **Interfaces:**
-- Adds optional legacy-compatible owner input to all six durable claim methods.
+- Makes `runtime_session_id` mandatory and validated on all six durable live
+  claim methods; no live claim can append ownerless evidence.
 - Produces the four provider-start/transport metadata methods and runtime-aware recovery signature defined above.
 - Preserves canonical JSONL, per-review locks, immutable identity files, Q03G event meanings, and the 1,800-second ownerless fallback.
 
 - [ ] **Step 1: Add ownership, event, metadata, and recovery RED tests**
 
-Add four primary tests:
+Add three primary tests and one storage-level supporting test:
 
 - `test_q03h_ac05_claimed_attempt_persists_runtime_session_id` exercises
   initial, initial retry, continuation, continuation retry, blind
   revalidation, revalidation retry, and targeted claims with one fixed owner;
-  every intent and reconstructed attempt must carry that owner.
-- `test_q03h_ac06_provider_started_event_is_unique_and_bound_to_current_attempt`
-  records the event once and checks its exact fields; duplicate, stale-attempt,
-  mismatched-owner, and wrong-phase writes must fail.
+  every intent and reconstructed attempt must carry that owner. For every claim
+  family it also omits the argument and passes empty/`None` invalid owners,
+  requiring rejection before attempt or intent creation.
+- `test_provider_started_event_is_unique_and_bound_to_current_attempt`
+  supports AC06 at the storage layer by recording the event once and checking
+  its exact fields; duplicate, stale-attempt, mismatched-owner, and wrong-phase
+  writes must fail. It does not own AC06 because it cannot prove adjacency to
+  the external request.
 - `test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry`
   claims as runtime A and recovers as runtime B before the stale horizon; it
   requires one `OUTCOME_UNKNOWN`, no A002, no provider hook, and idempotent
   recovery.
 - `test_q03h_ac19_legacy_q03g_evidence_reads_without_migration` constructs
-  canonical pre-Q03H events without owner/start/metadata fields, then proves
-  byte-identical files and successful reconstruction plus ownerless fallback.
+  canonical pre-Q03H JSONL directly under the temporary evidence root without
+  calling any claim API, then proves byte-identical files and successful
+  reconstruction plus ownerless fallback.
 
 Supporting tests cover one terminal metadata event, allow-listed failure kind, non-negative elapsed milliseconds, current-attempt enforcement, successful metadata after outcome, current-runtime non-recovery, ownerless fresh/stale behavior, and revalidation symmetry.
 
@@ -462,17 +512,25 @@ Supporting tests cover one terminal metadata event, allow-listed failure kind, n
 ```powershell
 & $Python -m pytest `
   'tests/ox/test_evidence.py::test_q03h_ac05_claimed_attempt_persists_runtime_session_id' `
-  'tests/ox/test_evidence.py::test_q03h_ac06_provider_started_event_is_unique_and_bound_to_current_attempt' `
+  'tests/ox/test_evidence.py::test_provider_started_event_is_unique_and_bound_to_current_attempt' `
   'tests/ox/test_orphaned_transmission_recovery.py::test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry' `
   'tests/ox/test_evidence.py::test_q03h_ac19_legacy_q03g_evidence_reads_without_migration' `
   -vv
 ```
 
-Expected RED: missing owner/event/metadata/recovery support, not malformed fixtures.
+Expected RED: owner omission still creates evidence or the required
+owner/event/metadata/recovery support is missing, not malformed fixtures.
 
 - [ ] **Step 3: Extend canonical reconstruction and mutation guards**
 
-Persist owner in each intent append. Recognize `PROVIDER_REQUEST_STARTED` and one bounded terminal transport metadata event without changing state. Attach optional fields to the matching reconstructed attempt. Reject duplicate events, mismatched phase/owner, non-current attempt, unknown failure kind, unsafe timestamp, negative elapsed value, or metadata preceding terminal outcome.
+Require and validate owner before every claim mutation, then persist it in each
+intent append. Update all direct claims in the two modified test modules to use
+explicit safe test owners; ownerless historical/stale fixtures write canonical
+pre-Q03H JSONL directly. Recognize `PROVIDER_REQUEST_STARTED` and one bounded
+terminal transport metadata event without changing state. Attach optional
+fields to the matching reconstructed attempt. Reject duplicate events,
+mismatched phase/owner, non-current attempt, unknown failure kind, unsafe
+timestamp, negative elapsed value, or metadata preceding terminal outcome.
 
 - [ ] **Step 4: Implement runtime-aware recovery precedence**
 
@@ -483,7 +541,7 @@ When a current unfinished attempt has a persisted owner different from the suppl
 ```powershell
 & $Python -m pytest `
   'tests/ox/test_evidence.py::test_q03h_ac05_claimed_attempt_persists_runtime_session_id' `
-  'tests/ox/test_evidence.py::test_q03h_ac06_provider_started_event_is_unique_and_bound_to_current_attempt' `
+  'tests/ox/test_evidence.py::test_provider_started_event_is_unique_and_bound_to_current_attempt' `
   'tests/ox/test_orphaned_transmission_recovery.py::test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry' `
   'tests/ox/test_evidence.py::test_q03h_ac19_legacy_q03g_evidence_reads_without_migration' `
   tests/ox/test_evidence.py `
@@ -503,7 +561,10 @@ git commit -m "feat: persist ox runtime transmission ownership"
 git show --check --stat --oneline HEAD
 ```
 
-Fresh review checks event ordering, duplicate rejection, current-attempt locking, recovery precedence, legacy readability, no historical migration, and zero provider dependency. Resolve all findings before Task 3.
+Fresh review checks mandatory owner rejection before mutation, every direct
+claim caller, event storage ordering/uniqueness, current-attempt locking,
+recovery precedence, directly seeded legacy readability, no historical
+migration, and zero provider dependency. Resolve all findings before Task 3.
 
 ---
 
@@ -519,15 +580,18 @@ Fresh review checks event ordering, duplicate rejection, current-attempt locking
 
 - [ ] **Step 1: Add deterministic manager RED tests**
 
-Add two primary tests:
+Add one primary test and manager-only supporting tests:
 
 - `test_q03h_ac03_different_operation_is_busy_before_claim` holds operation A
   with an event and attempts B through a claim spy; require local busy, zero
   claims for B, zero B workers, and no queued launch.
-- `test_q03h_ac07_submission_failure_is_not_sent_without_provider_boundary`
-  makes `Thread.start` raise; require exactly one submission-failure callback,
-  zero boundary entries, zero worker calls, cleared active state, and a reusable
-  lane.
+- `test_submission_failure_invokes_terminalizer_without_running_worker` makes
+  `Thread.start` raise; require exactly one submission-failure callback, zero
+  worker calls, and release only after the callback returns successfully. This
+  supports AC07 but cannot own its durable evidence assertion.
+- `test_submission_terminalizer_failure_faults_lane_closed` makes the callback
+  raise and proves later reservations are rejected rather than reopening over
+  unresolved work.
 
 Supporting tests prove a same accepted key returns its defensive active receipt, same attempt cannot submit twice, accepted work starts in the background without waiting, success/expected failure/unexpected crash release exactly once, and a terminalization-callback failure faults the manager closed.
 
@@ -536,7 +600,8 @@ Supporting tests prove a same accepted key returns its defensive active receipt,
 ```powershell
 & $Python -m pytest `
   'tests/ox/test_background_job_manager.py::test_q03h_ac03_different_operation_is_busy_before_claim' `
-  'tests/ox/test_background_job_manager.py::test_q03h_ac07_submission_failure_is_not_sent_without_provider_boundary' `
+  'tests/ox/test_background_job_manager.py::test_submission_failure_invokes_terminalizer_without_running_worker' `
+  'tests/ox/test_background_job_manager.py::test_submission_terminalizer_failure_faults_lane_closed' `
   -vv
 ```
 
@@ -544,14 +609,15 @@ Expected RED: `byte_mcp.ox.jobs` or the locked manager behavior is missing.
 
 - [ ] **Step 3: Implement the manager with one lock and no queue**
 
-Use `threading.Lock`, `threading.Thread`, a monotonically local lease token, and `uuid.uuid4().hex`. Reserve before caller claim. Start exactly one background daemon thread per accepted descriptor; the shared lane prevents concurrent job threads and never queues a later job. Copy bounded receipt/key data. Release the matching lease exactly once after terminalization and reject a stale release. Never retain exception objects or text.
+Use `threading.Lock`, `threading.Thread`, a monotonically local lease token, and `uuid.uuid4().hex`. Reserve before caller claim. Start exactly one background daemon thread per accepted descriptor; the shared lane prevents concurrent job threads and never queues a later job. Copy bounded receipt/key data. Release the matching lease exactly once after successful terminalization and reject a stale release. Implement `fault_closed` and use it whenever a submission/crash terminalizer raises, so the manager rejects all later work without retaining exception objects or text.
 
 - [ ] **Step 4: Run focused GREEN and the whole manager module**
 
 ```powershell
 & $Python -m pytest `
   'tests/ox/test_background_job_manager.py::test_q03h_ac03_different_operation_is_busy_before_claim' `
-  'tests/ox/test_background_job_manager.py::test_q03h_ac07_submission_failure_is_not_sent_without_provider_boundary' `
+  'tests/ox/test_background_job_manager.py::test_submission_failure_invokes_terminalizer_without_running_worker' `
+  'tests/ox/test_background_job_manager.py::test_submission_terminalizer_failure_faults_lane_closed' `
   tests/ox/test_background_job_manager.py `
   -q
 ```
@@ -568,7 +634,10 @@ git commit -m "feat: add single-lane ox background job manager"
 git show --check --stat --oneline HEAD
 ```
 
-Fresh review attempts races around reserve/submit/release, duplicate submission, thread-start failure, callback failure, and same/different operation identity. No service integration begins until findings are resolved.
+Fresh review attempts races around reserve/submit/release, duplicate submission,
+thread-start failure, callback failure, closed-lane behavior, and same/different
+operation identity. It treats AC07 as unowned until the Task 4 real-store
+integration test. No service integration begins until findings are resolved.
 
 ---
 
@@ -589,6 +658,10 @@ Fresh review attempts races around reserve/submit/release, duplicate submission,
 **Interfaces:**
 - `OXRuntime.initialize` creates the manager, calls owner-aware recovery, then constructs `OXReviewService(settings, evidence, client, audit, jobs)`.
 - `transmit_review` and `retry_review` reserve, claim with `jobs.runtime_session_id`, persist identity/history, submit `_run_claimed_initial_attempt`, and return truthful launch receipts.
+- Both initial paths use the shared pre-acceptance cleanup guard: pre-claim
+  failures abandon with no attempt; post-claim identity/thread/submission
+  failures durably terminalize `NOT_SENT` before release or fault closed if the
+  terminal write fails.
 - Ordinary `TRANSMITTING` and `REVIEWED` replay remains local; retry still requires `approve=true, retry=true` at MCP and `renewed_approval=True` in service.
 
 - [ ] **Step 1: Add initial ownership RED tests**
@@ -598,12 +671,24 @@ Add these primary node IDs:
 - `test_q03h_ac01_initial_launch_receipt_returns_before_blocked_provider`
 - `test_q03h_ac02_cancelled_mcp_task_does_not_cancel_or_duplicate_worker`
 - `test_q03h_ac04_same_active_operation_replays_without_duplicate_work`
+- `test_q03h_ac07_submission_failure_after_claim_persists_not_sent`
 - `test_q03h_ac11_initial_worker_is_natural_exactly_once_and_orders_evidence`
 - `test_q03h_ac12_initial_retry_requires_renewed_approval_and_launches_once`
 
-AC01 and AC02 use a blocking fake provider with `entered`/`release` events. Assert the MCP result is available while blocked, cancellation after accepted launch does not affect the worker, one A001 exists, one worker enters, and provider count remains one after a replay. AC04 asserts the active receipt fields and exact zero deltas. AC11 records method/event order and requires `PROVIDER_REQUEST_STARTED`, one `json_mode=False` call, raw response, assistant thread, `COMPLETED`, metadata/audit, then lane release. AC12 tests denial without both controls and one A002 only after renewed approval.
+AC01 and AC02 use a blocking fake provider with `entered`/`release` events. Assert the MCP result is available while blocked, cancellation after accepted launch does not affect the worker, one A001 exists, one worker enters, and provider count remains one after a replay. AC04 asserts the active receipt fields and exact zero deltas. AC07 uses a real temporary `EvidenceStore`, forces `Thread.start` to raise only after the initial claim/identity/thread writes, and asserts reconstructed `NOT_SENT`, no `PROVIDER_REQUEST_STARTED`, zero fake-client calls, exact one attempt, and a reusable lane. AC11 records method/event order and requires `PROVIDER_REQUEST_STARTED`, one `json_mode=False` call, raw response, assistant thread, `COMPLETED`, metadata/audit, then lane release. AC12 tests denial without both controls and one A002 only after renewed approval.
 
 Add a supporting AC08 integration test that raises a sentinel-bearing `OXTransportError` and proves the reconstructed attempt persists only `OUTCOME_UNKNOWN`, fixed kind, and safe timing.
+
+Add deterministic supporting cleanup tests for initial and initial-retry paths:
+
+- `test_initial_preclaim_failure_abandons_lane_without_attempt` parameterizes
+  validation and claim failures; it preserves the original domain error,
+  creates no attempt, and leaves the lane reusable.
+- `test_initial_postclaim_failure_terminalizes_not_sent_or_faults_closed`
+  parameterizes identity and thread-persistence failures; it reconstructs
+  `NOT_SENT` before reuse when terminalization succeeds and requires later
+  reservation to fail closed when terminal-outcome persistence is forced to
+  fail.
 
 - [ ] **Step 2: Run focused RED**
 
@@ -612,6 +697,9 @@ Add a supporting AC08 integration test that raises a sentinel-bearing `OXTranspo
   'tests/ox/test_long_provider_mcp_safety.py::test_q03h_ac01_initial_launch_receipt_returns_before_blocked_provider' `
   'tests/ox/test_long_provider_mcp_safety.py::test_q03h_ac02_cancelled_mcp_task_does_not_cancel_or_duplicate_worker' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac04_same_active_operation_replays_without_duplicate_work' `
+  'tests/ox/test_review_service.py::test_q03h_ac07_submission_failure_after_claim_persists_not_sent' `
+  'tests/ox/test_review_service.py::test_initial_preclaim_failure_abandons_lane_without_attempt' `
+  'tests/ox/test_review_service.py::test_initial_postclaim_failure_terminalizes_not_sent_or_faults_closed' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac11_initial_worker_is_natural_exactly_once_and_orders_evidence' `
   'tests/ox/test_review_service.py::test_q03h_ac12_initial_retry_requires_renewed_approval_and_launches_once' `
   -vv
@@ -621,11 +709,11 @@ Expected RED: the existing MCP call still waits for provider completion and runt
 
 - [ ] **Step 3: Inject one manager and refactor initial claim from execution**
 
-Create the manager before startup recovery. Pass the owner into every initial claim and attempt identity. Build the receipt before thread start with `state="TRANSMITTING"`, `launch_accepted=True`, `replayed=False`, and `provider_request_performed=False`. On active replay return `launch_accepted=False`, `replayed=True`, and no provider result. Remove initial/retry `await asyncio.to_thread(...)` from `server.ox_review`; keep its public signature and mode validation unchanged.
+Create the manager before startup recovery. Pass the owner into every initial claim and attempt identity. Put reservation, claim, identity/thread persistence, descriptor creation, and submit under the shared cleanup guard. Before claim, abandon on error without altering it. After claim but before boundary entry, record `NOT_SENT` and release only after that append succeeds; if it fails, call `fault_closed`. Build the receipt before thread start with `state="TRANSMITTING"`, `launch_accepted=True`, `replayed=False`, and `provider_request_performed=False`. On active replay return `launch_accepted=False`, `replayed=True`, and no provider result. Remove initial/retry `await asyncio.to_thread(...)` from `server.ox_review`; keep its public signature and mode validation unchanged.
 
 - [ ] **Step 4: Implement the already-claimed natural worker**
 
-The worker never calls `transmit_review` or `retry_review`. Write `PROVIDER_REQUEST_STARTED` immediately before one `complete(..., json_mode=False, ...)`. Persist raw response before content validation, assistant thread before completion, outcome before terminal metadata/audit, and release after terminalization. Submission failure is `NOT_SENT`; an escaping or ambiguous worker failure is `OUTCOME_UNKNOWN`.
+The worker never calls `transmit_review` or `retry_review`. Write `PROVIDER_REQUEST_STARTED` immediately before one `complete(..., json_mode=False, ...)`. Persist raw response before content validation, assistant thread before completion, outcome before terminal metadata/audit, and release after terminalization. The `Thread.start` failure callback uses the already-claimed attempt and real store to write `NOT_SENT`; it never delegates durable outcome authority to `jobs.py`. An escaping or ambiguous worker failure is `OUTCOME_UNKNOWN`.
 
 - [ ] **Step 5: Run focused GREEN and initial regressions**
 
@@ -634,6 +722,9 @@ The worker never calls `transmit_review` or `retry_review`. Write `PROVIDER_REQU
   'tests/ox/test_long_provider_mcp_safety.py::test_q03h_ac01_initial_launch_receipt_returns_before_blocked_provider' `
   'tests/ox/test_long_provider_mcp_safety.py::test_q03h_ac02_cancelled_mcp_task_does_not_cancel_or_duplicate_worker' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac04_same_active_operation_replays_without_duplicate_work' `
+  'tests/ox/test_review_service.py::test_q03h_ac07_submission_failure_after_claim_persists_not_sent' `
+  'tests/ox/test_review_service.py::test_initial_preclaim_failure_abandons_lane_without_attempt' `
+  'tests/ox/test_review_service.py::test_initial_postclaim_failure_terminalizes_not_sent_or_faults_closed' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac11_initial_worker_is_natural_exactly_once_and_orders_evidence' `
   'tests/ox/test_review_service.py::test_q03h_ac12_initial_retry_requires_renewed_approval_and_launches_once' `
   tests/ox/test_long_provider_mcp_safety.py `
@@ -641,6 +732,7 @@ The worker never calls `transmit_review` or `retry_review`. Write `PROVIDER_REQU
   tests/ox/test_review_service.py `
   tests/ox/test_runtime.py `
   tests/ox/test_mcp_surface.py `
+  tests/ox/test_security_invariants.py `
   -q
 ```
 
@@ -672,6 +764,8 @@ Fresh review checks cancellation ownership, receipt truthfulness, claim-before-s
 **Interfaces:**
 - `continue_message` and `retry_continuation` use the same manager and `_run_claimed_continuation_attempt`.
 - The immutable descriptor carries the exact claimed history digest; one new user message is persisted before accepted launch and never appended again by the worker.
+- Both paths apply the same pre-acceptance abandon/`NOT_SENT`/closed-fault
+  distinction established in Task 4.
 - `record_findings` and `adjudicate` remain direct local operations.
 
 - [ ] **Step 1: Add continuation RED tests**
@@ -688,12 +782,20 @@ Add two primary tests:
   renews approval for the exact latest ID, and requires one new launch, attempt,
   and provider call.
 
+Add
+`test_continuation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane`
+as a deterministic parameterized supporting regression for continuation and
+continuation retry. It distinguishes no-attempt pre-claim failures, durable
+`NOT_SENT` after claimed history/message persistence failures, and a closed lane
+when terminalization itself fails.
+
 - [ ] **Step 2: Run focused RED**
 
 ```powershell
 & $Python -m pytest `
   'tests/ox/test_review_followup.py::test_q03h_ac13_continuation_launch_preserves_history_and_natural_response' `
   'tests/ox/test_review_followup.py::test_q03h_ac14_continuation_retry_requires_latest_attempt_and_approval' `
+  'tests/ox/test_review_followup.py::test_continuation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane' `
   -vv
 ```
 
@@ -701,7 +803,14 @@ Expected RED: continuation still runs provider work inline inside the service ca
 
 - [ ] **Step 3: Refactor continuation claim and worker paths**
 
-Reserve by candidate/persisted history digest before claim. Persist the user turn exactly once in the claim stage. The worker receives the already-claimed descriptor, records the boundary, performs one natural request, writes raw response and assistant turn, terminalizes, and releases. Retry reconstructs the exact failed history and cannot accept replacement text.
+Reserve by candidate/persisted history digest before claim and pass the required
+runtime owner. Persist the user turn exactly once in the claim stage. Reuse the
+Task 4 cleanup guard around every pre-acceptance step: abandon without an
+attempt before claim, terminalize `NOT_SENT` before release after claim, and
+fault closed on terminal-write failure. The worker receives the already-claimed
+descriptor, records the boundary, performs one natural request, writes raw
+response and assistant turn, terminalizes, and releases. Retry reconstructs the
+exact failed history and cannot accept replacement text.
 
 - [ ] **Step 4: Run focused GREEN and continuation regressions**
 
@@ -709,6 +818,7 @@ Reserve by candidate/persisted history digest before claim. Persist the user tur
 & $Python -m pytest `
   'tests/ox/test_review_followup.py::test_q03h_ac13_continuation_launch_preserves_history_and_natural_response' `
   'tests/ox/test_review_followup.py::test_q03h_ac14_continuation_retry_requires_latest_attempt_and_approval' `
+  'tests/ox/test_review_followup.py::test_continuation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane' `
   tests/ox/test_continue_provider_mcp_safety.py `
   tests/ox/test_review_followup.py `
   tests/ox/test_mcp_surface.py `
@@ -750,6 +860,8 @@ Fresh review specifically checks duplicate user/assistant thread persistence, ex
   blind/targeted phase, and targeted revalidation respectively.
 - Preparation stays local. Targeted descriptors retain exact Byte-derived finding and adjudication provenance.
 - The same manager rejects cross-type contention with initial or continuation work.
+- All three paths pass the mandatory runtime owner and use the shared
+  pre-acceptance abandon/`NOT_SENT`/closed-fault cleanup rule.
 
 - [ ] **Step 1: Add revalidation RED tests**
 
@@ -757,31 +869,66 @@ Fresh review specifically checks duplicate user/assistant thread persistence, ex
 - `test_q03h_ac16_revalidation_retry_requires_renewed_approval_and_never_auto_retries`
 - `test_q03h_ac17_targeted_revalidation_preserves_byte_provenance_and_launches_once`
 
+Add the unique AC06 primary owner
+`test_q03h_ac06_all_provider_workers_record_start_immediately_before_call` in
+`tests/ox/test_natural_review_architecture.py`. Parameterize its one test body
+over initial, initial retry, continuation, continuation retry, blind
+revalidation, revalidation retry, and targeted revalidation. For each case use
+a real temporary `EvidenceStore`, the completed prerequisite evidence, and one
+deterministic fake client/event log. Require exactly one
+`PROVIDER_REQUEST_STARTED` append whose event-log entry is immediately followed
+by the single `client.complete` entry, with matching attempt, owner, and phase;
+no worker operation may intervene. This is the sole primary AC06 test. Task 2's
+storage uniqueness test and earlier per-family ordering assertions remain
+supporting only.
+
 AC15 blocks the fake provider and proves a prompt bounded receipt, one blind attempt, and `json_mode=False`. AC16 rejects ordinary replay/absent approval and launches exactly one explicit retry of the same phase. AC17 checks the descriptor/history contains only approved revalidation packet plus Byte-derived provenance and selected adjudications, then proves one natural call. Add a supporting cross-type test that holds initial work and rejects continuation, blind, and targeted launches before claim.
+
+Also add
+`test_revalidation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane`
+as a deterministic parameterized supporting regression over blind,
+revalidation-retry, and targeted paths. It requires no attempt and preserved
+error for pre-claim failures, durable `NOT_SENT` before lane reuse for
+post-claim identity/thread/descriptor failures, and a closed lane if that
+terminal outcome cannot be persisted.
 
 - [ ] **Step 2: Run focused RED**
 
 ```powershell
 & $Python -m pytest `
+  'tests/ox/test_natural_review_architecture.py::test_q03h_ac06_all_provider_workers_record_start_immediately_before_call' `
   'tests/ox/test_revalidate_provider_mcp_safety.py::test_q03h_ac15_blind_revalidation_launches_promptly_in_natural_mode' `
   'tests/ox/test_review_followup.py::test_q03h_ac16_revalidation_retry_requires_renewed_approval_and_never_auto_retries' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac17_targeted_revalidation_preserves_byte_provenance_and_launches_once' `
+  'tests/ox/test_review_followup.py::test_revalidation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane' `
   -vv
 ```
 
-Expected RED: current revalidation methods still wait for `_perform_revalidation_attempt` and lack shared-lane receipts.
+Expected RED: at least one worker lacks exact start-to-call adjacency, or current
+revalidation methods still wait for `_perform_revalidation_attempt` and lack
+shared-lane cleanup/receipts.
 
 - [ ] **Step 3: Refactor blind, retry, and targeted claim paths**
 
-Reserve the one global lane before revalidation claim. Persist owner, exact phase, history, and required thread once. Submit an already-claimed descriptor. The natural worker writes one provider-start event immediately before one `json_mode=False` call, then raw response, usable natural assistant response, terminal outcome, metadata/audit, and release. It never calls a public revalidation entry point.
+Reserve the one global lane before revalidation claim and pass the required
+runtime owner. Persist owner, exact phase, history, and required thread once.
+Apply the shared guard to every pre-acceptance step: abandon with no attempt
+before claim, durably terminalize `NOT_SENT` before release after claim, and
+fault closed if terminalization fails. Submit an already-claimed descriptor.
+The natural worker writes one provider-start event immediately before one
+`json_mode=False` call, then raw response, usable natural assistant response,
+terminal outcome, metadata/audit, and release. It never calls a public
+revalidation entry point.
 
 - [ ] **Step 4: Run focused GREEN and all revalidation regressions**
 
 ```powershell
 & $Python -m pytest `
+  'tests/ox/test_natural_review_architecture.py::test_q03h_ac06_all_provider_workers_record_start_immediately_before_call' `
   'tests/ox/test_revalidate_provider_mcp_safety.py::test_q03h_ac15_blind_revalidation_launches_promptly_in_natural_mode' `
   'tests/ox/test_review_followup.py::test_q03h_ac16_revalidation_retry_requires_renewed_approval_and_never_auto_retries' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac17_targeted_revalidation_preserves_byte_provenance_and_launches_once' `
+  'tests/ox/test_review_followup.py::test_revalidation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane' `
   tests/ox/test_revalidate_provider_mcp_safety.py `
   tests/ox/test_review_followup.py `
   tests/ox/test_natural_review_architecture.py `
@@ -801,7 +948,11 @@ git commit -m "feat: background ox revalidation transmission"
 git show --check --stat --oneline HEAD
 ```
 
-Fresh review checks one lane rather than per-phase lanes, phase/retry binding, Byte provenance, natural mode, duplicate thread writes, receipt truthfulness, and zero implicit retry. Resolve findings before retrieval hardening.
+Fresh review checks the seven-case start-event adjacency oracle, one lane rather
+than per-phase lanes, phase/retry binding, Byte provenance, natural mode,
+pre-acceptance unwind/fault handling, duplicate thread writes, receipt
+truthfulness, and zero implicit retry. Resolve findings before retrieval
+hardening.
 
 ---
 
@@ -824,10 +975,11 @@ Fresh review checks one lane rather than per-phase lanes, phase/retry binding, B
 - [ ] **Step 1: Add the attempts-view RED test**
 
 Add `test_q03h_ac18_attempts_view_is_bounded_local_and_secret_free`. Seed one
-Q03H attempt and one legacy-shaped attempt under temporary evidence, make
-`client.complete` fail if called, retrieve attempts, and assert only approved
-fields. No credential, sentinel exception text, raw body, header, cookie, stack
-text, or provider invocation may appear.
+owned Q03H attempt through the live claim API and one legacy-shaped attempt by
+writing canonical pre-Q03H JSONL directly under temporary evidence; never call
+a claim API without an owner. Make `client.complete` fail if called, retrieve
+attempts, and assert only approved fields. No credential, sentinel exception
+text, raw body, header, cookie, stack text, or provider invocation may appear.
 
 Keep AC19's single primary owner in `test_evidence.py`; here add supporting security and actual historical-script gates without assigning a second primary owner.
 
@@ -850,6 +1002,7 @@ Project only `attempt_id`, `manifest_sha256`, `phase` where existing, `outcome`,
 ```powershell
 & $Python -m pytest `
   'tests/ox/test_mcp_surface.py::test_q03h_ac18_attempts_view_is_bounded_local_and_secret_free' `
+  tests/ox/test_mcp_surface.py `
   tests/ox/test_security_invariants.py `
   tests/ox/test_security_defense_in_depth.py `
   tests/ox/test_natural_review_security.py `
@@ -900,8 +1053,8 @@ Fresh review checks allow-list projection, legacy omission semantics, provider-f
   'tests/ox/test_background_job_manager.py::test_q03h_ac03_different_operation_is_busy_before_claim' `
   'tests/ox/test_natural_review_architecture.py::test_q03h_ac04_same_active_operation_replays_without_duplicate_work' `
   'tests/ox/test_evidence.py::test_q03h_ac05_claimed_attempt_persists_runtime_session_id' `
-  'tests/ox/test_evidence.py::test_q03h_ac06_provider_started_event_is_unique_and_bound_to_current_attempt' `
-  'tests/ox/test_background_job_manager.py::test_q03h_ac07_submission_failure_is_not_sent_without_provider_boundary' `
+  'tests/ox/test_natural_review_architecture.py::test_q03h_ac06_all_provider_workers_record_start_immediately_before_call' `
+  'tests/ox/test_review_service.py::test_q03h_ac07_submission_failure_after_claim_persists_not_sent' `
   'tests/ox/test_client.py::test_q03h_ac08_ambiguous_transport_diagnostic_is_bounded_and_timed' `
   'tests/ox/test_client.py::test_q03h_ac09_transport_exception_matrix_preserves_outcome_and_kind' `
   'tests/ox/test_orphaned_transmission_recovery.py::test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry' `
@@ -1002,9 +1155,9 @@ This table is the normative one-to-one primary-owner registry. Supporting tests 
 | Q03H-AC02 | `tests/ox/test_long_provider_mcp_safety.py::test_q03h_ac02_cancelled_mcp_task_does_not_cancel_or_duplicate_worker` | Binding worker lifetime to MCP cancellation or launching a duplicate after cancellation. |
 | Q03H-AC03 | `tests/ox/test_background_job_manager.py::test_q03h_ac03_different_operation_is_busy_before_claim` | Allowing another operation to claim, queue, or call the provider while the lane is occupied. |
 | Q03H-AC04 | `tests/ox/test_natural_review_architecture.py::test_q03h_ac04_same_active_operation_replays_without_duplicate_work` | Allocating a new attempt, worker, or call instead of returning the active local receipt. |
-| Q03H-AC05 | `tests/ox/test_evidence.py::test_q03h_ac05_claimed_attempt_persists_runtime_session_id` | Creating any new Q03H transmission intent without its runtime owner. |
-| Q03H-AC06 | `tests/ox/test_evidence.py::test_q03h_ac06_provider_started_event_is_unique_and_bound_to_current_attempt` | Omitting, duplicating, misbinding, or reordering the provider-boundary event. |
-| Q03H-AC07 | `tests/ox/test_background_job_manager.py::test_q03h_ac07_submission_failure_is_not_sent_without_provider_boundary` | Leaving a failed submission transmitting, crossing the boundary, or retaining the lane. |
+| Q03H-AC05 | `tests/ox/test_evidence.py::test_q03h_ac05_claimed_attempt_persists_runtime_session_id` | Accepting a missing/invalid owner or creating any new Q03H transmission intent without its runtime owner. |
+| Q03H-AC06 | `tests/ox/test_natural_review_architecture.py::test_q03h_ac06_all_provider_workers_record_start_immediately_before_call` | Omitting, duplicating, misbinding, or moving the provider-start event away from the immediately preceding position for any provider-bearing worker. |
+| Q03H-AC07 | `tests/ox/test_review_service.py::test_q03h_ac07_submission_failure_after_claim_persists_not_sent` | Releasing after failed submission without durable `NOT_SENT`, recording a provider start/call, or leaving a safely terminalized lane unusable. |
 | Q03H-AC08 | `tests/ox/test_client.py::test_q03h_ac08_ambiguous_transport_diagnostic_is_bounded_and_timed` | Losing `OUTCOME_UNKNOWN`, safe kind/timing, or retaining arbitrary exception text. |
 | Q03H-AC09 | `tests/ox/test_client.py::test_q03h_ac09_transport_exception_matrix_preserves_outcome_and_kind` | Collapsing HTTPX categories or changing their authoritative outcomes. |
 | Q03H-AC10 | `tests/ox/test_orphaned_transmission_recovery.py::test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry` | Waiting for stale horizon, resuming, retrying, or allocating during cross-runtime recovery. |
@@ -1046,8 +1199,15 @@ The stop report includes task and step, repository/branch/HEAD, dirty state, exa
 
 - Runtime-owned work and MCP cancellation independence: Tasks 3–6.
 - One lane, no queue, cross-operation busy, same-operation replay: Tasks 3–6.
-- Runtime owner persisted atomically with intent: Task 2; required at every production claim in Tasks 4–6.
-- Provider boundary uniqueness and evidence ordering: Tasks 2 and 4–6.
+- Mandatory runtime owner validated and persisted atomically with intent: Task
+  2; every live source call site receives the manager owner in Tasks 4–6;
+  ownerless compatibility is direct-fixture reconstruction only.
+- Provider-start storage uniqueness: supporting evidence coverage in Task 2.
+  The sole AC06 primary is the deterministic seven-path event-immediately-before-call
+  worker test completed in Task 6 after sequential integration.
+- Pre-acceptance cleanup: manager fault mechanics in Task 3; initial/retry
+  integration and the sole durable AC07 owner in Task 4; continuation and
+  revalidation regressions in Tasks 5–6.
 - Fixed transport classification, outcomes, and bounded timing: Tasks 1–2 and initial integration in Task 4.
 - Foreign-runtime recovery before legacy stale horizon: Task 2; runtime wiring in Task 4.
 - Initial review and explicit retry: Task 4.
@@ -1058,6 +1218,8 @@ The stop report includes task and step, repository/branch/HEAD, dirty state, exa
 - Historical Q03G readability and immutable fingerprints: Tasks 2, 7, and 8.
 - Wolfram isolation and all broad provider-free gates: Task 8.
 - Explicit approval and no automatic retry: global constraints plus Tasks 4–6.
+- Complete modified-test-module GREEN gates: explicitly audited in every Task
+  1–7 checkpoint command.
 - No runtime promotion, deployment, merge, push, daemon control, Scheduled Task change, or live canary: global constraints and Task 8 stop language.
 
 ### Placeholder scan
@@ -1066,4 +1228,4 @@ Every task names concrete files, interfaces, primary test node IDs, focused RED/
 
 ### Type and naming consistency
 
-The plan consistently uses `OXTransportFailureKind`, `OXOperationKey`, `OXLaunchDescriptor`, `OXActiveLaunch`, `OXLaneLease`, `OXProviderJobManager`, `runtime_session_id`, `PROVIDER_REQUEST_STARTED`, `transport_failure_kind`, `provider_started_at`, `provider_finished_at`, and `elapsed_ms`. Public OX tool and service entry-point names remain the live base names. All acceptance IDs have one and only one primary node in the ownership matrix.
+The plan consistently uses `OXTransportFailureKind`, `OXOperationKey`, `OXLaunchDescriptor`, `OXActiveLaunch`, `OXLaneLease`, `OXProviderJobManager`, `runtime_session_id`, `PROVIDER_REQUEST_STARTED`, `transport_failure_kind`, `provider_started_at`, `provider_finished_at`, and `elapsed_ms`. Public OX tool and service entry-point names remain the live base names. All acceptance IDs have one and only one primary node in the ownership matrix; storage- and manager-only supporting tests deliberately omit AC06/AC07 identifiers.
