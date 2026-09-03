@@ -8,8 +8,9 @@ from byte_mcp.errors import (
     OXProtocolError,
     OXTransportError,
 )
-from byte_mcp.ox.models import ProviderResult, ProviderUsage
+from byte_mcp.ox.models import ProviderResult, ProviderUsage, ReviewState
 from tests.ox.helpers import commit_files
+from tests.ox.q03h_initial_support import wait_for_state
 from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
 
 
@@ -110,7 +111,9 @@ class UnknownTargetedClient(RecordingClient):
 
 def _establish_review(service, base: str, target: str) -> str:
     proposal = prepare(service, base, target)
-    service.transmit_review(proposal["review_id"])
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(service._evidence, proposal["review_id"], ReviewState.REVIEWED)
     return proposal["review_id"]
 
 
