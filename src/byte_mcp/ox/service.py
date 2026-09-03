@@ -21,19 +21,12 @@ from byte_mcp.errors import (
     OXUnavailableError,
 )
 
-from ._service_q03g import (
-    _ALLOWED_FINDING_TRANSITIONS,
-    _PROVIDER_ERRORS,
-    _history_sha256,
-    _json_copy,
-    _manifest_digest,
-    _message_bytes,
-)
 from ._service_q03g import OXReviewService as _Q03GReviewService
+from ._service_q03g import _PROVIDER_ERRORS, _history_sha256
 from .jobs import (
     OXActiveLaunch,
-    OXLaunchDescriptor,
     OXLaneLease,
+    OXLaunchDescriptor,
     OXOperationKey,
     OXProviderJobManager,
 )
@@ -423,7 +416,7 @@ def _retry_input_sha256(
     retry_of: str,
     messages: Sequence[Mapping[str, object]],
 ) -> str:
-    material = f"{retry_of}:{_history_sha256(messages)}".encode("utf-8")
+    material = f"{retry_of}:{_history_sha256(messages)}".encode()
     return hashlib.sha256(material).hexdigest()
 
 
