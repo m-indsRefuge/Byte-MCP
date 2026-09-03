@@ -285,9 +285,11 @@ def test_disabled_ox_review_fails_at_runtime_boundary(monkeypatch) -> None:
         ))
 
 
-def test_q03h_ac18_attempt_view_projects_transport_metadata(tmp_path, monkeypatch) -> None:
+def test_q03h_ac18_attempts_view_is_bounded_local_and_secret_free(
+    tmp_path, monkeypatch
+) -> None:
     import json
-    from datetime import UTC, datetime, timedelta
+    from datetime import datetime, timedelta
 
     from byte_mcp.errors import OXTransportFailureKind
     from byte_mcp.ox.evidence import EvidenceStore
@@ -302,7 +304,15 @@ def test_q03h_ac18_attempt_view_projects_transport_metadata(tmp_path, monkeypatc
         def get_review(self, review_id: str) -> dict[str, object]:
             review = super().get_review(review_id)
             for attempt in review["attempts"]:
-                attempt["internal_only"] = "must-not-escape"
+                attempt.update(
+                    {
+                        "raw_body": "RAW-BODY-SENTINEL",
+                        "authorization_header": "HEADER-SENTINEL",
+                        "cookie": "COOKIE-SENTINEL",
+                        "exception_text": "EXCEPTION-SENTINEL",
+                        "stack": "STACK-SENTINEL",
+                    }
+                )
             return review
 
     class FailIfCalledClient:
@@ -396,6 +406,7 @@ def test_q03h_ac18_attempt_view_projects_transport_metadata(tmp_path, monkeypatc
                 "attempt_id": owned["attempt_id"],
                 "manifest_sha256": manifest_sha256,
                 "runtime_session_id": runtime_session_id,
+                "provider_request_started": True,
                 "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
                 "provider_started_at": started_at,
                 "provider_finished_at": finished_at,
