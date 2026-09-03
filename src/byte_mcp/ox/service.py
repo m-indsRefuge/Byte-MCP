@@ -1,8 +1,9 @@
 """Q03H background ownership facade over the established OX service core.
 
 The Q03G orchestration remains the inherited implementation for provider-free
-and not-yet-migrated Task 5/6 paths. Q03H overrides initial review and explicit
-initial retry so claim ownership is separated from provider execution.
+and not-yet-migrated Task 6 paths. Q03H overrides initial review, continuation,
+and their explicit retry paths so claim ownership is separated from provider
+execution.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from .protocol import build_initial_messages, parse_findings
 
 
 class OXReviewService(_Q03GReviewService):
-    """Add runtime-owned initial provider execution to the hardened Q03G core."""
+    """Add runtime-owned provider execution to the hardened Q03G core."""
 
     def __init__(
         self,
@@ -189,15 +190,34 @@ class OXReviewService(_Q03GReviewService):
         return receipt
 
     def continue_message(self, review_id: str, message: str) -> dict[str, object]:
-        """Q03H compatibility path until Task 5 backgrounds continuation."""
+        """Launch one natural-text continuation without binding it to the MCP task."""
         if not isinstance(message, str) or not message.strip():
-            raise OXProtocolError(attempt_outcome="NOT_SENT")
+            raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)
+        message = message.strip()
+
+        replay = self._active_continuation_replay(
+            review_id,
+            expected_operation="continuation",
+            message=message,
+        )
+        if replay is not None:
+            return replay
+
         review = self._load_prepared_review(review_id, expected_state=ReviewState.REVIEWED)
         manifest_sha256 = _manifest_digest(review)
         history = self._evidence.read_thread(review_id, "initial")
-        messages = [*history, {"role": "user", "content": message.strip()}]
+        messages = [*history, {"role": "user", "content": message}]
         self._reject_configured_credential(messages)
         self._enforce_message_bound(messages)
+        operation_key = OXOperationKey(
+            operation="continuation",
+            subject_id=review_id,
+            input_sha256=_history_sha256(messages),
+        )
+        reservation = self._jobs.reserve(operation_key)
+        if isinstance(reservation, OXActiveLaunch):
+            return self._replay_launch_receipt(reservation)
+
         try:
             attempt = self._evidence.claim_continuation_transmission(
                 review_id,
@@ -205,26 +225,42 @@ class OXReviewService(_Q03GReviewService):
                 runtime_session_id=self._jobs.runtime_session_id,
             )
         except OXEvidenceError as exc:
+            self._jobs.abandon(reservation)
             raise OXApprovalError("review is not available for continuation") from exc
+
         attempt_id = attempt["attempt_id"]
-        self._persist_attempt_identity(
-            review_id,
-            attempt_id,
-            manifest_sha256,
-            messages,
-            phase="continuation",
-        )
         try:
+            self._persist_attempt_identity(
+                review_id,
+                attempt_id,
+                manifest_sha256,
+                messages,
+                phase="continuation",
+            )
             self._evidence.append_thread_message(review_id, "initial", messages[-1])
-        except OXEvidenceError:
-            self._record_not_sent(review_id, attempt_id)
+            descriptor = OXLaunchDescriptor(
+                operation_key=operation_key,
+                review_id=review_id,
+                attempt_id=attempt_id,
+                manifest_sha256=manifest_sha256,
+                phase="continuation",
+                revalidation_id=None,
+                messages=tuple(messages),
+            )
+            receipt = self._continuation_launch_receipt(descriptor)
+        except Exception:
+            self._cleanup_claimed_before_submission(reservation, review_id, attempt_id)
             raise
-        return self._perform_text_attempt(
-            review_id=review_id,
-            attempt_id=attempt_id,
-            manifest_sha256=manifest_sha256,
-            messages=messages,
+
+        self._jobs.submit(
+            reservation,
+            descriptor,
+            receipt,
+            self._run_claimed_continuation_attempt,
+            self._terminalize_continuation_submission_failure,
+            self._terminalize_continuation_worker_crash,
         )
+        return receipt
 
     def retry_continuation(
         self,
@@ -233,9 +269,18 @@ class OXReviewService(_Q03GReviewService):
         *,
         renewed_approval: bool,
     ) -> dict[str, object]:
-        """Q03H compatibility path until Task 5 backgrounds continuation retry."""
+        """Launch an exact continuation retry only after renewed human approval."""
         if not renewed_approval:
             raise OXApprovalError("continuation retry requires renewed human approval")
+
+        replay = self._active_continuation_replay(
+            review_id,
+            expected_operation="continuation-retry",
+            retry_of=attempt_id,
+        )
+        if replay is not None:
+            return replay
+
         review = self._load_prepared_review(
             review_id,
             expected_state=(ReviewState.FAILED, ReviewState.OUTCOME_UNKNOWN),
@@ -257,7 +302,17 @@ class OXReviewService(_Q03GReviewService):
         if prior_identity.get("history_sha256") != _history_sha256(messages):
             raise OXApprovalError("continuation history no longer matches failed attempt")
         self._reject_configured_credential(messages)
+        self._enforce_message_bound(messages)
         manifest_sha256 = _manifest_digest(review)
+        operation_key = OXOperationKey(
+            operation="continuation-retry",
+            subject_id=review_id,
+            input_sha256=_retry_input_sha256(attempt_id, messages),
+        )
+        reservation = self._jobs.reserve(operation_key)
+        if isinstance(reservation, OXActiveLaunch):
+            return self._replay_launch_receipt(reservation)
+
         try:
             attempt = self._evidence.claim_continuation_retry(
                 review_id,
@@ -267,22 +322,46 @@ class OXReviewService(_Q03GReviewService):
                 runtime_session_id=self._jobs.runtime_session_id,
             )
         except OXEvidenceError as exc:
+            self._jobs.abandon(reservation)
             raise OXApprovalError("continuation is not eligible for retry") from exc
+
         retry_attempt_id = attempt["attempt_id"]
-        self._persist_attempt_identity(
-            review_id,
-            retry_attempt_id,
-            manifest_sha256,
-            messages,
-            phase="continuation-retry",
-            retry_of=attempt_id,
+        try:
+            self._persist_attempt_identity(
+                review_id,
+                retry_attempt_id,
+                manifest_sha256,
+                messages,
+                phase="continuation-retry",
+                retry_of=attempt_id,
+            )
+            descriptor = OXLaunchDescriptor(
+                operation_key=operation_key,
+                review_id=review_id,
+                attempt_id=retry_attempt_id,
+                manifest_sha256=manifest_sha256,
+                phase="continuation-retry",
+                revalidation_id=None,
+                messages=tuple(messages),
+            )
+            receipt = self._continuation_launch_receipt(descriptor)
+        except Exception:
+            self._cleanup_claimed_before_submission(
+                reservation,
+                review_id,
+                retry_attempt_id,
+            )
+            raise
+
+        self._jobs.submit(
+            reservation,
+            descriptor,
+            receipt,
+            self._run_claimed_continuation_attempt,
+            self._terminalize_continuation_submission_failure,
+            self._terminalize_continuation_worker_crash,
         )
-        return self._perform_text_attempt(
-            review_id=review_id,
-            attempt_id=retry_attempt_id,
-            manifest_sha256=manifest_sha256,
-            messages=messages,
-        )
+        return receipt
 
     def transmit_blind_revalidation(self, revalidation_id: str) -> dict[str, object]:
         """Q03H compatibility path until Task 6 backgrounds revalidation."""
@@ -504,6 +583,37 @@ class OXReviewService(_Q03GReviewService):
             raise OXUnavailableError("OX provider lane is busy")
         return self._replay_launch_receipt(active)
 
+    def _active_continuation_replay(
+        self,
+        review_id: str,
+        *,
+        expected_operation: str,
+        message: str | None = None,
+        retry_of: str | None = None,
+    ) -> dict[str, object] | None:
+        active = self._jobs.snapshot()
+        if active is None:
+            return None
+        if active.descriptor.review_id != review_id:
+            raise OXUnavailableError("OX provider lane is busy")
+        if active.descriptor.operation_key.operation != expected_operation:
+            raise OXUnavailableError("OX provider lane is busy")
+        if expected_operation == "continuation":
+            if message is None or not active.descriptor.messages:
+                raise OXUnavailableError("OX provider lane is busy")
+            if active.descriptor.messages[-1] != {"role": "user", "content": message}:
+                raise OXUnavailableError("OX provider lane is busy")
+        elif expected_operation == "continuation-retry":
+            if retry_of is None:
+                raise OXUnavailableError("OX provider lane is busy")
+            identity = self._evidence.read_attempt_identity(
+                review_id,
+                active.descriptor.attempt_id,
+            )
+            if identity.get("retry_of") != retry_of:
+                raise OXUnavailableError("OX provider lane is busy")
+        return self._replay_launch_receipt(active)
+
     @staticmethod
     def _replay_launch_receipt(active: OXActiveLaunch) -> dict[str, object]:
         receipt = dict(active.receipt)
@@ -514,6 +624,18 @@ class OXReviewService(_Q03GReviewService):
 
     @staticmethod
     def _initial_launch_receipt(descriptor: OXLaunchDescriptor) -> dict[str, object]:
+        return {
+            "review_id": descriptor.review_id,
+            "attempt_id": descriptor.attempt_id,
+            "state": ReviewState.TRANSMITTING.value,
+            "manifest_sha256": descriptor.manifest_sha256,
+            "launch_accepted": True,
+            "replayed": False,
+            "provider_request_performed": False,
+        }
+
+    @staticmethod
+    def _continuation_launch_receipt(descriptor: OXLaunchDescriptor) -> dict[str, object]:
         return {
             "review_id": descriptor.review_id,
             "attempt_id": descriptor.attempt_id,
@@ -566,9 +688,27 @@ class OXReviewService(_Q03GReviewService):
                 AttemptOutcome.NOT_SENT,
             )
         except Exception:
+            if self._attempt_is_already_not_sent(review_id, attempt_id):
+                self._jobs.abandon(lease)
+                return
             self._jobs.fault_closed(lease)
             raise
         self._jobs.abandon(lease)
+
+    def _attempt_is_already_not_sent(self, review_id: str, attempt_id: str) -> bool:
+        try:
+            review = self._evidence.get_review(review_id)
+        except Exception:
+            return False
+        attempts = review.get("attempts")
+        if not isinstance(attempts, list):
+            return False
+        return any(
+            isinstance(attempt, Mapping)
+            and attempt.get("attempt_id") == attempt_id
+            and attempt.get("outcome") == AttemptOutcome.NOT_SENT.value
+            for attempt in attempts
+        )
 
     def _terminalize_submission_failure(self, descriptor: OXLaunchDescriptor) -> None:
         self._evidence.record_attempt_outcome(
@@ -595,6 +735,42 @@ class OXReviewService(_Q03GReviewService):
             descriptor.attempt_id,
             descriptor.manifest_sha256,
             AttemptOutcome.OUTCOME_UNKNOWN.value,
+            phase="worker-crash",
+        )
+
+    def _terminalize_continuation_submission_failure(
+        self,
+        descriptor: OXLaunchDescriptor,
+    ) -> None:
+        self._evidence.record_attempt_outcome(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            AttemptOutcome.NOT_SENT,
+        )
+        self._audit_attempt(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            descriptor.manifest_sha256,
+            AttemptOutcome.NOT_SENT.value,
+            action="ox_continue",
+            phase="submission-failure",
+        )
+
+    def _terminalize_continuation_worker_crash(
+        self,
+        descriptor: OXLaunchDescriptor,
+    ) -> None:
+        self._evidence.record_attempt_outcome(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            AttemptOutcome.OUTCOME_UNKNOWN,
+        )
+        self._audit_attempt(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            descriptor.manifest_sha256,
+            AttemptOutcome.OUTCOME_UNKNOWN.value,
+            action="ox_continue",
             phase="worker-crash",
         )
 
@@ -679,6 +855,95 @@ class OXReviewService(_Q03GReviewService):
             descriptor.attempt_id,
             descriptor.manifest_sha256,
             AttemptOutcome.COMPLETED.value,
+        )
+
+    def _run_claimed_continuation_attempt(self, descriptor: OXLaunchDescriptor) -> None:
+        """Execute one already-claimed natural-text continuation attempt."""
+        self._evidence.record_provider_request_started(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            runtime_session_id=self._jobs.runtime_session_id,
+            phase="continuation",
+        )
+        try:
+            result = self._client.complete(
+                descriptor.messages,
+                json_mode=False,
+                attempt_id=descriptor.attempt_id,
+            )
+        except _PROVIDER_ERRORS as exc:
+            self._record_provider_error(
+                descriptor.review_id,
+                descriptor.attempt_id,
+                descriptor.manifest_sha256,
+                exc,
+                action="ox_continue",
+                phase=(
+                    "retry"
+                    if descriptor.phase == "continuation-retry"
+                    else "message"
+                ),
+            )
+            return
+
+        if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
+            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            self._record_provider_error(
+                descriptor.review_id,
+                descriptor.attempt_id,
+                descriptor.manifest_sha256,
+                error,
+                action="ox_continue",
+                phase=(
+                    "retry"
+                    if descriptor.phase == "continuation-retry"
+                    else "message"
+                ),
+            )
+            return
+
+        self._evidence.persist_provider_response(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            result.raw_response,
+        )
+        if not isinstance(result.content, str) or not result.content.strip():
+            error = OXProtocolError(attempt_outcome=AttemptOutcome.REJECTED.value)
+            self._record_provider_error(
+                descriptor.review_id,
+                descriptor.attempt_id,
+                descriptor.manifest_sha256,
+                error,
+                action="ox_continue",
+                phase=(
+                    "retry"
+                    if descriptor.phase == "continuation-retry"
+                    else "message"
+                ),
+            )
+            return
+
+        self._evidence.append_thread_message(
+            descriptor.review_id,
+            "initial",
+            {"role": "assistant", "content": result.content},
+        )
+        self._evidence.record_attempt_outcome(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            AttemptOutcome.COMPLETED,
+        )
+        self._audit_attempt(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            descriptor.manifest_sha256,
+            AttemptOutcome.COMPLETED.value,
+            action="ox_continue",
+            phase=(
+                "retry"
+                if descriptor.phase == "continuation-retry"
+                else "message"
+            ),
         )
 
     def _record_provider_error(
