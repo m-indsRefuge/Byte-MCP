@@ -241,24 +241,27 @@ class EvidenceStore:
                 ):
                     latest = attempts[-1]
                     attempt_id = latest.get("attempt_id")
-                    if isinstance(attempt_id, str) and "outcome" not in latest:
-                        if self._attempt_requires_recovery(
+                    if (
+                        isinstance(attempt_id, str)
+                        and "outcome" not in latest
+                        and self._attempt_requires_recovery(
                             owner=latest.get("runtime_session_id"),
                             current_runtime_session_id=runtime_session_id,
                             recorded_at=self._review_attempt_recorded_at(
                                 review_id, attempt_id
                             ),
                             cutoff=cutoff,
-                        ):
-                            self._append_event(
-                                review_id,
-                                {
-                                    "attempt_id": attempt_id,
-                                    "event_type": "ATTEMPT_OUTCOME",
-                                    "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
-                                },
-                            )
-                            recovered.append(attempt_id)
+                        )
+                    ):
+                        self._append_event(
+                            review_id,
+                            {
+                                "attempt_id": attempt_id,
+                                "event_type": "ATTEMPT_OUTCOME",
+                                "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
+                            },
+                        )
+                        recovered.append(attempt_id)
 
                 revalidations = review_dir / "revalidations"
                 if not revalidations.is_dir():
@@ -1144,9 +1147,7 @@ class EvidenceStore:
         with self._lock_for(review_id):
             self._reconstruct_revalidation(review_id, revalidation_id)
             value = self._read_json(
-                self._revalidation_dir(review_id, revalidation_id)
-                / "bundles"
-                / "prepared.json"
+                self._revalidation_dir(review_id, revalidation_id) / "bundles" / "prepared.json"
             )
             if not isinstance(value, dict):
                 raise OXEvidenceError(
