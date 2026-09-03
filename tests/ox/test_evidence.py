@@ -506,7 +506,8 @@ def test_q03h_ac05_claimed_attempt_persists_runtime_session_id(tmp_path):
         runtime_session_id=RUNTIME_SESSION_ID,
     )
     assert blind["runtime_session_id"] == RUNTIME_SESSION_ID
-    assert store.get_revalidation(revalidation_id)["attempts"][-1]["runtime_session_id"] == RUNTIME_SESSION_ID
+    reconstructed_blind = store.get_revalidation(revalidation_id)["attempts"][-1]
+    assert reconstructed_blind["runtime_session_id"] == RUNTIME_SESSION_ID
     store.record_revalidation_attempt_outcome(
         revalidation_id,
         blind["attempt_id"],
@@ -737,4 +738,5 @@ def test_q03h_ac19_legacy_q03g_evidence_reads_without_migration(tmp_path):
         now=datetime(2026, 9, 3, tzinfo=UTC),
     )
     assert recovered == (f"{review_id}-A001",)
-    assert store.get_review(review_id)["attempts"][-1]["outcome"] == AttemptOutcome.OUTCOME_UNKNOWN.value
+    legacy_attempt = store.get_review(review_id)["attempts"][-1]
+    assert legacy_attempt["outcome"] == AttemptOutcome.OUTCOME_UNKNOWN.value
