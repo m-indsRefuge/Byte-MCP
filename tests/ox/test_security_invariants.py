@@ -12,9 +12,11 @@ from byte_mcp.errors import (
     OXTransportError,
 )
 from byte_mcp.ox.evidence import EvidenceStore
+from byte_mcp.ox.models import ReviewState
 from byte_mcp.ox.service import OXReviewService
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import commit_files, create_repository
+from tests.ox.q03h_initial_support import wait_for_state
 from tests.ox.test_review_service import (
     FakeAudit,
     RecordingClient,
@@ -71,7 +73,9 @@ def establish_review(tmp_path: Path):
         tmp_path, client
     )
     proposal = prepare(service, base, target)
-    service.transmit_review(proposal["review_id"])
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, proposal["review_id"], ReviewState.REVIEWED)
     return service, store, repository_path, base, target, registry, proposal["review_id"]
 
 
@@ -306,8 +310,9 @@ def test_unknown_outcome_retry_and_revalidation_require_renewed_approval(tmp_pat
     service, store, repository_path, base, target, _ = make_security_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
-    with pytest.raises(OXTransportError):
-        service.transmit_review(proposal["review_id"])
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, proposal["review_id"], ReviewState.OUTCOME_UNKNOWN)
     assert client.calls == 1
 
     with pytest.raises(OXApprovalError):
