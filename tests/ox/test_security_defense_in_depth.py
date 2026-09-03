@@ -3,8 +3,10 @@ import json
 import pytest
 
 from byte_mcp.errors import OXBundleError, OXTransportError
+from byte_mcp.ox.models import ReviewState
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import commit_files
+from tests.ox.q03h_initial_support import wait_for_state
 from tests.ox.test_review_followup import UnknownContinuationClient, UnknownTargetedClient
 from tests.ox.test_review_service import make_service, prepare, verification
 from tests.ox.test_security_invariants import (
@@ -12,6 +14,12 @@ from tests.ox.test_security_invariants import (
     BoundaryClient,
     establish_review,
 )
+
+
+def _complete_initial(service, store, review_id: str) -> None:
+    launch = service.transmit_review(review_id)
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, review_id, ReviewState.REVIEWED)
 
 
 def test_targeted_revalidation_rejects_credential_from_persisted_context_before_provider(
@@ -81,7 +89,7 @@ def test_continuation_retry_rejects_credential_from_authentic_legacy_failed_hist
     client = UnknownContinuationClient()
     service, store, _, base, target, registry_path = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
-    service.transmit_review(proposal["review_id"])
+    _complete_initial(service, store, proposal["review_id"])
 
     with pytest.raises(OXTransportError):
         service.continue_message(
@@ -109,7 +117,7 @@ def test_targeted_retry_rejects_credential_from_authentic_legacy_failed_history(
         tmp_path, client
     )
     proposal = prepare(service, base, target)
-    service.transmit_review(proposal["review_id"])
+    _complete_initial(service, store, proposal["review_id"])
     service.adjudicate(
         proposal["review_id"],
         [
