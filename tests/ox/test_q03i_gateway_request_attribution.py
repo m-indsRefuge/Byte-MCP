@@ -3,7 +3,6 @@ from pathlib import Path
 from byte_mcp.ox.client import OXClient
 from byte_mcp.ox.settings import OXSettings
 
-
 SECRET = "SENTINEL-SECRET"
 ATTEMPT_ID = "OX-000001-A001"
 MESSAGES = [
