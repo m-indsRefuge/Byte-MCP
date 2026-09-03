@@ -8,6 +8,7 @@ initial retry so claim ownership is separated from provider execution.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -31,7 +32,7 @@ from .jobs import (
     OXProviderJobManager,
 )
 from .models import AttemptOutcome, ProviderResult, ReviewState
-from .protocol import parse_findings
+from .protocol import build_initial_messages, parse_findings
 
 
 class OXReviewService(_Q03GReviewService):
@@ -392,6 +393,102 @@ class OXReviewService(_Q03GReviewService):
             messages=messages,
             phase=str(phase),
             thread_name=thread_name,
+        )
+
+    def run_targeted_revalidation(
+        self,
+        revalidation_id: str,
+        finding_ids: Sequence[str],
+    ) -> dict[str, object]:
+        """Q03H compatibility path until Task 6 backgrounds targeted revalidation."""
+        revalidation = self._load_revalidation(
+            revalidation_id,
+            expected_state=ReviewState.BLIND_REVALIDATED,
+        )
+        self._require_validated_revalidation_phase(revalidation_id, "blind")
+        if (
+            isinstance(finding_ids, str | bytes | bytearray)
+            or not isinstance(finding_ids, Sequence)
+            or not finding_ids
+            or not all(isinstance(finding_id, str) for finding_id in finding_ids)
+        ):
+            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        unique_finding_ids = set(finding_ids)
+        if len(unique_finding_ids) != len(finding_ids):
+            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        review_id = revalidation.get("review_id")
+        if not isinstance(review_id, str):
+            raise OXApprovalError("revalidation parent review is malformed")
+        findings_payload = self._evidence.read_findings(review_id)
+        raw_findings = findings_payload.get("findings")
+        if not isinstance(raw_findings, list):
+            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        findings = {
+            item.get("finding_id"): item
+            for item in raw_findings
+            if isinstance(item, Mapping) and isinstance(item.get("finding_id"), str)
+        }
+        if any(
+            not isinstance(finding_id, str) or finding_id not in findings
+            for finding_id in finding_ids
+        ):
+            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        adjudications = self._evidence.read_adjudications(review_id)
+        selected_adjudications = [
+            event for event in adjudications if event.get("finding_id") in unique_finding_ids
+        ]
+        prepared, _ = self._rebuild_revalidation_and_verify(revalidation)
+        targeted_packet = {
+            "approved_revalidation_packet": json.loads(
+                prepared.serialized_packet.decode("utf-8")
+            ),
+            "targeted_context": {
+                "original_findings": [findings[finding_id] for finding_id in finding_ids],
+                "byte_adjudications": selected_adjudications,
+            },
+        }
+        messages = build_initial_messages(
+            targeted_packet,
+            objective=(
+                "Perform a targeted completeness pass using only the approved remediation packet "
+                "and the selected prior finding/adjudication evidence."
+            ),
+        )
+        self._reject_configured_credential(messages)
+        self._enforce_message_bound(messages)
+        try:
+            attempt = self._evidence.claim_revalidation_transmission(
+                revalidation_id,
+                phase="targeted",
+                runtime_session_id=self._jobs.runtime_session_id,
+            )
+        except OXEvidenceError as exc:
+            raise OXApprovalError("targeted revalidation is not available") from exc
+        attempt_id = attempt["attempt_id"]
+        self._persist_revalidation_attempt_identity(
+            revalidation_id,
+            attempt_id,
+            prepared.manifest.manifest_sha256,
+            messages,
+            phase="targeted",
+        )
+        try:
+            for message in messages:
+                self._evidence.append_revalidation_thread_message(
+                    revalidation_id,
+                    "targeted-revalidation",
+                    message,
+                )
+        except OXEvidenceError:
+            self._record_revalidation_not_sent(revalidation_id, attempt_id)
+            raise
+        return self._perform_revalidation_attempt(
+            revalidation_id=revalidation_id,
+            attempt_id=attempt_id,
+            manifest_sha256=prepared.manifest.manifest_sha256,
+            messages=messages,
+            phase="targeted",
+            thread_name="targeted-revalidation",
         )
 
     def _active_initial_replay(
