@@ -93,6 +93,31 @@ def test_get_review_rejects_configured_credential_from_tampered_local_evidence(t
         service.get_review(review_id, view="summary")
 
 
+def test_attempts_view_rejects_configured_credential_from_tampered_local_evidence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    service, store, _, _, _, _, review_id = establish_review(tmp_path)
+    wait_for_lane_release(service._jobs)
+    original_get_review = store.get_review
+
+    def tampered_get_review(subject_id: str) -> dict[str, object]:
+        review = original_get_review(subject_id)
+        attempts = review.get("attempts")
+        assert isinstance(attempts, list) and attempts
+        attempts[0]["transport_failure_kind"] = f"legacy credential leak: {SECRET}"
+        return review
+
+    monkeypatch.setattr(store, "get_review", tampered_get_review)
+    boundary = BoundaryClient()
+    service._client = boundary
+
+    with pytest.raises(OXBundleError):
+        service.get_review(review_id, view="attempts")
+
+    assert boundary.calls == 0
+
+
 def test_continuation_retry_rejects_credential_from_authentic_legacy_failed_history(
     tmp_path,
 ) -> None:
