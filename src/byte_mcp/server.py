@@ -210,8 +210,7 @@ async def ox_continue(
             or approve_retry
         ):
             _invalid_ox_mode()
-        return await asyncio.to_thread(
-            _ox_service().continue_message,
+        return _ox_service().continue_message(
             review_id,
             message,
         )
@@ -247,8 +246,7 @@ async def ox_continue(
             or not approve_retry
         ):
             _invalid_ox_mode()
-        return await asyncio.to_thread(
-            _ox_service().retry_continuation,
+        return _ox_service().retry_continuation(
             review_id,
             retry_attempt_id,
             renewed_approval=True,
