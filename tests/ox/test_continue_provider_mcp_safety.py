@@ -45,7 +45,7 @@ def test_continue_message_routes_directly_to_background_service(
         raise AssertionError("background continuation must not use asyncio.to_thread")
 
     monkeypatch.setattr(server, "_ox_service", lambda: service)
-    monkeypatch.setattr(server.asyncio, "to_thread", forbidden_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", forbidden_to_thread)
 
     result = asyncio.run(
         _invoke_continue(
@@ -90,7 +90,7 @@ def test_retry_continuation_routes_directly_with_renewed_approval(
         raise AssertionError("background continuation retry must not use asyncio.to_thread")
 
     monkeypatch.setattr(server, "_ox_service", lambda: service)
-    monkeypatch.setattr(server.asyncio, "to_thread", forbidden_to_thread)
+    monkeypatch.setattr(asyncio, "to_thread", forbidden_to_thread)
 
     result = asyncio.run(
         _invoke_continue(
@@ -134,9 +134,8 @@ def test_record_findings_remains_local_and_inline(
         "_ox_service",
         lambda: LocalService(),
     )
-
     monkeypatch.setattr(
-        server.asyncio,
+        asyncio,
         "to_thread",
         forbidden_to_thread,
     )
@@ -179,9 +178,8 @@ def test_adjudicate_remains_local_and_inline(
         "_ox_service",
         lambda: LocalService(),
     )
-
     monkeypatch.setattr(
-        server.asyncio,
+        asyncio,
         "to_thread",
         forbidden_to_thread,
     )
