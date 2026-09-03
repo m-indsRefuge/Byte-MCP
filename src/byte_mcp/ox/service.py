@@ -21,7 +21,7 @@ from byte_mcp.errors import (
     OXUnavailableError,
 )
 
-from ._service_q03g import _PROVIDER_ERRORS, _history_sha256
+from ._service_q03g import _PROVIDER_ERRORS, _history_sha256, _manifest_digest
 from ._service_q03g import OXReviewService as _Q03GReviewService
 from .jobs import (
     OXActiveLaunch,
@@ -186,6 +186,213 @@ class OXReviewService(_Q03GReviewService):
             self._terminalize_worker_crash,
         )
         return receipt
+
+    def continue_message(self, review_id: str, message: str) -> dict[str, object]:
+        """Q03H compatibility path until Task 5 backgrounds continuation."""
+        if not isinstance(message, str) or not message.strip():
+            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        review = self._load_prepared_review(review_id, expected_state=ReviewState.REVIEWED)
+        manifest_sha256 = _manifest_digest(review)
+        history = self._evidence.read_thread(review_id, "initial")
+        messages = [*history, {"role": "user", "content": message.strip()}]
+        self._reject_configured_credential(messages)
+        self._enforce_message_bound(messages)
+        try:
+            attempt = self._evidence.claim_continuation_transmission(
+                review_id,
+                manifest_sha256,
+                runtime_session_id=self._jobs.runtime_session_id,
+            )
+        except OXEvidenceError as exc:
+            raise OXApprovalError("review is not available for continuation") from exc
+        attempt_id = attempt["attempt_id"]
+        self._persist_attempt_identity(
+            review_id,
+            attempt_id,
+            manifest_sha256,
+            messages,
+            phase="continuation",
+        )
+        try:
+            self._evidence.append_thread_message(review_id, "initial", messages[-1])
+        except OXEvidenceError:
+            self._record_not_sent(review_id, attempt_id)
+            raise
+        return self._perform_text_attempt(
+            review_id=review_id,
+            attempt_id=attempt_id,
+            manifest_sha256=manifest_sha256,
+            messages=messages,
+        )
+
+    def retry_continuation(
+        self,
+        review_id: str,
+        attempt_id: str,
+        *,
+        renewed_approval: bool,
+    ) -> dict[str, object]:
+        """Q03H compatibility path until Task 5 backgrounds continuation retry."""
+        if not renewed_approval:
+            raise OXApprovalError("continuation retry requires renewed human approval")
+        review = self._load_prepared_review(
+            review_id,
+            expected_state=(ReviewState.FAILED, ReviewState.OUTCOME_UNKNOWN),
+        )
+        attempts = review.get("attempts")
+        if (
+            not isinstance(attempts, list)
+            or not attempts
+            or attempts[-1].get("attempt_id") != attempt_id
+        ):
+            raise OXApprovalError("continuation retry must reference the latest failed attempt")
+        try:
+            prior_identity = self._evidence.read_attempt_identity(review_id, attempt_id)
+        except OXEvidenceError as exc:
+            raise OXApprovalError("continuation attempt evidence is unavailable") from exc
+        if prior_identity.get("phase") not in {"continuation", "continuation-retry"}:
+            raise OXApprovalError("attempt is not a continuation attempt")
+        messages = self._evidence.read_thread(review_id, "initial")
+        if prior_identity.get("history_sha256") != _history_sha256(messages):
+            raise OXApprovalError("continuation history no longer matches failed attempt")
+        self._reject_configured_credential(messages)
+        manifest_sha256 = _manifest_digest(review)
+        try:
+            attempt = self._evidence.claim_continuation_retry(
+                review_id,
+                manifest_sha256,
+                attempt_id,
+                renewed_approval=True,
+                runtime_session_id=self._jobs.runtime_session_id,
+            )
+        except OXEvidenceError as exc:
+            raise OXApprovalError("continuation is not eligible for retry") from exc
+        retry_attempt_id = attempt["attempt_id"]
+        self._persist_attempt_identity(
+            review_id,
+            retry_attempt_id,
+            manifest_sha256,
+            messages,
+            phase="continuation-retry",
+            retry_of=attempt_id,
+        )
+        return self._perform_text_attempt(
+            review_id=review_id,
+            attempt_id=retry_attempt_id,
+            manifest_sha256=manifest_sha256,
+            messages=messages,
+        )
+
+    def transmit_blind_revalidation(self, revalidation_id: str) -> dict[str, object]:
+        """Q03H compatibility path until Task 6 backgrounds revalidation."""
+        revalidation = self._load_revalidation(
+            revalidation_id,
+            expected_state=ReviewState.REVALIDATION_PREPARED,
+        )
+        prepared, messages = self._rebuild_revalidation_and_verify(revalidation)
+        try:
+            attempt = self._evidence.claim_revalidation_transmission(
+                revalidation_id,
+                phase="blind",
+                runtime_session_id=self._jobs.runtime_session_id,
+            )
+        except OXEvidenceError as exc:
+            raise OXApprovalError("revalidation is not available for blind approval") from exc
+        attempt_id = attempt["attempt_id"]
+        self._persist_revalidation_attempt_identity(
+            revalidation_id,
+            attempt_id,
+            prepared.manifest.manifest_sha256,
+            messages,
+            phase="blind",
+        )
+        try:
+            for item in messages:
+                self._evidence.append_revalidation_thread_message(
+                    revalidation_id,
+                    "blind-revalidation",
+                    item,
+                )
+        except OXEvidenceError:
+            self._record_revalidation_not_sent(revalidation_id, attempt_id)
+            raise
+        return self._perform_revalidation_attempt(
+            revalidation_id=revalidation_id,
+            attempt_id=attempt_id,
+            manifest_sha256=prepared.manifest.manifest_sha256,
+            messages=messages,
+            phase="blind",
+            thread_name="blind-revalidation",
+        )
+
+    def retry_revalidation(
+        self,
+        revalidation_id: str,
+        *,
+        renewed_approval: bool,
+    ) -> dict[str, object]:
+        """Q03H compatibility path until Task 6 backgrounds revalidation retry."""
+        if not renewed_approval:
+            raise OXApprovalError("revalidation retry requires renewed human approval")
+        revalidation = self._load_revalidation(
+            revalidation_id,
+            expected_state=(ReviewState.FAILED, ReviewState.OUTCOME_UNKNOWN),
+        )
+        attempts = revalidation.get("attempts")
+        if not isinstance(attempts, list) or not attempts:
+            raise OXApprovalError("revalidation has no failed attempt to retry")
+        previous = attempts[-1]
+        previous_attempt_id = previous.get("attempt_id")
+        phase = previous.get("phase")
+        if not isinstance(previous_attempt_id, str) or phase not in {"blind", "targeted"}:
+            raise OXApprovalError("revalidation attempt evidence is malformed")
+        prepared, blind_messages = self._rebuild_revalidation_and_verify(revalidation)
+        if phase == "blind":
+            messages = blind_messages
+            thread_name = "blind-revalidation"
+        else:
+            messages = self._evidence.read_revalidation_thread(
+                revalidation_id,
+                "targeted-revalidation",
+            )
+            thread_name = "targeted-revalidation"
+        prior_identity = self._read_revalidation_attempt_identity(
+            revalidation_id,
+            previous_attempt_id,
+        )
+        if (
+            prior_identity.get("revalidation_id") != revalidation_id
+            or prior_identity.get("phase") != phase
+            or prior_identity.get("history_sha256") != _history_sha256(messages)
+        ):
+            raise OXApprovalError("revalidation history no longer matches failed attempt")
+        self._reject_configured_credential(messages)
+        try:
+            attempt = self._evidence.claim_revalidation_retry(
+                revalidation_id,
+                previous_attempt_id,
+                renewed_approval=True,
+                runtime_session_id=self._jobs.runtime_session_id,
+            )
+        except OXEvidenceError as exc:
+            raise OXApprovalError("revalidation is not eligible for retry") from exc
+        attempt_id = attempt["attempt_id"]
+        self._persist_revalidation_attempt_identity(
+            revalidation_id,
+            attempt_id,
+            prepared.manifest.manifest_sha256,
+            messages,
+            phase=str(phase),
+            retry_of=previous_attempt_id,
+        )
+        return self._perform_revalidation_attempt(
+            revalidation_id=revalidation_id,
+            attempt_id=attempt_id,
+            manifest_sha256=prepared.manifest.manifest_sha256,
+            messages=messages,
+            phase=str(phase),
+            thread_name=thread_name,
+        )
 
     def _active_initial_replay(
         self,
