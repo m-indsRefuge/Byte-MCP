@@ -5,16 +5,13 @@ import inspect
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
+import pytest
+
 from byte_mcp import server
+from byte_mcp.errors import OXUnavailableError
 from byte_mcp.ox.models import ReviewState
-from tests.ox.q03h_revalidation_support import (
-    RevalidationNaturalClient,
-    establish_initial_review,
-    make_revalidation_service,
-    prepare_revalidation,
-    wait_for_lane_release,
-    wait_for_revalidation_state,
-)
+from tests.ox import q03h_revalidation_support as q03hr
+from tests.ox.q03h_initial_support import verification
 
 
 def test_ox_revalidate_provider_path_is_async() -> None:
@@ -72,13 +69,13 @@ def test_prepare_revalidation_remains_local_and_inline(monkeypatch) -> None:
 
 
 def test_q03h_ac15_blind_revalidation_launches_promptly_in_natural_mode(tmp_path) -> None:
-    client = RevalidationNaturalClient()
-    service, store, jobs, repository_path, base, target = make_revalidation_service(
+    client = q03hr.RevalidationNaturalClient()
+    service, store, jobs, repository_path, base, target = q03hr.make_revalidation_service(
         tmp_path,
         client,
     )
-    review_id = establish_initial_review(service, store, jobs, base, target)
-    revalidation_id = prepare_revalidation(
+    review_id = q03hr.establish_initial_review(service, store, jobs, base, target)
+    revalidation_id = q03hr.prepare_revalidation(
         service,
         repository_path,
         review_id,
@@ -118,8 +115,81 @@ def test_q03h_ac15_blind_revalidation_launches_promptly_in_natural_mode(tmp_path
     assert len(store.get_revalidation(revalidation_id)["attempts"]) == 1
 
     client.release.set()
-    wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
-    wait_for_lane_release(jobs)
+    q03hr.wait_for_revalidation_state(
+        store,
+        revalidation_id,
+        ReviewState.BLIND_REVALIDATED,
+    )
+    q03hr.wait_for_lane_release(jobs)
+
+
+def test_shared_lane_rejects_cross_type_launches_before_claim(tmp_path) -> None:
+    client = q03hr.RevalidationNaturalClient()
+    service, store, jobs, repository_path, base, target = q03hr.make_revalidation_service(
+        tmp_path,
+        client,
+    )
+    review_id = q03hr.establish_initial_review(service, store, jobs, base, target)
+    finding_id = q03hr.establish_byte_provenance(service, review_id)
+
+    targeted_revalidation_id = q03hr.prepare_revalidation(
+        service,
+        repository_path,
+        review_id,
+        target,
+    )
+    targeted_blind = service.transmit_blind_revalidation(targeted_revalidation_id)
+    if targeted_blind["state"] == ReviewState.TRANSMITTING.value:
+        q03hr.wait_for_revalidation_state(
+            store,
+            targeted_revalidation_id,
+            ReviewState.BLIND_REVALIDATED,
+        )
+    q03hr.wait_for_lane_release(jobs)
+
+    targeted_revalidation = store.get_revalidation(targeted_revalidation_id)
+    remediation_commit = targeted_revalidation["identity"]["target_commit"]
+    blind_proposal = service.prepare_revalidation(
+        review_id,
+        target_commit=remediation_commit,
+        base_commit=target,
+        verification=verification(),
+    )
+    blind_revalidation_id = str(blind_proposal["revalidation_id"])
+
+    held_review_id = q03hr.prepare_initial_review(service, base, target)
+    client.block_next = True
+    client.entered.clear()
+    client.release.clear()
+    held = service.transmit_review(held_review_id)
+    assert held["state"] == ReviewState.TRANSMITTING.value
+    assert client.entered.wait(timeout=5)
+
+    calls_before = len(client.calls)
+    review_attempts_before = list(store.get_review(review_id)["attempts"])
+    blind_attempts_before = list(store.get_revalidation(blind_revalidation_id)["attempts"])
+    targeted_attempts_before = list(
+        store.get_revalidation(targeted_revalidation_id)["attempts"]
+    )
+
+    with pytest.raises(OXUnavailableError):
+        service.continue_message(review_id, "This must not claim while initial is active.")
+    with pytest.raises(OXUnavailableError):
+        service.transmit_blind_revalidation(blind_revalidation_id)
+    with pytest.raises(OXUnavailableError):
+        service.run_targeted_revalidation(targeted_revalidation_id, [finding_id])
+
+    assert len(client.calls) == calls_before
+    assert store.get_review(review_id)["attempts"] == review_attempts_before
+    assert store.get_revalidation(blind_revalidation_id)["attempts"] == blind_attempts_before
+    assert (
+        store.get_revalidation(targeted_revalidation_id)["attempts"]
+        == targeted_attempts_before
+    )
+
+    client.release.set()
+    q03hr.wait_for_review_state(store, held_review_id, ReviewState.REVIEWED)
+    q03hr.wait_for_lane_release(jobs)
 
 
 def test_targeted_revalidation_slow_provider_does_not_block_event_loop(
