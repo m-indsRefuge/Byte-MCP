@@ -104,7 +104,10 @@ class OXClient:
             body["response_format"] = {"type": "json_object"}
 
         _validate_json(body)
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "ai-reporting-tags": _reporting_tags(attempt_id),
+        }
         request_error = None
         transport_outcome = None
         transport_failure_kind = None
@@ -320,6 +323,11 @@ def _redact_secret(value: object, secret: str) -> object:
 def _validate_attempt_id(attempt_id: object) -> None:
     if not isinstance(attempt_id, str) or _ATTEMPT_ID_PATTERN.fullmatch(attempt_id) is None:
         raise OXRequestError(attempt_outcome="NOT_SENT")
+
+
+def _reporting_tags(attempt_id: str) -> str:
+    review_id = attempt_id.rsplit("-A", 1)[0]
+    return f"component:byte-mcp-ox,review:{review_id},attempt:{attempt_id}"
 
 
 def _validate_messages(messages: object) -> list[dict[str, object]]:
