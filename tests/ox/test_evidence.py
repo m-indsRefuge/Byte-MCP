@@ -106,7 +106,11 @@ def test_provider_messages_and_adjudication_are_separate_evidence(tmp_path):
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
     store.append_thread_message(review_id, "initial", {"role": "user", "content": "review"})
-    store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     store.persist_provider_response(review_id, "OX-000001-A001", {"content": "finding"})
     store.append_adjudication(
         review_id,
@@ -132,12 +136,19 @@ def test_provider_response_requires_current_transmitting_attempt(tmp_path):
         store.persist_provider_response(review_id, f"{review_id}-A001", {"content": "premature"})
     assert not response_path.exists()
 
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     store.persist_provider_response(review_id, first["attempt_id"], {"content": "first"})
     first_response = response_path.read_bytes()
     store.record_attempt_outcome(review_id, first["attempt_id"], AttemptOutcome.NOT_SENT)
     second = store.claim_retry_transmission(
-        review_id, MANIFEST_SHA256, renewed_approval=True
+        review_id,
+        MANIFEST_SHA256,
+        renewed_approval=True,
+        runtime_session_id=RUNTIME_SESSION_ID,
     )
 
     with pytest.raises(OXEvidenceError, match="current"):
@@ -149,10 +160,17 @@ def test_provider_response_requires_current_transmitting_attempt(tmp_path):
 def test_attempt_outcome_requires_latest_transmitting_attempt(tmp_path):
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     store.record_attempt_outcome(review_id, first["attempt_id"], AttemptOutcome.NOT_SENT)
     second = store.claim_retry_transmission(
-        review_id, MANIFEST_SHA256, renewed_approval=True
+        review_id,
+        MANIFEST_SHA256,
+        renewed_approval=True,
+        runtime_session_id=RUNTIME_SESSION_ID,
     )
 
     with pytest.raises(OXEvidenceError, match="current"):
@@ -163,11 +181,13 @@ def test_attempt_outcome_requires_latest_transmitting_attempt(tmp_path):
         {
             "attempt_id": first["attempt_id"],
             "manifest_sha256": MANIFEST_SHA256,
+            "runtime_session_id": RUNTIME_SESSION_ID,
             "outcome": AttemptOutcome.NOT_SENT.value,
         },
         {
             "attempt_id": second["attempt_id"],
             "manifest_sha256": MANIFEST_SHA256,
+            "runtime_session_id": RUNTIME_SESSION_ID,
             "outcome": AttemptOutcome.REJECTED.value,
         },
     ]
@@ -178,14 +198,26 @@ def test_initial_claim_rechecks_digest_and_appends_one_transmission_intent(tmp_p
     review_id = _prepare(store)
 
     with pytest.raises(OXEvidenceError, match="manifest"):
-        store.claim_initial_transmission(review_id, "b" * 64)
-    attempt = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+        store.claim_initial_transmission(
+            review_id,
+            "b" * 64,
+            runtime_session_id=RUNTIME_SESSION_ID,
+        )
+    attempt = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     review = store.get_review(review_id)
 
     assert attempt["attempt_id"] == "OX-000001-A001"
     assert review["state"] == ReviewState.TRANSMITTING
     assert review["attempts"] == [
-        {"attempt_id": "OX-000001-A001", "manifest_sha256": MANIFEST_SHA256}
+        {
+            "attempt_id": "OX-000001-A001",
+            "manifest_sha256": MANIFEST_SHA256,
+            "runtime_session_id": RUNTIME_SESSION_ID,
+        }
     ]
 
 
@@ -195,12 +227,26 @@ def test_initial_claim_rechecks_digest_and_appends_one_transmission_intent(tmp_p
 def test_retry_requires_renewed_approval_and_preserves_prior_attempt(tmp_path, outcome):
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     store.record_attempt_outcome(review_id, first["attempt_id"], outcome)
 
     with pytest.raises(OXEvidenceError, match="renewed approval"):
-        store.claim_retry_transmission(review_id, MANIFEST_SHA256, renewed_approval=False)
-    retry = store.claim_retry_transmission(review_id, MANIFEST_SHA256, renewed_approval=True)
+        store.claim_retry_transmission(
+            review_id,
+            MANIFEST_SHA256,
+            renewed_approval=False,
+            runtime_session_id=RUNTIME_SESSION_ID,
+        )
+    retry = store.claim_retry_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        renewed_approval=True,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     review = store.get_review(review_id)
 
     assert retry["attempt_id"] == "OX-000001-A002"
@@ -209,16 +255,28 @@ def test_retry_requires_renewed_approval_and_preserves_prior_attempt(tmp_path, o
         "OX-000001-A002",
     ]
     assert {attempt["manifest_sha256"] for attempt in review["attempts"]} == {MANIFEST_SHA256}
+    assert {attempt["runtime_session_id"] for attempt in review["attempts"]} == {
+        RUNTIME_SESSION_ID
+    }
 
 
 def test_retry_rejects_completed_attempt(tmp_path):
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
     store.record_attempt_outcome(review_id, first["attempt_id"], AttemptOutcome.COMPLETED)
 
     with pytest.raises(OXEvidenceError, match="eligible"):
-        store.claim_retry_transmission(review_id, MANIFEST_SHA256, renewed_approval=True)
+        store.claim_retry_transmission(
+            review_id,
+            MANIFEST_SHA256,
+            renewed_approval=True,
+            runtime_session_id=RUNTIME_SESSION_ID,
+        )
 
 
 def test_two_initial_claims_racing_yield_exactly_one_winner(tmp_path):
@@ -231,7 +289,13 @@ def test_two_initial_claims_racing_yield_exactly_one_winner(tmp_path):
     def claim() -> None:
         barrier.wait()
         try:
-            winners.append(store.claim_initial_transmission(review_id, MANIFEST_SHA256))
+            winners.append(
+                store.claim_initial_transmission(
+                    review_id,
+                    MANIFEST_SHA256,
+                    runtime_session_id=RUNTIME_SESSION_ID,
+                )
+            )
         except OXEvidenceError as error:
             errors.append(str(error))
 
@@ -417,7 +481,11 @@ def test_missing_or_empty_event_history_cannot_be_used_as_prepared(tmp_path, his
     with pytest.raises(OXEvidenceError, match="malformed"):
         store.get_review(review_id)
     with pytest.raises(OXEvidenceError, match="malformed"):
-        store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+        store.claim_initial_transmission(
+            review_id,
+            MANIFEST_SHA256,
+            runtime_session_id=RUNTIME_SESSION_ID,
+        )
     with pytest.raises(OXEvidenceError, match="malformed"):
         store.append_thread_message(review_id, "initial", {"role": "user"})
 

@@ -135,7 +135,11 @@ def test_new_review_transmission_intent_records_durable_utc_timestamp(tmp_path) 
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
 
-    store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
 
     events = _read_jsonl(_events_path(tmp_path, review_id))
     intent = next(event for event in events if event["event_type"] == "TRANSMISSION_INTENT")
@@ -150,7 +154,11 @@ def test_new_revalidation_transmission_intent_records_durable_utc_timestamp(tmp_
     review_id = _prepare(store)
     revalidation_id = _prepare_blind_revalidation(store, review_id)
 
-    store.claim_revalidation_transmission(revalidation_id, phase="blind")
+    store.claim_revalidation_transmission(
+        revalidation_id,
+        phase="blind",
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
 
     events = _read_jsonl(_revalidation_events_path(tmp_path, review_id, revalidation_id))
     intent = next(
@@ -167,7 +175,11 @@ def test_new_revalidation_transmission_intent_records_durable_utc_timestamp(tmp_
 def test_recovery_leaves_fresh_transmitting_review_untouched(tmp_path) -> None:
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
     path = _events_path(tmp_path, review_id)
     _rewrite_intent_recorded_at(
         path,
@@ -182,14 +194,22 @@ def test_recovery_leaves_fresh_transmitting_review_untouched(tmp_path) -> None:
     assert path.read_bytes() == before
     assert store.get_review(review_id)["state"] == ReviewState.TRANSMITTING.value
     assert store.get_review(review_id)["attempts"] == [
-        {"attempt_id": first["attempt_id"], "manifest_sha256": MANIFEST_SHA256}
+        {
+            "attempt_id": first["attempt_id"],
+            "manifest_sha256": MANIFEST_SHA256,
+            "runtime_session_id": RUNTIME_SESSION_A,
+        }
     ]
 
 
 def test_recovery_marks_stale_review_outcome_unknown_without_retry(tmp_path) -> None:
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
     path = _events_path(tmp_path, review_id)
     _rewrite_intent_recorded_at(
         path,
@@ -212,7 +232,11 @@ def test_recovery_uses_legacy_attempt_identity_timestamp_when_intent_has_none(
 ) -> None:
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
 
     # Simulate the pre-Q03E format: intent has no timestamp, but the service's
     # immutable attempt identity contains recorded_at.
@@ -237,7 +261,11 @@ def test_recovery_marks_stale_revalidation_outcome_unknown_without_retry(tmp_pat
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
     revalidation_id = _prepare_blind_revalidation(store, review_id)
-    first = store.claim_revalidation_transmission(revalidation_id, phase="blind")
+    first = store.claim_revalidation_transmission(
+        revalidation_id,
+        phase="blind",
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
     path = _revalidation_events_path(tmp_path, review_id, revalidation_id)
     _rewrite_intent_recorded_at(
         path,
@@ -258,7 +286,11 @@ def test_recovery_marks_stale_revalidation_outcome_unknown_without_retry(tmp_pat
 def test_recovery_is_idempotent_and_never_relabels_terminal_unknown(tmp_path) -> None:
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
     path = _events_path(tmp_path, review_id)
     _rewrite_intent_recorded_at(
         path,
@@ -282,7 +314,11 @@ def test_recovery_is_idempotent_and_never_relabels_terminal_unknown(tmp_path) ->
 def test_recovered_unknown_still_requires_new_explicit_retry_approval(tmp_path) -> None:
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
     _rewrite_intent_recorded_at(
         _events_path(tmp_path, review_id),
         event_type="TRANSMISSION_INTENT",
@@ -295,6 +331,7 @@ def test_recovered_unknown_still_requires_new_explicit_retry_approval(tmp_path) 
             review_id,
             MANIFEST_SHA256,
             renewed_approval=False,
+            runtime_session_id=RUNTIME_SESSION_A,
         )
 
     assert len(store.get_review(review_id)["attempts"]) == 1
@@ -303,6 +340,7 @@ def test_recovered_unknown_still_requires_new_explicit_retry_approval(tmp_path) 
         review_id,
         MANIFEST_SHA256,
         renewed_approval=True,
+        runtime_session_id=RUNTIME_SESSION_A,
     )
     assert retry["attempt_id"] != first["attempt_id"]
     assert len(store.get_review(review_id)["attempts"]) == 2
@@ -311,7 +349,11 @@ def test_recovered_unknown_still_requires_new_explicit_retry_approval(tmp_path) 
 def test_existing_terminal_unknown_is_byte_immutable_under_recovery(tmp_path) -> None:
     store = EvidenceStore(tmp_path)
     review_id = _prepare(store)
-    first = store.claim_initial_transmission(review_id, MANIFEST_SHA256)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
     store.record_attempt_outcome(
         review_id,
         first["attempt_id"],
