@@ -183,15 +183,11 @@ async def ox_review(
     if any(value is not None for value in scoped_values) or not approve:
         _invalid_ox_mode()
     if retry:
-        return await asyncio.to_thread(
-            _ox_service().retry_review,
+        return _ox_service().retry_review(
             review_id,
             renewed_approval=True,
         )
-    return await asyncio.to_thread(
-        _ox_service().transmit_review,
-        review_id,
-    )
+    return _ox_service().transmit_review(review_id)
 
 
 @mcp.tool(annotations=OX_EXTERNAL)
