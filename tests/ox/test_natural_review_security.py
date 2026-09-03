@@ -1,6 +1,8 @@
 import pytest
 
 from byte_mcp.errors import OXBundleError, OXFindingValidationError
+from byte_mcp.ox.models import ReviewState
+from tests.ox.q03h_initial_support import wait_for_state
 from tests.ox.test_natural_review_architecture import derived_finding, make_natural_service
 from tests.ox.test_review_service import RecordingClient, prepare
 
@@ -9,7 +11,9 @@ def establish_natural_review(tmp_path):
     client = RecordingClient()
     service, store, _, base, target, _ = make_natural_service(tmp_path, client)
     proposal = prepare(service, base, target)
-    service.transmit_review(proposal["review_id"])
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, proposal["review_id"], ReviewState.REVIEWED)
     return service, store, client, proposal["review_id"]
 
 
