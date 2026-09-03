@@ -387,7 +387,8 @@ def test_runtime_initialization_runs_local_recovery_before_exposing_service(
     tmp_path,
     monkeypatch,
 ) -> None:
-    calls: list[timedelta] = []
+    calls: list[tuple[timedelta, str]] = []
+    injected_jobs: list[object] = []
 
     class FakeStore:
         def __init__(self, root: Path) -> None:
@@ -397,20 +398,21 @@ def test_runtime_initialization_runs_local_recovery_before_exposing_service(
             self,
             *,
             stale_after: timedelta,
+            runtime_session_id: str,
             now: datetime | None = None,
         ) -> tuple[str, ...]:
             assert now is None
-            calls.append(stale_after)
+            calls.append((stale_after, runtime_session_id))
             return ()
+
+    def fake_service(settings, evidence, client, audit, jobs):
+        injected_jobs.append(jobs)
+        return object()
 
     monkeypatch.setattr(runtime, "validate_ox_local_config", lambda settings: None)
     monkeypatch.setattr(runtime, "EvidenceStore", FakeStore)
     monkeypatch.setattr(runtime, "OXClient", lambda settings: object())
-    monkeypatch.setattr(
-        runtime,
-        "OXReviewService",
-        lambda settings, evidence, client, audit: object(),
-    )
+    monkeypatch.setattr(runtime, "OXReviewService", fake_service)
 
     settings = OXSettings(
         api_key="local-test-key",
@@ -421,7 +423,13 @@ def test_runtime_initialization_runs_local_recovery_before_exposing_service(
     initialized = runtime.OXRuntime.initialize(settings, audit=object())
 
     assert initialized.state is OXAvailability.AVAILABLE
-    assert calls == [timedelta(seconds=1800)]
+    assert len(injected_jobs) == 1
+    assert calls == [
+        (
+            timedelta(seconds=1800),
+            injected_jobs[0].runtime_session_id,
+        )
+    ]
 
 
 def test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry(tmp_path) -> None:
