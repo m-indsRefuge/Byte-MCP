@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -288,8 +287,7 @@ async def ox_revalidate(
     if targeted:
         if approve or retry or finding_ids is None:
             _invalid_ox_mode()
-        return await asyncio.to_thread(
-            _ox_service().run_targeted_revalidation,
+        return _ox_service().run_targeted_revalidation(
             revalidation_id,
             finding_ids,
         )
@@ -297,15 +295,11 @@ async def ox_revalidate(
     if finding_ids is not None or not approve:
         _invalid_ox_mode()
     if retry:
-        return await asyncio.to_thread(
-            _ox_service().retry_revalidation,
+        return _ox_service().retry_revalidation(
             revalidation_id,
             renewed_approval=True,
         )
-    return await asyncio.to_thread(
-        _ox_service().transmit_blind_revalidation,
-        revalidation_id,
-    )
+    return _ox_service().transmit_blind_revalidation(revalidation_id)
 
 
 @mcp.tool(annotations=READ_ONLY)
