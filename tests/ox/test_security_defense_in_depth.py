@@ -6,7 +6,7 @@ from byte_mcp.errors import OXBundleError, OXTransportError
 from byte_mcp.ox.models import ReviewState
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import commit_files
-from tests.ox.q03h_initial_support import wait_for_state
+from tests.ox.q03h_initial_support import wait_for_lane_release, wait_for_state
 from tests.ox.test_review_followup import UnknownContinuationClient, UnknownTargetedClient
 from tests.ox.test_review_service import make_service, prepare, verification
 from tests.ox.test_security_invariants import (
@@ -91,11 +91,12 @@ def test_continuation_retry_rejects_credential_from_authentic_legacy_failed_hist
     proposal = prepare(service, base, target)
     _complete_initial(service, store, proposal["review_id"])
 
-    with pytest.raises(OXTransportError):
-        service.continue_message(
-            proposal["review_id"], f"legacy continuation contained {SECRET}"
-        )
-    failed_attempt = client.calls[-1]["attempt_id"]
+    launch = service.continue_message(
+        proposal["review_id"], f"legacy continuation contained {SECRET}"
+    )
+    wait_for_state(store, proposal["review_id"], ReviewState.OUTCOME_UNKNOWN)
+    wait_for_lane_release(service._jobs)
+    failed_attempt = launch["attempt_id"]
 
     service._settings = OXSettings(SECRET, registry_path, store._root)
     boundary = BoundaryClient()
