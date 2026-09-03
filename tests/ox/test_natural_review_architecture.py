@@ -365,6 +365,7 @@ def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blin
     proposal = prepare(service, base, target)
     review_id = proposal["review_id"]
     _complete_initial(service, store, review_id)
+    q03hr.wait_for_lane_release(service._jobs)
     remediation = commit_files(
         repository_path,
         {"src/alpha.py": b"value = 'remediated'\n"},
@@ -376,7 +377,14 @@ def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blin
         base_commit=target,
         verification=verification(),
     )
-    service.transmit_blind_revalidation(revalidation["revalidation_id"])
+    blind = service.transmit_blind_revalidation(revalidation["revalidation_id"])
+    assert blind["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        revalidation["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    q03hr.wait_for_lane_release(service._jobs)
     calls_before = len(client.calls)
 
     with pytest.raises(OXApprovalError):

@@ -2,9 +2,10 @@ import json
 
 import pytest
 
-from byte_mcp.errors import OXBundleError, OXTransportError
+from byte_mcp.errors import OXBundleError
 from byte_mcp.ox.models import ReviewState
 from byte_mcp.ox.settings import OXSettings
+from tests.ox import q03h_revalidation_support as q03hr
 from tests.ox.helpers import commit_files
 from tests.ox.q03h_initial_support import wait_for_lane_release, wait_for_state
 from tests.ox.test_review_followup import UnknownContinuationClient, UnknownTargetedClient
@@ -20,12 +21,14 @@ def _complete_initial(service, store, review_id: str) -> None:
     launch = service.transmit_review(review_id)
     assert launch["state"] == ReviewState.TRANSMITTING.value
     wait_for_state(store, review_id, ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
 
 
 def test_targeted_revalidation_rejects_credential_from_persisted_context_before_provider(
     tmp_path,
 ) -> None:
     service, store, repository_path, _, target, _, review_id = establish_review(tmp_path)
+    wait_for_lane_release(service._jobs)
     service.adjudicate(
         review_id,
         [
@@ -48,7 +51,14 @@ def test_targeted_revalidation_rejects_credential_from_persisted_context_before_
         base_commit=target,
         verification=verification(),
     )
-    service.transmit_blind_revalidation(proposal["revalidation_id"])
+    launch = service.transmit_blind_revalidation(proposal["revalidation_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
 
     store.append_adjudication(
         review_id,
@@ -141,12 +151,25 @@ def test_targeted_retry_rejects_credential_from_authentic_legacy_failed_history(
         base_commit=target,
         verification=verification(),
     )
-    service.transmit_blind_revalidation(revalidation["revalidation_id"])
+    blind = service.transmit_blind_revalidation(revalidation["revalidation_id"])
+    assert blind["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        revalidation["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
 
-    with pytest.raises(OXTransportError):
-        service.run_targeted_revalidation(
-            revalidation["revalidation_id"], [f"{proposal['review_id']}-F001"]
-        )
+    targeted = service.run_targeted_revalidation(
+        revalidation["revalidation_id"], [f"{proposal['review_id']}-F001"]
+    )
+    assert targeted["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        revalidation["revalidation_id"],
+        ReviewState.OUTCOME_UNKNOWN,
+    )
+    wait_for_lane_release(service._jobs)
 
     service._settings = OXSettings(SECRET, registry_path, store._root)
     boundary = BoundaryClient()

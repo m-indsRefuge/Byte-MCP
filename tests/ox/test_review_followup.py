@@ -7,7 +7,6 @@ import pytest
 from byte_mcp.errors import (
     OXApprovalError,
     OXEvidenceError,
-    OXFindingValidationError,
     OXProtocolError,
     OXTransportError,
     OXUnavailableError,
@@ -187,6 +186,7 @@ def _establish_review(service, base: str, target: str) -> str:
     launch = service.transmit_review(proposal["review_id"])
     assert launch["state"] == ReviewState.TRANSMITTING.value
     wait_for_state(service._evidence, proposal["review_id"], ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
     return proposal["review_id"]
 
 
@@ -294,7 +294,7 @@ def test_adjudication_is_local_append_only_and_validates_finding_transitions(tmp
 
 def test_blind_revalidation_is_fresh_and_targeted_waits_for_blind_success(tmp_path) -> None:
     client = RecordingClient()
-    service, _, repository_path, base, target, _ = make_service(tmp_path, client)
+    service, store, repository_path, base, target, _ = make_service(tmp_path, client)
     review_id = _establish_review(service, base, target)
     service.adjudicate(
         review_id,
@@ -330,9 +330,15 @@ def test_blind_revalidation_is_fresh_and_targeted_waits_for_blind_success(tmp_pa
         )
 
     blind = service.transmit_blind_revalidation(proposal["revalidation_id"])
+    assert blind["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
     blind_call = client.calls[-1]
     serialized = json.dumps(blind_call["messages"])
-    assert blind["state"] == "BLIND_REVALIDATED"
     assert "Confirmed from the first review." not in serialized
     assert "Needs remediation." not in serialized
     assert f"{review_id}-F001" not in serialized
@@ -340,15 +346,21 @@ def test_blind_revalidation_is_fresh_and_targeted_waits_for_blind_success(tmp_pa
     targeted = service.run_targeted_revalidation(
         proposal["revalidation_id"], [f"{review_id}-F001"]
     )
+    assert targeted["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
     targeted_payload = json.dumps(client.calls[-1]["messages"])
-    assert targeted["state"] == "REVALIDATED"
     assert f"{review_id}-F001" in targeted_payload
     assert "Confirmed from the first review." in targeted_payload
 
 
 def test_revalidation_retry_requires_renewed_approval_and_keeps_scope_fixed(tmp_path) -> None:
     client = RecordingClient()
-    service, _, repository_path, base, target, _ = make_service(tmp_path, client)
+    service, store, repository_path, base, target, _ = make_service(tmp_path, client)
     review_id = _establish_review(service, base, target)
     remediation = commit_files(
         repository_path,
@@ -373,14 +385,29 @@ def test_revalidation_retry_requires_renewed_approval_and_keeps_scope_fixed(tmp_
         return original_complete(messages, json_mode=json_mode, attempt_id=attempt_id)
 
     client.complete = fail_once
-    with pytest.raises(OXTransportError):
-        service.transmit_blind_revalidation(proposal["revalidation_id"])
+    first = service.transmit_blind_revalidation(proposal["revalidation_id"])
+    assert first["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.OUTCOME_UNKNOWN,
+    )
+    wait_for_lane_release(service._jobs)
+    assert calls == 1
+
     with pytest.raises(OXApprovalError):
         service.retry_revalidation(proposal["revalidation_id"], renewed_approval=False)
+    assert calls == 1
 
     result = service.retry_revalidation(proposal["revalidation_id"], renewed_approval=True)
-
-    assert result["state"] == "BLIND_REVALIDATED"
+    assert result["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
+    assert calls == 2
 
 
 def test_targeted_retry_rejects_history_changed_since_failed_attempt(tmp_path) -> None:
@@ -409,12 +436,25 @@ def test_targeted_retry_rejects_history_changed_since_failed_attempt(tmp_path) -
         base_commit=target,
         verification=verification(),
     )
-    service.transmit_blind_revalidation(proposal["revalidation_id"])
+    blind = service.transmit_blind_revalidation(proposal["revalidation_id"])
+    assert blind["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
 
-    with pytest.raises(OXTransportError):
-        service.run_targeted_revalidation(
-            proposal["revalidation_id"], [f"{review_id}-F001"]
-        )
+    targeted = service.run_targeted_revalidation(
+        proposal["revalidation_id"], [f"{review_id}-F001"]
+    )
+    assert targeted["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.OUTCOME_UNKNOWN,
+    )
+    wait_for_lane_release(service._jobs)
     calls_before_retry = len(client.calls)
     store.append_revalidation_thread_message(
         proposal["revalidation_id"],
@@ -430,7 +470,7 @@ def test_targeted_retry_rejects_history_changed_since_failed_attempt(tmp_path) -
 
 def test_targeted_revalidation_blocked_after_malformed_blind_findings(tmp_path) -> None:
     client = MalformedBlindClient()
-    service, _, repository_path, base, target, _ = make_service(tmp_path, client)
+    service, store, repository_path, base, target, _ = make_service(tmp_path, client)
     review_id = _establish_review(service, base, target)
     remediation = commit_files(
         repository_path,
@@ -444,8 +484,17 @@ def test_targeted_revalidation_blocked_after_malformed_blind_findings(tmp_path) 
         verification=verification(),
     )
 
-    with pytest.raises(OXFindingValidationError):
-        service.transmit_blind_revalidation(proposal["revalidation_id"])
+    blind = service.transmit_blind_revalidation(proposal["revalidation_id"])
+    assert blind["state"] == ReviewState.TRANSMITTING.value
+    q03hr.wait_for_revalidation_state(
+        store,
+        proposal["revalidation_id"],
+        ReviewState.BLIND_REVALIDATED,
+    )
+    wait_for_lane_release(service._jobs)
+    effective = service.get_review(review_id, view="revalidation")["revalidations"][-1]
+    assert effective["state"] == ReviewState.FAILED.value
+    assert effective["protocol_status"] == "FINDINGS_INVALID"
     calls_before_targeted = len(client.calls)
 
     with pytest.raises(OXApprovalError):
@@ -653,6 +702,160 @@ def test_continuation_terminalization_failure_faults_lane_closed(
     )
     with pytest.raises(OXUnavailableError):
         service._jobs.reserve(key)
+
+
+def _prepare_revalidation_cleanup_case(tmp_path, path: str):
+    client = q03hr.RevalidationNaturalClient()
+    service, store, jobs, repository_path, base, target = q03hr.make_revalidation_service(
+        tmp_path,
+        client,
+    )
+    review_id = q03hr.establish_initial_review(service, store, jobs, base, target)
+    finding_id = q03hr.establish_byte_provenance(service, review_id) if path == "targeted" else None
+    revalidation_id = q03hr.prepare_revalidation(
+        service,
+        repository_path,
+        review_id,
+        target,
+    )
+
+    if path == "retry":
+        client.fail_next = True
+        launch = service.transmit_blind_revalidation(revalidation_id)
+        assert launch["state"] == ReviewState.TRANSMITTING.value
+        q03hr.wait_for_revalidation_state(
+            store,
+            revalidation_id,
+            ReviewState.OUTCOME_UNKNOWN,
+        )
+        q03hr.wait_for_lane_release(jobs)
+    elif path == "targeted":
+        launch = service.transmit_blind_revalidation(revalidation_id)
+        assert launch["state"] == ReviewState.TRANSMITTING.value
+        q03hr.wait_for_revalidation_state(
+            store,
+            revalidation_id,
+            ReviewState.BLIND_REVALIDATED,
+        )
+        q03hr.wait_for_lane_release(jobs)
+
+    return service, store, jobs, client, revalidation_id, finding_id
+
+
+def _invoke_revalidation_cleanup_case(
+    service,
+    path: str,
+    revalidation_id: str,
+    finding_id: str | None,
+):
+    if path == "blind":
+        return service.transmit_blind_revalidation(revalidation_id)
+    if path == "retry":
+        return service.retry_revalidation(revalidation_id, renewed_approval=True)
+    assert path == "targeted"
+    assert finding_id is not None
+    return service.run_targeted_revalidation(revalidation_id, [finding_id])
+
+
+@pytest.mark.parametrize(
+    ("path", "failure_stage"),
+    [
+        ("blind", "preclaim"),
+        ("retry", "preclaim"),
+        ("targeted", "preclaim"),
+        ("blind", "identity"),
+        ("retry", "identity"),
+        ("targeted", "identity"),
+        ("blind", "thread"),
+        ("targeted", "thread"),
+        ("blind", "descriptor"),
+        ("retry", "descriptor"),
+        ("targeted", "descriptor"),
+        ("blind", "terminal"),
+        ("retry", "terminal"),
+        ("targeted", "terminal"),
+    ],
+)
+def test_revalidation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane(
+    tmp_path,
+    monkeypatch,
+    path: str,
+    failure_stage: str,
+) -> None:
+    service, store, jobs, client, revalidation_id, finding_id = (
+        _prepare_revalidation_cleanup_case(tmp_path, path)
+    )
+    attempts_before = list(store.get_revalidation(revalidation_id)["attempts"])
+    calls_before = len(client.calls)
+    probe = OXOperationKey(
+        operation="revalidation-probe",
+        subject_id=revalidation_id,
+        input_sha256="c" * 64,
+    )
+
+    if failure_stage == "preclaim":
+        original_reserve = jobs.reserve
+
+        def fail_reserve(_operation_key):
+            raise OXUnavailableError("synthetic revalidation preclaim failure")
+
+        monkeypatch.setattr(jobs, "reserve", fail_reserve)
+        with pytest.raises(OXUnavailableError, match="synthetic revalidation preclaim failure"):
+            _invoke_revalidation_cleanup_case(service, path, revalidation_id, finding_id)
+
+        assert store.get_revalidation(revalidation_id)["attempts"] == attempts_before
+        assert len(client.calls) == calls_before
+        monkeypatch.setattr(jobs, "reserve", original_reserve)
+        lease = jobs.reserve(probe)
+        assert isinstance(lease, OXLaneLease)
+        jobs.abandon(lease)
+        return
+
+    def fail_identity(*_args, **_kwargs) -> None:
+        raise OXEvidenceError("synthetic revalidation identity failure")
+
+    def fail_thread(*_args, **_kwargs) -> None:
+        raise OXEvidenceError("synthetic revalidation thread failure")
+
+    def fail_descriptor(*_args, **_kwargs):
+        raise OXEvidenceError("synthetic revalidation descriptor failure")
+
+    def fail_terminal(*_args, **_kwargs) -> None:
+        raise OXEvidenceError("synthetic revalidation terminal failure")
+
+    if failure_stage == "identity":
+        monkeypatch.setattr(service, "_persist_revalidation_attempt_identity", fail_identity)
+        expected = "synthetic revalidation identity failure"
+    elif failure_stage == "thread":
+        monkeypatch.setattr(store, "append_revalidation_thread_message", fail_thread)
+        expected = "synthetic revalidation thread failure"
+    elif failure_stage == "descriptor":
+        monkeypatch.setattr("byte_mcp.ox.service.OXLaunchDescriptor", fail_descriptor)
+        expected = "synthetic revalidation descriptor failure"
+    else:
+        assert failure_stage == "terminal"
+        monkeypatch.setattr(service, "_persist_revalidation_attempt_identity", fail_identity)
+        monkeypatch.setattr(store, "record_revalidation_attempt_outcome", fail_terminal)
+        expected = "synthetic revalidation terminal failure"
+
+    with pytest.raises(OXEvidenceError, match=expected):
+        _invoke_revalidation_cleanup_case(service, path, revalidation_id, finding_id)
+
+    attempts_after = store.get_revalidation(revalidation_id)["attempts"]
+    assert len(attempts_after) == len(attempts_before) + 1
+    assert len(client.calls) == calls_before
+
+    if failure_stage == "terminal":
+        with pytest.raises(OXUnavailableError):
+            jobs.reserve(probe)
+        return
+
+    failed = attempts_after[-1]
+    assert failed["outcome"] == AttemptOutcome.NOT_SENT.value
+    assert "provider_started_at" not in failed
+    lease = jobs.reserve(probe)
+    assert isinstance(lease, OXLaneLease)
+    jobs.abandon(lease)
 
 
 def test_q03h_ac16_revalidation_retry_requires_renewed_approval_and_never_auto_retries(
