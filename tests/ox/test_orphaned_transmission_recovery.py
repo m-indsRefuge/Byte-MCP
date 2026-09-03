@@ -11,6 +11,8 @@ from byte_mcp.ox.models import AttemptOutcome, OXAvailability, ReviewState
 from byte_mcp.ox.settings import OXSettings
 
 MANIFEST_SHA256 = "a" * 64
+RUNTIME_SESSION_A = "a" * 32
+RUNTIME_SESSION_B = "b" * 32
 NOW = datetime(2026, 9, 2, 10, 0, 0, tzinfo=UTC)
 HORIZON = timedelta(minutes=30)
 OLD = NOW - timedelta(hours=2)
@@ -378,3 +380,105 @@ def test_runtime_initialization_runs_local_recovery_before_exposing_service(
 
     assert initialized.state is OXAvailability.AVAILABLE
     assert calls == [timedelta(seconds=1800)]
+
+
+def test_q03h_ac10_prior_runtime_transmission_recovers_unknown_without_retry(tmp_path) -> None:
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
+    path = _events_path(tmp_path, review_id)
+    _rewrite_intent_recorded_at(
+        path,
+        event_type="TRANSMISSION_INTENT",
+        recorded_at=FRESH,
+    )
+
+    recovered = store.recover_stale_transmissions(
+        now=NOW,
+        stale_after=HORIZON,
+        runtime_session_id=RUNTIME_SESSION_B,
+    )
+    review = store.get_review(review_id)
+
+    assert recovered == (first["attempt_id"],)
+    assert review["state"] == ReviewState.OUTCOME_UNKNOWN.value
+    assert review["attempts"] == [
+        {
+            "attempt_id": first["attempt_id"],
+            "manifest_sha256": MANIFEST_SHA256,
+            "runtime_session_id": RUNTIME_SESSION_A,
+            "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
+        }
+    ]
+    assert not any(attempt["attempt_id"].endswith("A002") for attempt in review["attempts"])
+    assert store.recover_stale_transmissions(
+        now=NOW + timedelta(hours=1),
+        stale_after=HORIZON,
+        runtime_session_id=RUNTIME_SESSION_B,
+    ) == ()
+
+
+def test_q03h_current_runtime_transmission_is_not_recovered_as_orphan(tmp_path) -> None:
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    first = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
+    path = _events_path(tmp_path, review_id)
+    _rewrite_intent_recorded_at(
+        path,
+        event_type="TRANSMISSION_INTENT",
+        recorded_at=OLD,
+    )
+    before = path.read_bytes()
+
+    recovered = store.recover_stale_transmissions(
+        now=NOW,
+        stale_after=HORIZON,
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
+
+    assert recovered == ()
+    assert path.read_bytes() == before
+    assert store.get_review(review_id)["attempts"] == [
+        {
+            "attempt_id": first["attempt_id"],
+            "manifest_sha256": MANIFEST_SHA256,
+            "runtime_session_id": RUNTIME_SESSION_A,
+        }
+    ]
+
+
+def test_q03h_prior_runtime_revalidation_recovers_unknown_immediately(tmp_path) -> None:
+    store = EvidenceStore(tmp_path)
+    review_id = _prepare(store)
+    revalidation_id = _prepare_blind_revalidation(store, review_id)
+    attempt = store.claim_revalidation_transmission(
+        revalidation_id,
+        phase="blind",
+        runtime_session_id=RUNTIME_SESSION_A,
+    )
+    path = _revalidation_events_path(tmp_path, review_id, revalidation_id)
+    _rewrite_intent_recorded_at(
+        path,
+        event_type="REVALIDATION_TRANSMISSION_INTENT",
+        recorded_at=FRESH,
+    )
+
+    recovered = store.recover_stale_transmissions(
+        now=NOW,
+        stale_after=HORIZON,
+        runtime_session_id=RUNTIME_SESSION_B,
+    )
+
+    assert recovered == (attempt["attempt_id"],)
+    revalidation = store.get_revalidation(revalidation_id)
+    assert revalidation["state"] == ReviewState.OUTCOME_UNKNOWN.value
+    assert revalidation["attempts"][-1]["runtime_session_id"] == RUNTIME_SESSION_A
+    assert revalidation["attempts"][-1]["outcome"] == AttemptOutcome.OUTCOME_UNKNOWN.value
