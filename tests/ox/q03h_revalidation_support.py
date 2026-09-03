@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import suppress
 from pathlib import Path
 
 from byte_mcp.errors import OXTransportError
@@ -72,9 +73,7 @@ class AdjacencyEvidenceStore(EvidenceStore):
         runtime_session_id: str,
         phase: str,
     ) -> None:
-        self.order.append(
-            ("provider-start", attempt_id, runtime_session_id, phase)
-        )
+        self.order.append(("provider-start", attempt_id, runtime_session_id, phase))
         super().record_provider_request_started(
             review_id,
             attempt_id,
@@ -90,9 +89,7 @@ class AdjacencyEvidenceStore(EvidenceStore):
         runtime_session_id: str,
         phase: str,
     ) -> None:
-        self.order.append(
-            ("provider-start", attempt_id, runtime_session_id, phase)
-        )
+        self.order.append(("provider-start", attempt_id, runtime_session_id, phase))
         super().record_revalidation_provider_request_started(
             revalidation_id,
             attempt_id,
@@ -300,10 +297,8 @@ def exercise_provider_path(
 
     if path == "revalidation-retry":
         client.fail_next = True
-        try:
+        with suppress(OXTransportError):
             service.transmit_blind_revalidation(revalidation_id)
-        except OXTransportError:
-            pass
         wait_for_revalidation_state(store, revalidation_id, ReviewState.OUTCOME_UNKNOWN)
         wait_for_lane_release(jobs)
         order.clear()
