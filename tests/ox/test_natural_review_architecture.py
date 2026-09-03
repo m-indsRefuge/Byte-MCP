@@ -5,24 +5,13 @@ import threading
 import pytest
 
 from byte_mcp.errors import OXApprovalError, OXEvidenceError, OXFindingValidationError
-from byte_mcp.ox.evidence import EvidenceStore
 from byte_mcp.ox.jobs import OXProviderJobManager
 from byte_mcp.ox.models import ReviewState
 from byte_mcp.ox.natural_service import OXReviewService
 from byte_mcp.ox.protocol import build_initial_messages
 from byte_mcp.ox.settings import OXSettings
+from tests.ox import q03h_initial_support as q03h
 from tests.ox.helpers import commit_files, create_repository
-from tests.ox.q03h_initial_support import (
-    BlockingNaturalClient as Q03HBlockingNaturalClient,
-    OrderedAudit,
-    OrderedNaturalClient,
-    RecordingEvidenceStore,
-    make_natural_service as make_q03h_service,
-    prepare as q03h_prepare,
-    wait_for_lane_release,
-    wait_for_state,
-    write_registry as write_q03h_registry,
-)
 from tests.ox.test_review_service import RecordingClient, make_service, prepare, verification
 
 
@@ -71,7 +60,7 @@ class BlockingNaturalClient(RecordingClient):
 def _complete_initial(service, store, review_id: str) -> dict[str, object]:
     launch = service.transmit_review(review_id)
     assert launch["state"] == ReviewState.TRANSMITTING.value
-    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    q03h.wait_for_state(store, review_id, ReviewState.REVIEWED)
     return service.transmit_review(review_id)
 
 
@@ -188,7 +177,7 @@ def test_q03g_initial_approval_replay_while_transmitting_never_resends(tmp_path)
     assert len(client.calls) == 0
 
     client.release.set()
-    wait_for_state(store, proposal["review_id"], ReviewState.REVIEWED)
+    q03h.wait_for_state(store, proposal["review_id"], ReviewState.REVIEWED)
     assert len(client.calls) == 1
     attempts = store.get_review(proposal["review_id"])["attempts"]
     assert len(attempts) == 1
@@ -374,9 +363,9 @@ def test_targeted_revalidation_requires_byte_derived_findings_after_natural_blin
 
 
 def test_q03h_ac04_same_active_operation_replays_without_duplicate_work(tmp_path) -> None:
-    client = Q03HBlockingNaturalClient()
-    service, store, _, base, target = make_q03h_service(tmp_path, client)
-    proposal = q03h_prepare(service, base, target)
+    client = q03h.BlockingNaturalClient()
+    service, store, _, base, target = q03h.make_natural_service(tmp_path, client)
+    proposal = q03h.prepare(service, base, target)
     review_id = str(proposal["review_id"])
 
     first = service.transmit_review(review_id)
@@ -394,27 +383,27 @@ def test_q03h_ac04_same_active_operation_replays_without_duplicate_work(tmp_path
     assert len(client.calls) == before_calls == 1
 
     client.release.set()
-    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    q03h.wait_for_state(store, review_id, ReviewState.REVIEWED)
 
 
 def test_q03h_ac11_initial_worker_is_natural_exactly_once_and_orders_evidence(tmp_path) -> None:
     order: list[str] = []
     repository_path, base, target = create_repository(tmp_path)
     registry_path = tmp_path / "repositories.json"
-    write_q03h_registry(registry_path, repository_path)
+    q03h.write_registry(registry_path, repository_path)
     settings = OXSettings("FAKE-TEST-KEY", registry_path, tmp_path / "evidence")
-    store = RecordingEvidenceStore(settings.evidence_root, order)
+    store = q03h.RecordingEvidenceStore(settings.evidence_root, order)
     jobs = OXProviderJobManager()
-    client = OrderedNaturalClient(order)
-    service = OXReviewService(settings, store, client, OrderedAudit(order), jobs)
-    proposal = q03h_prepare(service, base, target)
+    client = q03h.OrderedNaturalClient(order)
+    service = OXReviewService(settings, store, client, q03h.OrderedAudit(order), jobs)
+    proposal = q03h.prepare(service, base, target)
     review_id = str(proposal["review_id"])
 
     receipt = service.transmit_review(review_id)
     assert receipt["launch_accepted"] is True
     assert client.completed.wait(timeout=5)
-    wait_for_state(store, review_id, ReviewState.REVIEWED)
-    wait_for_lane_release(jobs)
+    q03h.wait_for_state(store, review_id, ReviewState.REVIEWED)
+    q03h.wait_for_lane_release(jobs)
 
     assert len(client.calls) == 1
     assert client.calls[0]["json_mode"] is False
