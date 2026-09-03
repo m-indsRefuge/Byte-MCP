@@ -191,11 +191,14 @@ def _establish_review(service, base: str, target: str) -> str:
 
 def test_continue_message_replays_approved_history_and_adds_one_turn(tmp_path) -> None:
     client = TextClient()
-    service, _, _, base, target, _ = make_service(tmp_path, client)
+    service, store, _, base, target, _ = make_service(tmp_path, client)
     review_id = _establish_review(service, base, target)
     initial_calls = len(client.calls)
 
-    result = service.continue_message(review_id, "Explain the evidence for F001.")
+    launch = service.continue_message(review_id, "Explain the evidence for F001.")
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
 
     assert len(client.calls) == initial_calls + 1
     call = client.calls[-1]
@@ -210,7 +213,8 @@ def test_continue_message_replays_approved_history_and_adds_one_turn(tmp_path) -
         "role": "user",
         "content": "Explain the evidence for F001.",
     }
-    assert result["response"] == "Acknowledged."
+    thread = service.get_review(review_id, view="thread")["messages"]
+    assert thread[-1] == {"role": "assistant", "content": "Acknowledged."}
 
 
 def test_ambiguous_continuation_retry_replays_exact_attempted_turn(tmp_path) -> None:
@@ -218,20 +222,26 @@ def test_ambiguous_continuation_retry_replays_exact_attempted_turn(tmp_path) -> 
     service, store, _, base, target, _ = make_service(tmp_path, client)
     review_id = _establish_review(service, base, target)
 
-    with pytest.raises(OXTransportError):
-        service.continue_message(review_id, "Please test the disproof condition.")
+    launch = service.continue_message(review_id, "Please test the disproof condition.")
+    wait_for_state(store, review_id, ReviewState.OUTCOME_UNKNOWN)
+    wait_for_lane_release(service._jobs)
     failed_call = client.calls[-1]
-    failed_attempt = failed_call["attempt_id"]
+    failed_attempt = launch["attempt_id"]
+    assert failed_call["attempt_id"] == failed_attempt
     thread = service.get_review(review_id, view="thread")["messages"]
     assert thread[-1] == {"role": "user", "content": "Please test the disproof condition."}
 
     with pytest.raises(OXApprovalError):
         service.retry_continuation(review_id, failed_attempt, renewed_approval=False)
 
-    result = service.retry_continuation(review_id, failed_attempt, renewed_approval=True)
+    retry = service.retry_continuation(review_id, failed_attempt, renewed_approval=True)
+    assert retry["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
 
     assert client.calls[-1]["messages"] == failed_call["messages"]
-    assert result["response"] == "Acknowledged."
+    final_thread = service.get_review(review_id, view="thread")["messages"]
+    assert final_thread[-1] == {"role": "assistant", "content": "Acknowledged."}
     assert store.get_review(review_id)["attempts"][-1]["outcome"] == "COMPLETED"
 
 
