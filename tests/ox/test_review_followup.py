@@ -707,3 +707,127 @@ def test_q03h_ac16_revalidation_retry_requires_renewed_approval_and_never_auto_r
         for attempt in final_attempts
     )
     assert all(call["json_mode"] is False for call in client.calls[-2:])
+
+
+@pytest.mark.parametrize("path", ["blind", "retry", "targeted"])
+def test_revalidation_preacceptance_failures_do_not_leak_or_unsafely_reopen_lane(
+    tmp_path,
+    monkeypatch,
+    path: str,
+) -> None:
+    def setup(case_root):
+        client = q03hr.RevalidationNaturalClient()
+        service, store, jobs, repository_path, base, target = q03hr.make_revalidation_service(
+            case_root,
+            client,
+        )
+        review_id = q03hr.establish_initial_review(service, store, jobs, base, target)
+        finding_id: str | None = None
+        if path == "targeted":
+            finding_id = q03hr.establish_byte_provenance(service, review_id)
+        revalidation_id = q03hr.prepare_revalidation(
+            service,
+            repository_path,
+            review_id,
+            target,
+        )
+        if path == "retry":
+            client.fail_next = True
+            try:
+                service.transmit_blind_revalidation(revalidation_id)
+            except OXTransportError:
+                pass
+            q03hr.wait_for_revalidation_state(
+                store,
+                revalidation_id,
+                ReviewState.OUTCOME_UNKNOWN,
+            )
+            q03hr.wait_for_lane_release(jobs)
+        elif path == "targeted":
+            blind = service.transmit_blind_revalidation(revalidation_id)
+            if blind["state"] == ReviewState.TRANSMITTING.value:
+                q03hr.wait_for_revalidation_state(
+                    store,
+                    revalidation_id,
+                    ReviewState.BLIND_REVALIDATED,
+                )
+            q03hr.wait_for_lane_release(jobs)
+        return service, store, jobs, client, revalidation_id, finding_id
+
+    def invoke(service, revalidation_id: str, finding_id: str | None):
+        if path == "blind":
+            return service.transmit_blind_revalidation(revalidation_id)
+        if path == "retry":
+            return service.retry_revalidation(revalidation_id, renewed_approval=True)
+        assert finding_id is not None
+        return service.run_targeted_revalidation(revalidation_id, [finding_id])
+
+    service, store, jobs, client, revalidation_id, finding_id = setup(
+        tmp_path / "preclaim"
+    )
+    attempts_before = list(store.get_revalidation(revalidation_id)["attempts"])
+    calls_before = len(client.calls)
+    claim_name = (
+        "claim_revalidation_retry" if path == "retry" else "claim_revalidation_transmission"
+    )
+
+    def fail_claim(*_args, **_kwargs):
+        raise OXEvidenceError("synthetic revalidation claim failure")
+
+    monkeypatch.setattr(store, claim_name, fail_claim)
+    with pytest.raises(OXApprovalError) as exc_info:
+        invoke(service, revalidation_id, finding_id)
+    assert isinstance(exc_info.value.__cause__, OXEvidenceError)
+    assert store.get_revalidation(revalidation_id)["attempts"] == attempts_before
+    assert len(client.calls) == calls_before
+    probe = OXOperationKey(
+        operation="revalidation-probe",
+        subject_id=revalidation_id,
+        input_sha256="c" * 64,
+    )
+    lease = jobs.reserve(probe)
+    assert isinstance(lease, OXLaneLease)
+    jobs.abandon(lease)
+
+    service, store, jobs, client, revalidation_id, finding_id = setup(
+        tmp_path / "postclaim"
+    )
+    calls_before = len(client.calls)
+
+    def fail_identity(*_args, **_kwargs):
+        raise OXEvidenceError("synthetic revalidation identity failure")
+
+    monkeypatch.setattr(service, "_persist_revalidation_attempt_identity", fail_identity)
+    with pytest.raises(OXEvidenceError, match="synthetic revalidation identity failure"):
+        invoke(service, revalidation_id, finding_id)
+    failed = store.get_revalidation(revalidation_id)["attempts"][-1]
+    assert failed["outcome"] == AttemptOutcome.NOT_SENT.value
+    assert "provider_started_at" not in failed
+    assert len(client.calls) == calls_before
+    probe = OXOperationKey(
+        operation="revalidation-probe",
+        subject_id=revalidation_id,
+        input_sha256="d" * 64,
+    )
+    lease = jobs.reserve(probe)
+    assert isinstance(lease, OXLaneLease)
+    jobs.abandon(lease)
+
+    service, store, jobs, _, revalidation_id, finding_id = setup(
+        tmp_path / "terminal"
+    )
+    monkeypatch.setattr(service, "_persist_revalidation_attempt_identity", fail_identity)
+
+    def fail_terminal(*_args, **_kwargs):
+        raise OXEvidenceError("synthetic revalidation terminal failure")
+
+    monkeypatch.setattr(store, "record_revalidation_attempt_outcome", fail_terminal)
+    with pytest.raises(OXEvidenceError):
+        invoke(service, revalidation_id, finding_id)
+    probe = OXOperationKey(
+        operation="revalidation-probe",
+        subject_id=revalidation_id,
+        input_sha256="e" * 64,
+    )
+    with pytest.raises(OXUnavailableError):
+        jobs.reserve(probe)
