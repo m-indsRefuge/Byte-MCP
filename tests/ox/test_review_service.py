@@ -1,6 +1,5 @@
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -9,16 +8,17 @@ from byte_mcp.errors import (
     OXApprovalError,
     OXBundleError,
     OXEvidenceError,
-    OXFindingValidationError,
     OXRepositoryError,
     OXScopeError,
     OXTransportError,
+    OXUnavailableError,
 )
 from byte_mcp.ox.evidence import EvidenceStore
-from byte_mcp.ox.models import ProviderResult, ProviderUsage, ReviewState
+from byte_mcp.ox.models import AttemptOutcome, ProviderResult, ProviderUsage, ReviewState
 from byte_mcp.ox.service import OXReviewService
 from byte_mcp.ox.settings import OXSettings
 from tests.ox.helpers import create_repository
+from tests.ox.q03h_initial_support import wait_for_lane_release, wait_for_state
 
 
 class FakeAudit:
@@ -302,14 +302,15 @@ def test_transmit_persists_response_findings_and_usage(tmp_path) -> None:
     service, store, _, base, target, _ = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
-    result = service.transmit_review(proposal["review_id"])
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, "OX-000001", ReviewState.REVIEWED)
 
     assert len(client.calls) == 1
     assert client.calls[0]["json_mode"] is True
     assert client.calls[0]["attempt_id"] == "OX-000001-A001"
-    assert result["review_id"] == "OX-000001"
-    assert result["state"] == ReviewState.REVIEWED.value
-    assert result["findings"][0]["finding_id"] == "OX-000001-F001"
+    findings = service.get_review("OX-000001", view="findings")
+    assert findings["findings"][0]["finding_id"] == "OX-000001-F001"
     review = store.get_review("OX-000001")
     assert review["attempts"][-1]["outcome"] == "COMPLETED"
     directory = review_dir(store, "OX-000001")
@@ -330,6 +331,7 @@ def test_transmit_persists_response_findings_and_usage(tmp_path) -> None:
     )
     assert attempt["manifest_sha256"] == proposal["manifest_sha256"]
     assert len(attempt["history_sha256"]) == 64
+    assert attempt["runtime_session_id"] == service._jobs.runtime_session_id
 
 
 def test_malformed_findings_fail_only_after_raw_response_is_durable(tmp_path) -> None:
@@ -337,8 +339,9 @@ def test_malformed_findings_fail_only_after_raw_response_is_durable(tmp_path) ->
     service, store, _, base, target, _ = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
-    with pytest.raises(OXFindingValidationError):
-        service.transmit_review(proposal["review_id"])
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, "OX-000001", ReviewState.REVIEWED)
 
     directory = review_dir(store, "OX-000001")
     assert (directory / "responses" / "OX-000001-A001.json").is_file()
@@ -360,18 +363,18 @@ def test_changed_scope_invalidates_approval_before_provider(tmp_path) -> None:
 
 def test_concurrent_transmit_claim_allows_exactly_one_provider_call(tmp_path) -> None:
     client = BlockingClient()
-    service, _, _, base, target, _ = make_service(tmp_path, client)
+    service, store, _, base, target, _ = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(service.transmit_review, proposal["review_id"])
-        assert client.entered.wait(timeout=5)
-        second = pool.submit(service.transmit_review, proposal["review_id"])
-        with pytest.raises(OXApprovalError):
-            second.result(timeout=5)
-        client.release.set()
-        first.result(timeout=5)
+    first = service.transmit_review(proposal["review_id"])
+    assert client.entered.wait(timeout=5)
+    replay = service.transmit_review(proposal["review_id"])
 
+    assert first["attempt_id"] == replay["attempt_id"]
+    assert replay["replayed"] is True
+    assert len(store.get_review("OX-000001")["attempts"]) == 1
+    client.release.set()
+    wait_for_state(store, "OX-000001", ReviewState.REVIEWED)
     assert len(client.calls) == 1
 
 
@@ -380,20 +383,94 @@ def test_unknown_attempt_requires_renewed_approval_before_exact_retry(tmp_path) 
     service, store, _, base, target, _ = make_service(tmp_path, client)
     proposal = prepare(service, base, target)
 
-    with pytest.raises(OXTransportError):
-        service.transmit_review(proposal["review_id"])
-    assert store.get_review("OX-000001")["state"] == ReviewState.OUTCOME_UNKNOWN.value
+    launch = service.transmit_review(proposal["review_id"])
+    assert launch["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, "OX-000001", ReviewState.OUTCOME_UNKNOWN)
 
     with pytest.raises(OXApprovalError):
         service.retry_review("OX-000001", renewed_approval=False)
     assert len(client.calls) == 1
 
-    result = service.retry_review("OX-000001", renewed_approval=True)
+    retry = service.retry_review("OX-000001", renewed_approval=True)
+    assert retry["state"] == ReviewState.TRANSMITTING.value
+    wait_for_state(store, "OX-000001", ReviewState.REVIEWED)
 
-    assert result["state"] == ReviewState.REVIEWED.value
     assert [call["attempt_id"] for call in client.calls] == ["OX-000001-A001", "OX-000001-A002"]
     attempts = store.get_review("OX-000001")["attempts"]
     assert [attempt["attempt_id"] for attempt in attempts] == [
         "OX-000001-A001",
         "OX-000001-A002",
     ]
+
+
+def test_q03h_ac07_submission_failure_after_claim_persists_not_sent(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    client = RecordingClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    jobs = service._jobs
+    original_start = threading.Thread.start
+
+    def fail_start(_thread) -> None:
+        raise RuntimeError("sentinel thread-start failure")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    with pytest.raises(OXUnavailableError):
+        service.transmit_review(proposal["review_id"])
+
+    failed = store.get_review(proposal["review_id"])
+    assert failed["state"] == ReviewState.FAILED.value
+    assert len(failed["attempts"]) == 1
+    assert failed["attempts"][0]["outcome"] == AttemptOutcome.NOT_SENT.value
+    assert "provider_started_at" not in failed["attempts"][0]
+    assert client.calls == []
+    assert jobs.snapshot() is None
+
+    monkeypatch.setattr(threading.Thread, "start", original_start)
+    second = prepare(service, base, target)
+    receipt = service.transmit_review(second["review_id"])
+
+    assert service._jobs is jobs
+    assert receipt["launch_accepted"] is True
+    wait_for_state(store, second["review_id"], ReviewState.REVIEWED)
+    wait_for_lane_release(jobs)
+    assert len(client.calls) == 1
+
+
+def test_q03h_ac12_initial_retry_requires_renewed_approval_and_launches_once(tmp_path) -> None:
+    client = UnknownThenSuccessClient()
+    service, store, _, base, target, _ = make_service(tmp_path, client)
+    proposal = prepare(service, base, target)
+    review_id = proposal["review_id"]
+
+    first = service.transmit_review(review_id)
+    assert first["attempt_id"] == "OX-000001-A001"
+    wait_for_state(store, review_id, ReviewState.OUTCOME_UNKNOWN)
+    wait_for_lane_release(service._jobs)
+
+    with pytest.raises(OXApprovalError):
+        service.retry_review(review_id, renewed_approval=False)
+    assert len(client.calls) == 1
+    assert len(store.get_review(review_id)["attempts"]) == 1
+
+    retry = service.retry_review(review_id, renewed_approval=True)
+    assert retry["attempt_id"] == "OX-000001-A002"
+    assert retry["launch_accepted"] is True
+    wait_for_state(store, review_id, ReviewState.REVIEWED)
+    wait_for_lane_release(service._jobs)
+
+    assert [call["attempt_id"] for call in client.calls] == [
+        "OX-000001-A001",
+        "OX-000001-A002",
+    ]
+    attempts = store.get_review(review_id)["attempts"]
+    assert [attempt["attempt_id"] for attempt in attempts] == [
+        "OX-000001-A001",
+        "OX-000001-A002",
+    ]
+    assert all(
+        attempt["runtime_session_id"] == service._jobs.runtime_session_id
+        for attempt in attempts
+    )
