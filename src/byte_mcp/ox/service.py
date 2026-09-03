@@ -49,6 +49,39 @@ class OXReviewService(_Q03GReviewService):
         super().__init__(settings, evidence, client, audit)
         self._jobs = jobs if jobs is not None else OXProviderJobManager()
 
+    def get_review(self, review_id: str, *, view: str = "summary") -> dict[str, object]:
+        if view != "attempts":
+            return super().get_review(review_id, view=view)
+
+        review = self._evidence.get_review(review_id)
+        attempts = review.get("attempts")
+        if not isinstance(attempts, list):
+            raise OXEvidenceError("review attempt evidence is malformed")
+
+        approved_fields = (
+            "attempt_id",
+            "manifest_sha256",
+            "phase",
+            "outcome",
+            "runtime_session_id",
+            "provider_started_at",
+            "provider_finished_at",
+            "elapsed_ms",
+            "transport_failure_kind",
+        )
+        projected: list[dict[str, object]] = []
+        for attempt in attempts:
+            if not isinstance(attempt, Mapping):
+                raise OXEvidenceError("review attempt evidence is malformed")
+            item = {field: attempt[field] for field in approved_fields if field in attempt}
+            if "runtime_session_id" in attempt:
+                item["provider_request_started"] = "provider_started_at" in attempt
+            projected.append(item)
+
+        result: dict[str, object] = {"review_id": review_id, "attempts": projected}
+        self._reject_configured_credential(result)
+        return result
+
     def transmit_review(self, review_id: str) -> dict[str, object]:
         replay = self._active_initial_replay(review_id, expected_operation="initial")
         if replay is not None:
