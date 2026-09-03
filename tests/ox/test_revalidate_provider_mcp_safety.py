@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import pytest
@@ -15,12 +14,8 @@ from tests.ox.q03h_initial_support import verification
 
 
 def test_ox_revalidate_provider_path_is_async() -> None:
-    """Provider-capable revalidation must not remain a sync MCP handler."""
-    assert inspect.iscoroutinefunction(server.ox_revalidate), (
-        "ox_revalidate must be async before provider-capable "
-        "revalidation work can be offloaded from the MCP v1 "
-        "event-loop thread"
-    )
+    """Provider-capable revalidation must remain an async MCP handler."""
+    assert inspect.iscoroutinefunction(server.ox_revalidate)
 
 
 async def _invoke_revalidate(**kwargs):
@@ -192,131 +187,113 @@ def test_shared_lane_rejects_cross_type_launches_before_claim(tmp_path) -> None:
     q03hr.wait_for_lane_release(jobs)
 
 
-def test_targeted_revalidation_slow_provider_does_not_block_event_loop(
-    monkeypatch,
-) -> None:
-    """Targeted provider work must execute outside the MCP event loop."""
+def test_targeted_revalidation_routes_directly_to_background_service(monkeypatch) -> None:
+    class LaunchService:
+        def __init__(self) -> None:
+            self.calls = []
 
-    class SlowService:
-        def run_targeted_revalidation(
-            self,
-            revalidation_id: str,
-            finding_ids: list[str],
-        ):
-            time.sleep(0.20)
+        def run_targeted_revalidation(self, revalidation_id: str, finding_ids: list[str]):
+            self.calls.append((revalidation_id, finding_ids))
             return {
                 "revalidation_id": revalidation_id,
-                "finding_ids": finding_ids,
-                "path": "targeted",
+                "attempt_id": "OX-000001-A003",
+                "state": "TRANSMITTING",
+                "launch_accepted": True,
             }
 
-    monkeypatch.setattr(server, "_ox_service", lambda: SlowService())
+    service = LaunchService()
 
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        task = asyncio.create_task(
-            _invoke_revalidate(
-                review_id="OX-TEST-001",
-                revalidation_id="OX-TEST-001-RV001",
-                targeted=True,
-                finding_ids=["OX-TEST-001-F001"],
-            )
+    async def forbidden_to_thread(*args, **kwargs):
+        raise AssertionError("background targeted revalidation must not use to_thread")
+
+    monkeypatch.setattr(server, "_ox_service", lambda: service)
+    monkeypatch.setattr(asyncio, "to_thread", forbidden_to_thread)
+
+    result = asyncio.run(
+        _invoke_revalidate(
+            review_id="OX-000001",
+            revalidation_id="OX-000001-RV001",
+            targeted=True,
+            finding_ids=["OX-000001-F001"],
         )
-        await asyncio.sleep(0.02)
-        delay = loop.time() - started
-        result = await task
-        return delay, result
-
-    delay, result = asyncio.run(scenario())
-
-    assert delay < 0.10, (
-        "slow targeted OX revalidation blocked the MCP event loop "
-        f"for {delay:.3f}s"
     )
-    assert result["path"] == "targeted"
+
+    assert service.calls == [("OX-000001-RV001", ["OX-000001-F001"])]
+    assert result["state"] == "TRANSMITTING"
+    assert result["launch_accepted"] is True
 
 
-def test_retry_revalidation_slow_provider_does_not_block_event_loop(
-    monkeypatch,
-) -> None:
-    """An explicitly approved revalidation retry must be offloaded."""
+def test_retry_revalidation_routes_directly_with_renewed_approval(monkeypatch) -> None:
+    class LaunchService:
+        def __init__(self) -> None:
+            self.calls = []
 
-    class SlowService:
         def retry_revalidation(
             self,
             revalidation_id: str,
             *,
             renewed_approval: bool,
         ):
-            assert renewed_approval is True
-            time.sleep(0.20)
+            self.calls.append((revalidation_id, renewed_approval))
             return {
                 "revalidation_id": revalidation_id,
-                "path": "retry",
+                "attempt_id": "OX-000001-A003",
+                "state": "TRANSMITTING",
+                "launch_accepted": True,
             }
 
-    monkeypatch.setattr(server, "_ox_service", lambda: SlowService())
+    service = LaunchService()
 
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        task = asyncio.create_task(
-            _invoke_revalidate(
-                review_id="OX-TEST-001",
-                revalidation_id="OX-TEST-001-RV001",
-                approve=True,
-                retry=True,
-            )
+    async def forbidden_to_thread(*args, **kwargs):
+        raise AssertionError("background revalidation retry must not use to_thread")
+
+    monkeypatch.setattr(server, "_ox_service", lambda: service)
+    monkeypatch.setattr(asyncio, "to_thread", forbidden_to_thread)
+
+    result = asyncio.run(
+        _invoke_revalidate(
+            review_id="OX-000001",
+            revalidation_id="OX-000001-RV001",
+            approve=True,
+            retry=True,
         )
-        await asyncio.sleep(0.02)
-        delay = loop.time() - started
-        result = await task
-        return delay, result
-
-    delay, result = asyncio.run(scenario())
-
-    assert delay < 0.10, (
-        "slow OX revalidation retry blocked the MCP event loop "
-        f"for {delay:.3f}s"
     )
-    assert result["path"] == "retry"
+
+    assert service.calls == [("OX-000001-RV001", True)]
+    assert result["state"] == "TRANSMITTING"
+    assert result["launch_accepted"] is True
 
 
-def test_blind_revalidation_slow_provider_does_not_block_event_loop(
-    monkeypatch,
-) -> None:
-    """Approved blind revalidation transmission must be offloaded."""
+def test_blind_revalidation_routes_directly_to_background_service(monkeypatch) -> None:
+    class LaunchService:
+        def __init__(self) -> None:
+            self.calls = []
 
-    class SlowService:
         def transmit_blind_revalidation(self, revalidation_id: str):
-            time.sleep(0.20)
+            self.calls.append(revalidation_id)
             return {
                 "revalidation_id": revalidation_id,
-                "path": "blind",
+                "attempt_id": "OX-000001-A002",
+                "state": "TRANSMITTING",
+                "launch_accepted": True,
             }
 
-    monkeypatch.setattr(server, "_ox_service", lambda: SlowService())
+    service = LaunchService()
 
-    async def scenario():
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        task = asyncio.create_task(
-            _invoke_revalidate(
-                review_id="OX-TEST-001",
-                revalidation_id="OX-TEST-001-RV001",
-                approve=True,
-            )
+    async def forbidden_to_thread(*args, **kwargs):
+        raise AssertionError("background blind revalidation must not use to_thread")
+
+    monkeypatch.setattr(server, "_ox_service", lambda: service)
+    monkeypatch.setattr(asyncio, "to_thread", forbidden_to_thread)
+
+    result = asyncio.run(
+        _invoke_revalidate(
+            review_id="OX-000001",
+            revalidation_id="OX-000001-RV001",
+            approve=True,
         )
-        await asyncio.sleep(0.02)
-        delay = loop.time() - started
-        result = await task
-        return delay, result
-
-    delay, result = asyncio.run(scenario())
-
-    assert delay < 0.10, (
-        "slow blind OX revalidation blocked the MCP event loop "
-        f"for {delay:.3f}s"
     )
-    assert result["path"] == "blind"
+
+    assert service.calls == ["OX-000001-RV001"]
+    assert result["state"] == "TRANSMITTING"
+    assert result["launch_accepted"] is True
