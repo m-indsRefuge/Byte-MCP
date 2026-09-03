@@ -7,6 +7,7 @@ from byte_mcp.errors import OXEvidenceError, OXUnavailableError
 
 from .client import OXClient
 from .evidence import EvidenceStore
+from .jobs import OXProviderJobManager
 from .models import OXAvailability
 from .natural_service import OXReviewService
 from .repositories import validate_ox_local_config
@@ -28,15 +29,18 @@ class OXRuntime:
 
         try:
             validate_ox_local_config(settings)
+            jobs = OXProviderJobManager()
             evidence = EvidenceStore(settings.evidence_root)
             evidence.recover_stale_transmissions(
-                stale_after=timedelta(seconds=settings.orphan_recovery_seconds)
+                stale_after=timedelta(seconds=settings.orphan_recovery_seconds),
+                runtime_session_id=jobs.runtime_session_id,
             )
             service = OXReviewService(
                 settings,
                 evidence,
                 OXClient(settings),
                 audit,
+                jobs,
             )
         except (OSError, OXEvidenceError, TypeError, ValueError):
             return cls(OXAvailability.MISCONFIGURED)
