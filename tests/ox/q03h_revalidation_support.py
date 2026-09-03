@@ -45,6 +45,62 @@ class RevalidationNaturalClient:
         return natural_result(attempt_id)
 
 
+class AdjacencyNaturalClient(RevalidationNaturalClient):
+    """Record the exact external-call boundary for the AC06 adjacency oracle."""
+
+    def __init__(self, order: list[tuple[object, ...]]) -> None:
+        super().__init__()
+        self.order = order
+
+    def complete(self, messages, *, json_mode: bool, attempt_id: str) -> ProviderResult:
+        self.order.append(("client.complete", attempt_id, json_mode))
+        return super().complete(messages, json_mode=json_mode, attempt_id=attempt_id)
+
+
+class AdjacencyEvidenceStore(EvidenceStore):
+    """Record only provider-start events so adjacency has no observational noise."""
+
+    def __init__(self, root: Path, order: list[tuple[object, ...]]) -> None:
+        super().__init__(root)
+        self.order = order
+
+    def record_provider_request_started(
+        self,
+        review_id: str,
+        attempt_id: str,
+        *,
+        runtime_session_id: str,
+        phase: str,
+    ) -> None:
+        self.order.append(
+            ("provider-start", attempt_id, runtime_session_id, phase)
+        )
+        super().record_provider_request_started(
+            review_id,
+            attempt_id,
+            runtime_session_id=runtime_session_id,
+            phase=phase,
+        )
+
+    def record_revalidation_provider_request_started(
+        self,
+        revalidation_id: str,
+        attempt_id: str,
+        *,
+        runtime_session_id: str,
+        phase: str,
+    ) -> None:
+        self.order.append(
+            ("provider-start", attempt_id, runtime_session_id, phase)
+        )
+        super().record_revalidation_provider_request_started(
+            revalidation_id,
+            attempt_id,
+            runtime_session_id=runtime_session_id,
+            phase=phase,
+        )
+
+
 def natural_result(attempt_id: str) -> ProviderResult:
     content = f"Natural OX revalidation response for {attempt_id}."
     raw = {
@@ -164,6 +220,110 @@ def establish_byte_provenance(service: OXReviewService, review_id: str) -> str:
         ],
     )
     return finding_id
+
+
+def exercise_provider_path(
+    tmp_path: Path,
+    path: str,
+) -> tuple[list[tuple[object, ...]], str, str, str]:
+    """Run one provider-bearing path and return its isolated start/call log."""
+    order: list[tuple[object, ...]] = []
+    repository_path, base, target = create_repository(tmp_path)
+    registry_path = tmp_path / "repositories.json"
+    write_registry(registry_path, repository_path)
+    settings = OXSettings("FAKE-TEST-KEY", registry_path, tmp_path / "evidence")
+    store = AdjacencyEvidenceStore(settings.evidence_root, order)
+    jobs = OXProviderJobManager()
+    client = AdjacencyNaturalClient(order)
+    service = OXReviewService(settings, store, client, FakeAudit(), jobs)
+
+    if path == "initial":
+        review_id = prepare_initial_review(service, base, target)
+        order.clear()
+        launch = service.transmit_review(review_id)
+        wait_for_review_state(store, review_id, ReviewState.REVIEWED)
+        wait_for_lane_release(jobs)
+        return order, str(launch["attempt_id"]), jobs.runtime_session_id, "initial"
+
+    if path == "initial-retry":
+        review_id = prepare_initial_review(service, base, target)
+        client.fail_next = True
+        service.transmit_review(review_id)
+        wait_for_review_state(store, review_id, ReviewState.OUTCOME_UNKNOWN)
+        wait_for_lane_release(jobs)
+        order.clear()
+        launch = service.retry_review(review_id, renewed_approval=True)
+        wait_for_review_state(store, review_id, ReviewState.REVIEWED)
+        wait_for_lane_release(jobs)
+        return order, str(launch["attempt_id"]), jobs.runtime_session_id, "initial"
+
+    review_id = establish_initial_review(service, store, jobs, base, target)
+
+    if path == "continuation":
+        order.clear()
+        launch = service.continue_message(review_id, "Check the evidence again.")
+        wait_for_review_state(store, review_id, ReviewState.REVIEWED)
+        wait_for_lane_release(jobs)
+        return order, str(launch["attempt_id"]), jobs.runtime_session_id, "continuation"
+
+    if path == "continuation-retry":
+        client.fail_next = True
+        first = service.continue_message(review_id, "Check the failed evidence again.")
+        wait_for_review_state(store, review_id, ReviewState.OUTCOME_UNKNOWN)
+        wait_for_lane_release(jobs)
+        order.clear()
+        launch = service.retry_continuation(
+            review_id,
+            str(first["attempt_id"]),
+            renewed_approval=True,
+        )
+        wait_for_review_state(store, review_id, ReviewState.REVIEWED)
+        wait_for_lane_release(jobs)
+        return order, str(launch["attempt_id"]), jobs.runtime_session_id, "continuation"
+
+    finding_id: str | None = None
+    if path == "targeted":
+        finding_id = establish_byte_provenance(service, review_id)
+    revalidation_id = prepare_revalidation(
+        service,
+        repository_path,
+        review_id,
+        target,
+    )
+
+    if path == "blind":
+        order.clear()
+        launch = service.transmit_blind_revalidation(revalidation_id)
+        wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
+        wait_for_lane_release(jobs)
+        return order, str(launch["attempt_id"]), jobs.runtime_session_id, "blind"
+
+    if path == "revalidation-retry":
+        client.fail_next = True
+        try:
+            service.transmit_blind_revalidation(revalidation_id)
+        except OXTransportError:
+            pass
+        wait_for_revalidation_state(store, revalidation_id, ReviewState.OUTCOME_UNKNOWN)
+        wait_for_lane_release(jobs)
+        order.clear()
+        launch = service.retry_revalidation(revalidation_id, renewed_approval=True)
+        wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
+        wait_for_lane_release(jobs)
+        return order, str(launch["attempt_id"]), jobs.runtime_session_id, "blind"
+
+    if path != "targeted" or finding_id is None:
+        raise AssertionError(f"unsupported provider path: {path}")
+
+    blind = service.transmit_blind_revalidation(revalidation_id)
+    if blind["state"] == ReviewState.TRANSMITTING.value:
+        wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
+    wait_for_lane_release(jobs)
+    order.clear()
+    launch = service.run_targeted_revalidation(revalidation_id, [finding_id])
+    wait_for_revalidation_state(store, revalidation_id, ReviewState.REVALIDATED)
+    wait_for_lane_release(jobs)
+    return order, str(launch["attempt_id"]), jobs.runtime_session_id, "targeted"
 
 
 def wait_for_review_state(
