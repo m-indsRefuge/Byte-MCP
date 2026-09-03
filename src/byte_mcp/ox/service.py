@@ -1,9 +1,8 @@
 """Q03H background ownership facade over the established OX service core.
 
 The Q03G orchestration remains the inherited implementation for provider-free
-and not-yet-migrated Task 6 paths. Q03H overrides initial review, continuation,
-and their explicit retry paths so claim ownership is separated from provider
-execution.
+operations. Q03H overrides every provider-bearing path so claim ownership is
+separated from provider execution and one runtime owns one provider lane.
 """
 
 from __future__ import annotations
@@ -364,45 +363,27 @@ class OXReviewService(_Q03GReviewService):
         return receipt
 
     def transmit_blind_revalidation(self, revalidation_id: str) -> dict[str, object]:
-        """Q03H compatibility path until Task 6 backgrounds revalidation."""
+        replay = self._active_revalidation_replay(
+            revalidation_id,
+            expected_operation="blind",
+        )
+        if replay is not None:
+            return replay
+
         revalidation = self._load_revalidation(
             revalidation_id,
             expected_state=ReviewState.REVALIDATION_PREPARED,
         )
         prepared, messages = self._rebuild_revalidation_and_verify(revalidation)
-        try:
-            attempt = self._evidence.claim_revalidation_transmission(
-                revalidation_id,
-                phase="blind",
-                runtime_session_id=self._jobs.runtime_session_id,
-            )
-        except OXEvidenceError as exc:
-            raise OXApprovalError("revalidation is not available for blind approval") from exc
-        attempt_id = attempt["attempt_id"]
-        self._persist_revalidation_attempt_identity(
+        return self._launch_revalidation_transmission(
+            revalidation,
             revalidation_id,
-            attempt_id,
             prepared.manifest.manifest_sha256,
             messages,
             phase="blind",
-        )
-        try:
-            for item in messages:
-                self._evidence.append_revalidation_thread_message(
-                    revalidation_id,
-                    "blind-revalidation",
-                    item,
-                )
-        except OXEvidenceError:
-            self._record_revalidation_not_sent(revalidation_id, attempt_id)
-            raise
-        return self._perform_revalidation_attempt(
-            revalidation_id=revalidation_id,
-            attempt_id=attempt_id,
-            manifest_sha256=prepared.manifest.manifest_sha256,
-            messages=messages,
-            phase="blind",
+            operation="blind",
             thread_name="blind-revalidation",
+            claim_error_message="revalidation is not available for blind approval",
         )
 
     def retry_revalidation(
@@ -411,9 +392,16 @@ class OXReviewService(_Q03GReviewService):
         *,
         renewed_approval: bool,
     ) -> dict[str, object]:
-        """Q03H compatibility path until Task 6 backgrounds revalidation retry."""
         if not renewed_approval:
             raise OXApprovalError("revalidation retry requires renewed human approval")
+
+        replay = self._active_revalidation_replay(
+            revalidation_id,
+            expected_operation="revalidation-retry",
+        )
+        if replay is not None:
+            return replay
+
         revalidation = self._load_revalidation(
             revalidation_id,
             expected_state=(ReviewState.FAILED, ReviewState.OUTCOME_UNKNOWN),
@@ -426,16 +414,15 @@ class OXReviewService(_Q03GReviewService):
         phase = previous.get("phase")
         if not isinstance(previous_attempt_id, str) or phase not in {"blind", "targeted"}:
             raise OXApprovalError("revalidation attempt evidence is malformed")
+
         prepared, blind_messages = self._rebuild_revalidation_and_verify(revalidation)
         if phase == "blind":
             messages = blind_messages
-            thread_name = "blind-revalidation"
         else:
             messages = self._evidence.read_revalidation_thread(
                 revalidation_id,
                 "targeted-revalidation",
             )
-            thread_name = "targeted-revalidation"
         prior_identity = self._read_revalidation_attempt_identity(
             revalidation_id,
             previous_attempt_id,
@@ -447,6 +434,21 @@ class OXReviewService(_Q03GReviewService):
         ):
             raise OXApprovalError("revalidation history no longer matches failed attempt")
         self._reject_configured_credential(messages)
+        self._enforce_message_bound(messages)
+
+        operation_key = OXOperationKey(
+            operation="revalidation-retry",
+            subject_id=revalidation_id,
+            input_sha256=_revalidation_retry_input_sha256(
+                previous_attempt_id,
+                str(phase),
+                messages,
+            ),
+        )
+        reservation = self._jobs.reserve(operation_key)
+        if isinstance(reservation, OXActiveLaunch):
+            return self._replay_launch_receipt(reservation)
+
         try:
             attempt = self._evidence.claim_revalidation_retry(
                 revalidation_id,
@@ -455,63 +457,90 @@ class OXReviewService(_Q03GReviewService):
                 runtime_session_id=self._jobs.runtime_session_id,
             )
         except OXEvidenceError as exc:
+            self._jobs.abandon(reservation)
             raise OXApprovalError("revalidation is not eligible for retry") from exc
+
         attempt_id = attempt["attempt_id"]
-        self._persist_revalidation_attempt_identity(
-            revalidation_id,
-            attempt_id,
-            prepared.manifest.manifest_sha256,
-            messages,
-            phase=str(phase),
-            retry_of=previous_attempt_id,
+        review_id = revalidation.get("review_id")
+        if not isinstance(review_id, str):
+            self._cleanup_claimed_revalidation_before_submission(
+                reservation,
+                revalidation_id,
+                attempt_id,
+            )
+            raise OXApprovalError("revalidation parent review is malformed")
+
+        try:
+            self._persist_revalidation_attempt_identity(
+                revalidation_id,
+                attempt_id,
+                prepared.manifest.manifest_sha256,
+                messages,
+                phase=str(phase),
+                retry_of=previous_attempt_id,
+            )
+            descriptor = OXLaunchDescriptor(
+                operation_key=operation_key,
+                review_id=review_id,
+                attempt_id=attempt_id,
+                manifest_sha256=prepared.manifest.manifest_sha256,
+                phase=str(phase),
+                revalidation_id=revalidation_id,
+                messages=tuple(messages),
+            )
+            receipt = self._revalidation_launch_receipt(descriptor)
+        except Exception:
+            self._cleanup_claimed_revalidation_before_submission(
+                reservation,
+                revalidation_id,
+                attempt_id,
+            )
+            raise
+
+        self._jobs.submit(
+            reservation,
+            descriptor,
+            receipt,
+            self._run_claimed_revalidation_attempt,
+            self._terminalize_revalidation_submission_failure,
+            self._terminalize_revalidation_worker_crash,
         )
-        return self._perform_revalidation_attempt(
-            revalidation_id=revalidation_id,
-            attempt_id=attempt_id,
-            manifest_sha256=prepared.manifest.manifest_sha256,
-            messages=messages,
-            phase=str(phase),
-            thread_name=thread_name,
-        )
+        return receipt
 
     def run_targeted_revalidation(
         self,
         revalidation_id: str,
         finding_ids: Sequence[str],
     ) -> dict[str, object]:
-        """Q03H compatibility path until Task 6 backgrounds targeted revalidation."""
+        self._validate_targeted_finding_ids(finding_ids)
+        replay = self._active_revalidation_replay(
+            revalidation_id,
+            expected_operation="targeted",
+            finding_ids=finding_ids,
+        )
+        if replay is not None:
+            return replay
+
         revalidation = self._load_revalidation(
             revalidation_id,
             expected_state=ReviewState.BLIND_REVALIDATED,
         )
         self._require_validated_revalidation_phase(revalidation_id, "blind")
-        if (
-            isinstance(finding_ids, str | bytes | bytearray)
-            or not isinstance(finding_ids, Sequence)
-            or not finding_ids
-            or not all(isinstance(finding_id, str) for finding_id in finding_ids)
-        ):
-            raise OXProtocolError(attempt_outcome="NOT_SENT")
         unique_finding_ids = set(finding_ids)
-        if len(unique_finding_ids) != len(finding_ids):
-            raise OXProtocolError(attempt_outcome="NOT_SENT")
         review_id = revalidation.get("review_id")
         if not isinstance(review_id, str):
             raise OXApprovalError("revalidation parent review is malformed")
         findings_payload = self._evidence.read_findings(review_id)
         raw_findings = findings_payload.get("findings")
         if not isinstance(raw_findings, list):
-            raise OXProtocolError(attempt_outcome="NOT_SENT")
+            raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)
         findings = {
             item.get("finding_id"): item
             for item in raw_findings
             if isinstance(item, Mapping) and isinstance(item.get("finding_id"), str)
         }
-        if any(
-            not isinstance(finding_id, str) or finding_id not in findings
-            for finding_id in finding_ids
-        ):
-            raise OXProtocolError(attempt_outcome="NOT_SENT")
+        if any(finding_id not in findings for finding_id in finding_ids):
+            raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)
         adjudications = self._evidence.read_adjudications(review_id)
         selected_adjudications = [
             event for event in adjudications if event.get("finding_id") in unique_finding_ids
@@ -535,40 +564,113 @@ class OXReviewService(_Q03GReviewService):
         )
         self._reject_configured_credential(messages)
         self._enforce_message_bound(messages)
-        try:
-            attempt = self._evidence.claim_revalidation_transmission(
-                revalidation_id,
-                phase="targeted",
-                runtime_session_id=self._jobs.runtime_session_id,
-            )
-        except OXEvidenceError as exc:
-            raise OXApprovalError("targeted revalidation is not available") from exc
-        attempt_id = attempt["attempt_id"]
-        self._persist_revalidation_attempt_identity(
+        return self._launch_revalidation_transmission(
+            revalidation,
             revalidation_id,
-            attempt_id,
             prepared.manifest.manifest_sha256,
             messages,
             phase="targeted",
+            operation="targeted",
+            thread_name="targeted-revalidation",
+            claim_error_message="targeted revalidation is not available",
+            finding_ids=finding_ids,
         )
+
+    def _launch_revalidation_transmission(
+        self,
+        revalidation: Mapping[str, object],
+        revalidation_id: str,
+        manifest_sha256: str,
+        messages: Sequence[Mapping[str, object]],
+        *,
+        phase: str,
+        operation: str,
+        thread_name: str,
+        claim_error_message: str,
+        finding_ids: Sequence[str] | None = None,
+    ) -> dict[str, object]:
+        review_id = revalidation.get("review_id")
+        if not isinstance(review_id, str):
+            raise OXApprovalError("revalidation parent review is malformed")
+        self._reject_configured_credential(messages)
+        self._enforce_message_bound(messages)
+        input_sha256 = (
+            _targeted_input_sha256(finding_ids, messages)
+            if finding_ids is not None
+            else _history_sha256(messages)
+        )
+        operation_key = OXOperationKey(
+            operation=operation,
+            subject_id=revalidation_id,
+            input_sha256=input_sha256,
+        )
+        reservation = self._jobs.reserve(operation_key)
+        if isinstance(reservation, OXActiveLaunch):
+            return self._replay_launch_receipt(reservation)
+
         try:
+            attempt = self._evidence.claim_revalidation_transmission(
+                revalidation_id,
+                phase=phase,
+                runtime_session_id=self._jobs.runtime_session_id,
+            )
+        except OXEvidenceError as exc:
+            self._jobs.abandon(reservation)
+            raise OXApprovalError(claim_error_message) from exc
+
+        attempt_id = attempt["attempt_id"]
+        try:
+            self._persist_revalidation_attempt_identity(
+                revalidation_id,
+                attempt_id,
+                manifest_sha256,
+                messages,
+                phase=phase,
+            )
             for message in messages:
                 self._evidence.append_revalidation_thread_message(
                     revalidation_id,
-                    "targeted-revalidation",
+                    thread_name,
                     message,
                 )
-        except OXEvidenceError:
-            self._record_revalidation_not_sent(revalidation_id, attempt_id)
+            descriptor = OXLaunchDescriptor(
+                operation_key=operation_key,
+                review_id=review_id,
+                attempt_id=attempt_id,
+                manifest_sha256=manifest_sha256,
+                phase=phase,
+                revalidation_id=revalidation_id,
+                messages=tuple(messages),
+            )
+            receipt = self._revalidation_launch_receipt(descriptor)
+        except Exception:
+            self._cleanup_claimed_revalidation_before_submission(
+                reservation,
+                revalidation_id,
+                attempt_id,
+            )
             raise
-        return self._perform_revalidation_attempt(
-            revalidation_id=revalidation_id,
-            attempt_id=attempt_id,
-            manifest_sha256=prepared.manifest.manifest_sha256,
-            messages=messages,
-            phase="targeted",
-            thread_name="targeted-revalidation",
+
+        self._jobs.submit(
+            reservation,
+            descriptor,
+            receipt,
+            self._run_claimed_revalidation_attempt,
+            self._terminalize_revalidation_submission_failure,
+            self._terminalize_revalidation_worker_crash,
         )
+        return receipt
+
+    def _validate_targeted_finding_ids(self, finding_ids: Sequence[str]) -> None:
+        if (
+            isinstance(finding_ids, str | bytes | bytearray)
+            or not isinstance(finding_ids, Sequence)
+            or not finding_ids
+            or not all(isinstance(finding_id, str) for finding_id in finding_ids)
+        ):
+            raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)
+        if len(set(finding_ids)) != len(finding_ids):
+            raise OXProtocolError(attempt_outcome=AttemptOutcome.NOT_SENT.value)
 
     def _active_initial_replay(
         self,
@@ -614,6 +716,31 @@ class OXReviewService(_Q03GReviewService):
                 raise OXUnavailableError("OX provider lane is busy")
         return self._replay_launch_receipt(active)
 
+    def _active_revalidation_replay(
+        self,
+        revalidation_id: str,
+        *,
+        expected_operation: str,
+        finding_ids: Sequence[str] | None = None,
+    ) -> dict[str, object] | None:
+        active = self._jobs.snapshot()
+        if active is None:
+            return None
+        if active.descriptor.revalidation_id != revalidation_id:
+            raise OXUnavailableError("OX provider lane is busy")
+        if active.descriptor.operation_key.operation != expected_operation:
+            raise OXUnavailableError("OX provider lane is busy")
+        if expected_operation == "targeted":
+            if finding_ids is None:
+                raise OXUnavailableError("OX provider lane is busy")
+            expected_digest = _targeted_input_sha256(
+                finding_ids,
+                active.descriptor.messages,
+            )
+            if active.descriptor.operation_key.input_sha256 != expected_digest:
+                raise OXUnavailableError("OX provider lane is busy")
+        return self._replay_launch_receipt(active)
+
     @staticmethod
     def _replay_launch_receipt(active: OXActiveLaunch) -> dict[str, object]:
         receipt = dict(active.receipt)
@@ -641,6 +768,23 @@ class OXReviewService(_Q03GReviewService):
             "attempt_id": descriptor.attempt_id,
             "state": ReviewState.TRANSMITTING.value,
             "manifest_sha256": descriptor.manifest_sha256,
+            "launch_accepted": True,
+            "replayed": False,
+            "provider_request_performed": False,
+        }
+
+    @staticmethod
+    def _revalidation_launch_receipt(descriptor: OXLaunchDescriptor) -> dict[str, object]:
+        revalidation_id = descriptor.revalidation_id
+        if revalidation_id is None:
+            raise OXEvidenceError("revalidation launch descriptor is malformed")
+        return {
+            "review_id": descriptor.review_id,
+            "revalidation_id": revalidation_id,
+            "attempt_id": descriptor.attempt_id,
+            "state": ReviewState.TRANSMITTING.value,
+            "manifest_sha256": descriptor.manifest_sha256,
+            "phase": descriptor.phase,
             "launch_accepted": True,
             "replayed": False,
             "provider_request_performed": False,
@@ -695,12 +839,54 @@ class OXReviewService(_Q03GReviewService):
             raise
         self._jobs.abandon(lease)
 
+    def _cleanup_claimed_revalidation_before_submission(
+        self,
+        lease: OXLaneLease,
+        revalidation_id: str,
+        attempt_id: str,
+    ) -> None:
+        try:
+            self._evidence.record_revalidation_attempt_outcome(
+                revalidation_id,
+                attempt_id,
+                AttemptOutcome.NOT_SENT,
+            )
+        except Exception:
+            if self._revalidation_attempt_is_already_not_sent(
+                revalidation_id,
+                attempt_id,
+            ):
+                self._jobs.abandon(lease)
+                return
+            self._jobs.fault_closed(lease)
+            raise
+        self._jobs.abandon(lease)
+
     def _attempt_is_already_not_sent(self, review_id: str, attempt_id: str) -> bool:
         try:
             review = self._evidence.get_review(review_id)
         except Exception:
             return False
         attempts = review.get("attempts")
+        if not isinstance(attempts, list):
+            return False
+        return any(
+            isinstance(attempt, Mapping)
+            and attempt.get("attempt_id") == attempt_id
+            and attempt.get("outcome") == AttemptOutcome.NOT_SENT.value
+            for attempt in attempts
+        )
+
+    def _revalidation_attempt_is_already_not_sent(
+        self,
+        revalidation_id: str,
+        attempt_id: str,
+    ) -> bool:
+        try:
+            revalidation = self._evidence.get_revalidation(revalidation_id)
+        except Exception:
+            return False
+        attempts = revalidation.get("attempts")
         if not isinstance(attempts, list):
             return False
         return any(
@@ -773,6 +959,53 @@ class OXReviewService(_Q03GReviewService):
             action="ox_continue",
             phase="worker-crash",
         )
+
+    def _terminalize_revalidation_submission_failure(
+        self,
+        descriptor: OXLaunchDescriptor,
+    ) -> None:
+        revalidation_id = self._descriptor_revalidation_id(descriptor)
+        self._evidence.record_revalidation_attempt_outcome(
+            revalidation_id,
+            descriptor.attempt_id,
+            AttemptOutcome.NOT_SENT,
+        )
+        self._audit_attempt(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            descriptor.manifest_sha256,
+            AttemptOutcome.NOT_SENT.value,
+            action="ox_revalidate",
+            phase="submission-failure",
+            revalidation_id=revalidation_id,
+        )
+
+    def _terminalize_revalidation_worker_crash(
+        self,
+        descriptor: OXLaunchDescriptor,
+    ) -> None:
+        revalidation_id = self._descriptor_revalidation_id(descriptor)
+        self._evidence.record_revalidation_attempt_outcome(
+            revalidation_id,
+            descriptor.attempt_id,
+            AttemptOutcome.OUTCOME_UNKNOWN,
+        )
+        self._audit_attempt(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            descriptor.manifest_sha256,
+            AttemptOutcome.OUTCOME_UNKNOWN.value,
+            action="ox_revalidate",
+            phase="worker-crash",
+            revalidation_id=revalidation_id,
+        )
+
+    @staticmethod
+    def _descriptor_revalidation_id(descriptor: OXLaunchDescriptor) -> str:
+        revalidation_id = descriptor.revalidation_id
+        if revalidation_id is None:
+            raise OXEvidenceError("revalidation launch descriptor is malformed")
+        return revalidation_id
 
     def _run_claimed_initial_attempt(self, descriptor: OXLaunchDescriptor) -> None:
         """Execute one already-claimed structured base-service initial attempt."""
@@ -946,6 +1179,106 @@ class OXReviewService(_Q03GReviewService):
             ),
         )
 
+    def _run_claimed_revalidation_attempt(self, descriptor: OXLaunchDescriptor) -> None:
+        """Execute one already-claimed structured base-service revalidation attempt."""
+        revalidation_id = self._descriptor_revalidation_id(descriptor)
+        self._evidence.record_revalidation_provider_request_started(
+            revalidation_id,
+            descriptor.attempt_id,
+            runtime_session_id=self._jobs.runtime_session_id,
+            phase=descriptor.phase,
+        )
+        try:
+            result = self._client.complete(
+                descriptor.messages,
+                json_mode=True,
+                attempt_id=descriptor.attempt_id,
+            )
+        except _PROVIDER_ERRORS as exc:
+            self._record_revalidation_provider_error(
+                revalidation_id,
+                descriptor.attempt_id,
+                descriptor.manifest_sha256,
+                exc,
+                phase=descriptor.phase,
+            )
+            return
+
+        if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
+            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            self._record_revalidation_provider_error(
+                revalidation_id,
+                descriptor.attempt_id,
+                descriptor.manifest_sha256,
+                error,
+                phase=descriptor.phase,
+            )
+            return
+
+        self._evidence.persist_revalidation_provider_response(
+            revalidation_id,
+            descriptor.attempt_id,
+            result.raw_response,
+        )
+        thread_name = (
+            "blind-revalidation"
+            if descriptor.phase == "blind"
+            else "targeted-revalidation"
+        )
+        self._evidence.append_revalidation_thread_message(
+            revalidation_id,
+            thread_name,
+            {"role": "assistant", "content": result.content},
+        )
+        try:
+            findings = parse_findings(result.content, descriptor.review_id)
+        except OXFindingValidationError:
+            self._persist_invalid_revalidation_findings(
+                descriptor.review_id,
+                revalidation_id,
+                descriptor.attempt_id,
+                descriptor.phase,
+                result.content,
+            )
+            self._evidence.record_revalidation_attempt_outcome(
+                revalidation_id,
+                descriptor.attempt_id,
+                AttemptOutcome.COMPLETED,
+            )
+            self._audit_attempt(
+                descriptor.review_id,
+                descriptor.attempt_id,
+                descriptor.manifest_sha256,
+                AttemptOutcome.COMPLETED.value,
+                action="ox_revalidate",
+                phase=f"{descriptor.phase}-protocol-failure",
+                revalidation_id=revalidation_id,
+            )
+            return
+
+        self._evidence.persist_revalidation_findings(
+            revalidation_id,
+            descriptor.phase,
+            {
+                "protocol_version": "ox-findings-v1",
+                "findings": [asdict(finding) for finding in findings],
+            },
+        )
+        self._evidence.record_revalidation_attempt_outcome(
+            revalidation_id,
+            descriptor.attempt_id,
+            AttemptOutcome.COMPLETED,
+        )
+        self._audit_attempt(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            descriptor.manifest_sha256,
+            AttemptOutcome.COMPLETED.value,
+            action="ox_revalidate",
+            phase=descriptor.phase,
+            revalidation_id=revalidation_id,
+        )
+
     def _record_provider_error(
         self,
         review_id: str,
@@ -980,12 +1313,80 @@ class OXReviewService(_Q03GReviewService):
             phase=phase,
         )
 
+    def _record_revalidation_provider_error(
+        self,
+        revalidation_id: str,
+        attempt_id: str,
+        manifest_sha256: str,
+        error,
+        *,
+        phase: str,
+    ) -> None:
+        outcome = error.attempt_outcome
+        self._evidence.record_revalidation_attempt_outcome(
+            revalidation_id,
+            attempt_id,
+            outcome,
+        )
+        if isinstance(error, OXTransportError):
+            kind = error.transport_failure_kind
+            finished_at = error.provider_finished_at
+            elapsed_ms = error.elapsed_ms
+            if kind is not None and finished_at is not None and elapsed_ms is not None:
+                self._evidence.record_revalidation_provider_transport_metadata(
+                    revalidation_id,
+                    attempt_id,
+                    runtime_session_id=self._jobs.runtime_session_id,
+                    provider_finished_at=finished_at,
+                    elapsed_ms=elapsed_ms,
+                    transport_failure_kind=kind.value,
+                )
+        revalidation = self._evidence.get_revalidation(revalidation_id)
+        review_id = revalidation.get("review_id")
+        if not isinstance(review_id, str):
+            raise OXEvidenceError("revalidation parent review evidence is malformed")
+        self._audit_attempt(
+            review_id,
+            attempt_id,
+            manifest_sha256,
+            outcome,
+            action="ox_revalidate",
+            phase=phase,
+            revalidation_id=revalidation_id,
+        )
+
 
 def _retry_input_sha256(
     retry_of: str,
     messages: Sequence[Mapping[str, object]],
 ) -> str:
     material = f"{retry_of}:{_history_sha256(messages)}".encode()
+    return hashlib.sha256(material).hexdigest()
+
+
+def _revalidation_retry_input_sha256(
+    retry_of: str,
+    phase: str,
+    messages: Sequence[Mapping[str, object]],
+) -> str:
+    material = f"{retry_of}:{phase}:{_history_sha256(messages)}".encode()
+    return hashlib.sha256(material).hexdigest()
+
+
+def _targeted_input_sha256(
+    finding_ids: Sequence[str],
+    messages: Sequence[Mapping[str, object]],
+) -> str:
+    material = json.dumps(
+        {
+            "finding_ids": list(finding_ids),
+            "history_sha256": _history_sha256(messages),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
