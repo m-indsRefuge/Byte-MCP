@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 
-from byte_mcp.errors import OXApprovalError, OXEvidenceError, OXProtocolError
+from byte_mcp.errors import (
+    OXApprovalError,
+    OXEvidenceError,
+    OXProtocolError,
+    OXUnavailableError,
+)
 
 from ._natural_service_q03g import OXReviewService as _Q03GNaturalReviewService
 from .models import AttemptOutcome, ProviderResult, ReviewState
 from .protocol import build_initial_messages
-from .service import _PROVIDER_ERRORS
+from .service import _PROVIDER_ERRORS, _targeted_input_sha256
 
 
 class OXReviewService(_Q03GNaturalReviewService):
@@ -134,6 +139,32 @@ class OXReviewService(_Q03GNaturalReviewService):
             claim_error_message="targeted revalidation is not available",
             finding_ids=finding_ids,
         )
+
+    def _active_revalidation_replay(
+        self,
+        revalidation_id: str,
+        *,
+        expected_operation: str,
+        finding_ids: Sequence[str] | None = None,
+    ) -> dict[str, object] | None:
+        """Replay one accepted natural launch without hashing mappingproxy objects."""
+        active = self._jobs.snapshot()
+        if active is None:
+            return None
+        if active.descriptor.revalidation_id != revalidation_id:
+            raise OXUnavailableError("OX provider lane is busy")
+        if active.descriptor.operation_key.operation != expected_operation:
+            raise OXUnavailableError("OX provider lane is busy")
+        if expected_operation == "targeted":
+            if finding_ids is None:
+                raise OXUnavailableError("OX provider lane is busy")
+            expected_digest = _targeted_input_sha256(
+                finding_ids,
+                [dict(message) for message in active.descriptor.messages],
+            )
+            if active.descriptor.operation_key.input_sha256 != expected_digest:
+                raise OXUnavailableError("OX provider lane is busy")
+        return self._replay_launch_receipt(active)
 
     def _initial_review_receipt(
         self,
