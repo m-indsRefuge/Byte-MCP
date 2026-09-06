@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from byte_mcp.errors import OXEvidenceError, OXTransportFailureKind
-from byte_mcp.ox.models import AttemptOutcome, ReviewState
+from byte_mcp.ox.models import AttemptOutcome, ProviderTransportObservation, ReviewState
 
 _REVIEW_ID = re.compile(r"OX-(\d{6})")
 _ATTEMPT_ID = re.compile(r"(OX-\d{6})-A(\d{3})")
@@ -22,6 +22,22 @@ _RUNTIME_SESSION_ID = re.compile(r"[0-9a-f]{32}")
 _REVIEW_PROVIDER_PHASES = frozenset({"initial", "continuation"})
 _REVALIDATION_PROVIDER_PHASES = frozenset({"blind", "targeted"})
 _TRANSPORT_FAILURE_KINDS = frozenset(item.value for item in OXTransportFailureKind)
+_Q03JA_TRANSPORT_FIELDS = frozenset(
+    {
+        "response_headers_received",
+        "response_headers_at",
+        "response_headers_elapsed_ms",
+        "http_status_code",
+        "response_body_started",
+        "first_body_at",
+        "first_body_elapsed_ms",
+        "last_body_at",
+        "last_body_elapsed_ms",
+        "decoded_body_bytes_received",
+        "trust_env_enabled",
+        "proxy_environment_present",
+    }
+)
 _RETRYABLE_OUTCOMES = frozenset(
     {
         AttemptOutcome.NOT_SENT.value,
@@ -562,15 +578,26 @@ class EvidenceStore:
         attempt_id: str,
         *,
         runtime_session_id: str,
-        provider_finished_at: str,
-        elapsed_ms: int,
-        transport_failure_kind: str | None,
+        provider_finished_at: str | None = None,
+        elapsed_ms: int | None = None,
+        transport_failure_kind: str | OXTransportFailureKind | None = None,
+        observation: ProviderTransportObservation | None = None,
     ) -> None:
         self._require_runtime_session_id(runtime_session_id)
+        q03ja_fields: dict[str, object] = {}
+        if observation is not None:
+            if (
+                provider_finished_at is not None
+                or elapsed_ms is not None
+                or transport_failure_kind is not None
+            ):
+                raise OXEvidenceError("provider transport observation is invalid")
+            q03ja_fields = self._validated_transport_observation(observation)
+            provider_finished_at = observation.provider_finished_at
+            elapsed_ms = observation.elapsed_ms
+            transport_failure_kind = observation.transport_failure_kind
         finished_at = self._require_provider_timestamp(provider_finished_at)
-        failure_kind = self._require_transport_failure_kind(
-            transport_failure_kind
-        )
+        failure_kind = self._require_transport_failure_kind(transport_failure_kind)
         self._require_elapsed_ms(elapsed_ms)
         with self._lock_for(review_id):
             try:
@@ -599,6 +626,7 @@ class EvidenceStore:
                     "provider_finished_at": provider_finished_at,
                     "runtime_session_id": runtime_session_id,
                     "transport_failure_kind": failure_kind,
+                    **q03ja_fields,
                 },
             )
 
@@ -956,15 +984,26 @@ class EvidenceStore:
         attempt_id: str,
         *,
         runtime_session_id: str,
-        provider_finished_at: str,
-        elapsed_ms: int,
-        transport_failure_kind: str | None,
+        provider_finished_at: str | None = None,
+        elapsed_ms: int | None = None,
+        transport_failure_kind: str | OXTransportFailureKind | None = None,
+        observation: ProviderTransportObservation | None = None,
     ) -> None:
         self._require_runtime_session_id(runtime_session_id)
+        q03ja_fields: dict[str, object] = {}
+        if observation is not None:
+            if (
+                provider_finished_at is not None
+                or elapsed_ms is not None
+                or transport_failure_kind is not None
+            ):
+                raise OXEvidenceError("provider transport observation is invalid")
+            q03ja_fields = self._validated_transport_observation(observation)
+            provider_finished_at = observation.provider_finished_at
+            elapsed_ms = observation.elapsed_ms
+            transport_failure_kind = observation.transport_failure_kind
         finished_at = self._require_provider_timestamp(provider_finished_at)
-        failure_kind = self._require_transport_failure_kind(
-            transport_failure_kind
-        )
+        failure_kind = self._require_transport_failure_kind(transport_failure_kind)
         self._require_elapsed_ms(elapsed_ms)
         review_id = self._review_id_from_revalidation(revalidation_id)
         self._require_attempt_id(review_id, attempt_id)
@@ -995,6 +1034,7 @@ class EvidenceStore:
                     "provider_finished_at": provider_finished_at,
                     "runtime_session_id": runtime_session_id,
                     "transport_failure_kind": failure_kind,
+                    **q03ja_fields,
                 },
             )
 
@@ -1569,6 +1609,112 @@ class EvidenceStore:
         matching["provider_started_at"] = recorded_at
 
     @classmethod
+    def _validated_transport_observation(
+        cls,
+        observation: ProviderTransportObservation,
+    ) -> dict[str, object]:
+        def invalid() -> None:
+            raise OXEvidenceError("provider transport observation is invalid")
+
+        if not isinstance(observation, ProviderTransportObservation):
+            invalid()
+        if type(observation.response_headers_received) is not bool:
+            invalid()
+        if type(observation.response_body_started) is not bool:
+            invalid()
+        if type(observation.trust_env_enabled) is not bool:
+            invalid()
+        if type(observation.proxy_environment_present) is not bool:
+            invalid()
+        if not _is_elapsed_ms(observation.elapsed_ms):
+            invalid()
+        if (
+            not isinstance(observation.decoded_body_bytes_received, int)
+            or isinstance(observation.decoded_body_bytes_received, bool)
+            or observation.decoded_body_bytes_received < 0
+        ):
+            invalid()
+        if (
+            observation.transport_failure_kind is not None
+            and not isinstance(
+                observation.transport_failure_kind, OXTransportFailureKind
+            )
+        ):
+            invalid()
+        finished_at = cls._safe_provider_timestamp(observation.provider_finished_at)
+        if finished_at is None:
+            invalid()
+
+        header_at = None
+        if observation.response_headers_received:
+            header_at = cls._safe_provider_timestamp(observation.response_headers_at)
+            if (
+                header_at is None
+                or not _is_elapsed_ms(observation.response_headers_elapsed_ms)
+                or not isinstance(observation.http_status_code, int)
+                or isinstance(observation.http_status_code, bool)
+                or not 100 <= observation.http_status_code <= 599
+                or observation.response_headers_elapsed_ms > observation.elapsed_ms
+                or header_at > finished_at
+            ):
+                invalid()
+        elif (
+            observation.response_headers_at is not None
+            or observation.response_headers_elapsed_ms is not None
+            or observation.http_status_code is not None
+        ):
+            invalid()
+
+        first_at = None
+        last_at = None
+        if observation.response_body_started:
+            if not observation.response_headers_received:
+                invalid()
+            first_at = cls._safe_provider_timestamp(observation.first_body_at)
+            last_at = cls._safe_provider_timestamp(observation.last_body_at)
+            if (
+                observation.decoded_body_bytes_received <= 0
+                or first_at is None
+                or last_at is None
+                or not _is_elapsed_ms(observation.first_body_elapsed_ms)
+                or not _is_elapsed_ms(observation.last_body_elapsed_ms)
+                or observation.response_headers_elapsed_ms is None
+                or observation.response_headers_elapsed_ms
+                > observation.first_body_elapsed_ms
+                or observation.first_body_elapsed_ms
+                > observation.last_body_elapsed_ms
+                or observation.last_body_elapsed_ms > observation.elapsed_ms
+                or header_at is None
+                or header_at > first_at
+                or first_at > last_at
+                or last_at > finished_at
+            ):
+                invalid()
+        elif (
+            observation.first_body_at is not None
+            or observation.first_body_elapsed_ms is not None
+            or observation.last_body_at is not None
+            or observation.last_body_elapsed_ms is not None
+            or observation.decoded_body_bytes_received != 0
+        ):
+            invalid()
+
+        return {
+            "response_headers_received": observation.response_headers_received,
+            "response_headers_at": observation.response_headers_at,
+            "response_headers_elapsed_ms": observation.response_headers_elapsed_ms,
+            "http_status_code": observation.http_status_code,
+            "response_body_started": observation.response_body_started,
+            "first_body_at": observation.first_body_at,
+            "first_body_elapsed_ms": observation.first_body_elapsed_ms,
+            "last_body_at": observation.last_body_at,
+            "last_body_elapsed_ms": observation.last_body_elapsed_ms,
+            "decoded_body_bytes_received": observation.decoded_body_bytes_received,
+            "trust_env_enabled": observation.trust_env_enabled,
+            "proxy_environment_present": observation.proxy_environment_present,
+        }
+
+    @classmethod
     def _apply_transport_metadata_event(
         cls,
         attempts: list[dict[str, object]],
@@ -1594,6 +1740,36 @@ class EvidenceStore:
             or (expected_phase is not None and phase != expected_phase)
         ):
             raise OXEvidenceError("review events are malformed")
+        present_q03ja = _Q03JA_TRANSPORT_FIELDS.intersection(event)
+        if present_q03ja and present_q03ja != _Q03JA_TRANSPORT_FIELDS:
+            raise OXEvidenceError("review events are malformed")
+        q03ja_fields: dict[str, object] = {}
+        if present_q03ja:
+            try:
+                observation = ProviderTransportObservation(
+                    response_headers_received=event["response_headers_received"],
+                    response_headers_at=event["response_headers_at"],
+                    response_headers_elapsed_ms=event["response_headers_elapsed_ms"],
+                    http_status_code=event["http_status_code"],
+                    response_body_started=event["response_body_started"],
+                    first_body_at=event["first_body_at"],
+                    first_body_elapsed_ms=event["first_body_elapsed_ms"],
+                    last_body_at=event["last_body_at"],
+                    last_body_elapsed_ms=event["last_body_elapsed_ms"],
+                    decoded_body_bytes_received=event["decoded_body_bytes_received"],
+                    provider_finished_at=provider_finished_at,
+                    elapsed_ms=elapsed_ms,
+                    transport_failure_kind=(
+                        OXTransportFailureKind(failure_kind)
+                        if failure_kind is not None
+                        else None
+                    ),
+                    trust_env_enabled=event["trust_env_enabled"],
+                    proxy_environment_present=event["proxy_environment_present"],
+                )
+                q03ja_fields = cls._validated_transport_observation(observation)
+            except (KeyError, ValueError, OXEvidenceError):
+                raise OXEvidenceError("review events are malformed") from None
         if not attempts or attempts[-1].get("attempt_id") != attempt_id:
             raise OXEvidenceError("review events are malformed")
         matching = attempts[-1]
@@ -1607,6 +1783,7 @@ class EvidenceStore:
         matching["provider_finished_at"] = provider_finished_at
         matching["elapsed_ms"] = elapsed_ms
         matching["transport_failure_kind"] = failure_kind
+        matching.update(q03ja_fields)
 
     def _verify_manifest_digest(
         self, review_id: str, manifest_sha256: str
@@ -1793,7 +1970,7 @@ class EvidenceStore:
             raise OXEvidenceError("runtime session identity is invalid")
 
     @classmethod
-    def _require_provider_timestamp(cls, value: str) -> datetime:
+    def _require_provider_timestamp(cls, value: str | None) -> datetime:
         parsed = cls._safe_provider_timestamp(value)
         if parsed is None:
             raise OXEvidenceError("provider timing metadata is invalid")
@@ -1812,12 +1989,14 @@ class EvidenceStore:
         return parsed.astimezone(UTC)
 
     @staticmethod
-    def _require_elapsed_ms(elapsed_ms: int) -> None:
+    def _require_elapsed_ms(elapsed_ms: int | None) -> None:
         if not _is_elapsed_ms(elapsed_ms):
             raise OXEvidenceError("provider elapsed time is invalid")
 
     @staticmethod
-    def _require_transport_failure_kind(value: str | None) -> str | None:
+    def _require_transport_failure_kind(
+        value: str | OXTransportFailureKind | None,
+    ) -> str | None:
         if isinstance(value, OXTransportFailureKind):
             return value.value
         if value is None:
