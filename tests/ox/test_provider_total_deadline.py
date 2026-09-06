@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from byte_mcp.errors import OXTransportError
+from byte_mcp.errors import OXTransportError, OXTransportFailureKind
 from byte_mcp.ox import client as client_module
 from byte_mcp.ox.client import OXClient
 
@@ -125,10 +125,18 @@ def test_trickle_response_cannot_extend_request_beyond_absolute_deadline(
         server.server_close()
         thread.join(timeout=1)
 
-    assert exc_info.value.attempt_outcome == "OUTCOME_UNKNOWN"
+    error = exc_info.value
+    assert error.attempt_outcome == "OUTCOME_UNKNOWN"
+    assert error.transport_failure_kind is OXTransportFailureKind.ABSOLUTE_DEADLINE
     assert _TrickleHandler.request_started_at is not None
     request_elapsed = raised_at - _TrickleHandler.request_started_at
     assert request_elapsed < 0.25, (
         "provider request exceeded its absolute wall-clock deadline; "
         f"request_elapsed={request_elapsed:.3f}s"
     )
+    observation = error.transport_observation
+    assert observation.response_headers_received is True
+    assert observation.response_body_started is True
+    assert observation.decoded_body_bytes_received > 0
+    assert observation.last_body_elapsed_ms is not None
+    assert observation.elapsed_ms >= observation.last_body_elapsed_ms
