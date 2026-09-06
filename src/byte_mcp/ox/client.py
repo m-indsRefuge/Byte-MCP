@@ -3,8 +3,10 @@
 import asyncio
 import json
 import math
+import os
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic_ns
 
@@ -24,7 +26,7 @@ from byte_mcp.errors import (
     OXTransportFailureKind,
 )
 
-from .models import ProviderResult, ProviderUsage
+from .models import ProviderResult, ProviderTransportObservation, ProviderUsage
 from .settings import OXSettings
 
 _GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
@@ -34,6 +36,15 @@ _TIMEOUT = httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=10.0)
 _TOTAL_DEADLINE_SECONDS = 900.0
 _ATTEMPT_ID_PATTERN = re.compile(r"^OX-\d{6}-A\d{3}$")
 _SAFE_MESSAGE_ROLES = frozenset({"system", "user", "assistant", "tool"})
+_TRUST_ENV = True
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 _CONTEXT_ERROR_CODES = frozenset(
     {
@@ -52,19 +63,152 @@ _QUOTA_ERROR_CODES = frozenset(
 )
 
 
+@dataclass(slots=True)
+class _TransportTracker:
+    """Bounded in-memory receive tracker; never stores body/header content."""
+
+    started_monotonic_ns: int
+    response_headers_at: str | None = None
+    response_headers_elapsed_ms: int | None = None
+    http_status_code: int | None = None
+    first_body_at: str | None = None
+    first_body_elapsed_ms: int | None = None
+    last_body_at: str | None = None
+    last_body_elapsed_ms: int | None = None
+    decoded_body_bytes_received: int = 0
+
+    def _elapsed_ms(self) -> int:
+        return max(0, (monotonic_ns() - self.started_monotonic_ns) // 1_000_000)
+
+    def mark_headers(self, status_code: int) -> None:
+        self.response_headers_at = datetime.now(UTC).isoformat()
+        self.response_headers_elapsed_ms = self._elapsed_ms()
+        self.http_status_code = status_code
+
+    def mark_body(self, byte_count: int) -> None:
+        now = datetime.now(UTC).isoformat()
+        elapsed_ms = self._elapsed_ms()
+        if self.decoded_body_bytes_received == 0:
+            self.first_body_at = now
+            self.first_body_elapsed_ms = elapsed_ms
+        self.decoded_body_bytes_received += byte_count
+        self.last_body_at = now
+        self.last_body_elapsed_ms = elapsed_ms
+
+    def snapshot(
+        self,
+        transport_failure_kind: OXTransportFailureKind | None,
+    ) -> ProviderTransportObservation:
+        return ProviderTransportObservation(
+            response_headers_received=self.response_headers_at is not None,
+            response_headers_at=self.response_headers_at,
+            response_headers_elapsed_ms=self.response_headers_elapsed_ms,
+            http_status_code=self.http_status_code,
+            response_body_started=self.decoded_body_bytes_received > 0,
+            first_body_at=self.first_body_at,
+            first_body_elapsed_ms=self.first_body_elapsed_ms,
+            last_body_at=self.last_body_at,
+            last_body_elapsed_ms=self.last_body_elapsed_ms,
+            decoded_body_bytes_received=self.decoded_body_bytes_received,
+            provider_finished_at=datetime.now(UTC).isoformat(),
+            elapsed_ms=self._elapsed_ms(),
+            transport_failure_kind=transport_failure_kind,
+            trust_env_enabled=_TRUST_ENV,
+            proxy_environment_present=_proxy_environment_present(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ReceivedResponse:
+    """Complete locally buffered response plus bounded receive observation."""
+
+    status_code: int
+    body: bytes
+    observation: ProviderTransportObservation
+
+
 async def _post_with_total_deadline(
     *,
     transport: httpx.AsyncBaseTransport | None,
     headers: Mapping[str, str],
     body: Mapping[str, object],
-) -> httpx.Response:
-    async with httpx.AsyncClient(
-        transport=transport,
-        timeout=_TIMEOUT,
-        follow_redirects=False,
-    ) as client:
-        async with asyncio.timeout(_TOTAL_DEADLINE_SECONDS):
-            return await client.post(_GATEWAY_URL, headers=headers, json=body)
+) -> _ReceivedResponse:
+    """Issue exactly one POST and observe its non-streaming HTTP receive path."""
+
+    provider_started_at = datetime.now(UTC).isoformat()
+    tracker = _TransportTracker(monotonic_ns())
+    request_error = None
+    transport_outcome = None
+    transport_failure_kind = None
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=_TIMEOUT,
+            follow_redirects=False,
+            trust_env=_TRUST_ENV,
+        ) as client:
+            async with asyncio.timeout(_TOTAL_DEADLINE_SECONDS):
+                chunks = bytearray()
+                async with client.stream(
+                    "POST",
+                    _GATEWAY_URL,
+                    headers=headers,
+                    json=body,
+                ) as response:
+                    tracker.mark_headers(response.status_code)
+                    async for chunk in response.aiter_bytes():
+                        if chunk:
+                            tracker.mark_body(len(chunk))
+                            chunks.extend(chunk)
+                return _ReceivedResponse(
+                    status_code=response.status_code,
+                    body=bytes(chunks),
+                    observation=tracker.snapshot(None),
+                )
+    except TimeoutError:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.ABSOLUTE_DEADLINE
+    except httpx.ConnectTimeout:
+        transport_outcome = "NOT_SENT"
+        transport_failure_kind = OXTransportFailureKind.CONNECT_TIMEOUT
+    except httpx.ConnectError:
+        transport_outcome = "NOT_SENT"
+        transport_failure_kind = OXTransportFailureKind.CONNECT_ERROR
+    except httpx.PoolTimeout:
+        transport_outcome = "NOT_SENT"
+        transport_failure_kind = OXTransportFailureKind.POOL_TIMEOUT
+    except httpx.ReadTimeout:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.READ_TIMEOUT
+    except httpx.ReadError:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.READ_ERROR
+    except httpx.WriteTimeout:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.WRITE_TIMEOUT
+    except httpx.WriteError:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.WRITE_ERROR
+    except httpx.RemoteProtocolError:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.REMOTE_PROTOCOL_ERROR
+    except httpx.HTTPError:
+        transport_outcome = "OUTCOME_UNKNOWN"
+        transport_failure_kind = OXTransportFailureKind.HTTP_TRANSPORT_ERROR
+
+    if transport_failure_kind is not None and transport_outcome is not None:
+        observation = tracker.snapshot(transport_failure_kind)
+        request_error = OXTransportError(
+            attempt_outcome=transport_outcome,
+            transport_failure_kind=transport_failure_kind,
+            provider_started_at=provider_started_at,
+            provider_finished_at=observation.provider_finished_at,
+            elapsed_ms=observation.elapsed_ms,
+            transport_observation=observation,
+        )
+    if request_error is not None:
+        raise request_error
+    raise RuntimeError("unreachable OX transport state")
 
 
 class OXClient:
@@ -121,6 +265,8 @@ class OXClient:
                     body=body,
                 )
             )
+        except OXTransportError as error:
+            request_error = error
         except TimeoutError:
             transport_outcome = "OUTCOME_UNKNOWN"
             transport_failure_kind = OXTransportFailureKind.ABSOLUTE_DEADLINE
@@ -163,8 +309,71 @@ class OXClient:
         if request_error is not None:
             raise request_error
 
+        if isinstance(response, _ReceivedResponse):
+            return self._complete_received_response(response)
+        return self._complete_legacy_response(response)
+
+    def _complete_received_response(self, response: _ReceivedResponse) -> ProviderResult:
+        observation = response.observation
         if response.status_code >= 400:
-            self._raise_http_error(response)
+            raise _provider_http_error(
+                response.status_code,
+                _safe_error_code_bytes(response.body),
+                observation,
+            )
+
+        protocol_error = None
+        try:
+            raw_response = json.loads(response.body)
+        except Exception:
+            protocol_error = OXProtocolError(
+                attempt_outcome="COMPLETED",
+                transport_observation=observation,
+            )
+        if protocol_error is not None:
+            raise protocol_error
+        if not isinstance(raw_response, dict):
+            raise OXProtocolError(
+                attempt_outcome="COMPLETED",
+                transport_observation=observation,
+            )
+
+        parse_error = None
+        try:
+            safe_response = _redact_secret(raw_response, self._api_key)
+            if not isinstance(safe_response, dict):
+                raise OXProtocolError(attempt_outcome="COMPLETED")
+            parsed = _parse_response(safe_response)
+        except OXProtocolError as error:
+            parse_error = OXProtocolError(
+                attempt_outcome=error.attempt_outcome,
+                transport_observation=observation,
+            )
+        except Exception:
+            parse_error = OXProtocolError(
+                attempt_outcome="COMPLETED",
+                transport_observation=observation,
+            )
+        if parse_error is not None:
+            raise parse_error
+        return ProviderResult(
+            parsed.content,
+            parsed.usage,
+            response_id=parsed.response_id,
+            model=parsed.model,
+            raw_response=parsed.raw_response,
+            transport_observation=observation,
+        )
+
+    def _complete_legacy_response(self, response: object) -> ProviderResult:
+        """Compatibility path for bounded injected response doubles used by tests."""
+
+        status_code = getattr(response, "status_code", None)
+        if not isinstance(status_code, int):
+            raise OXProtocolError(attempt_outcome="COMPLETED")
+        if status_code >= 400:
+            error_code = _safe_error_code_legacy(response)
+            raise _provider_http_error(status_code, error_code, None)
 
         protocol_error = None
         try:
@@ -179,6 +388,8 @@ class OXClient:
         parse_error = None
         try:
             safe_response = _redact_secret(raw_response, self._api_key)
+            if not isinstance(safe_response, dict):
+                raise OXProtocolError(attempt_outcome="COMPLETED")
             result = _parse_response(safe_response)
         except OXProtocolError as error:
             parse_error = error
@@ -187,31 +398,6 @@ class OXClient:
         if parse_error is not None:
             raise parse_error
         return result
-
-    @staticmethod
-    def _raise_http_error(response: httpx.Response) -> None:
-        status = response.status_code
-        if status == 401:
-            raise OXAuthenticationError(attempt_outcome="REJECTED")
-        if status == 403:
-            raise OXPermissionError(attempt_outcome="REJECTED")
-        if status == 429:
-            error_type = (
-                OXQuotaError
-                if _safe_error_code(response) in _QUOTA_ERROR_CODES
-                else OXRateLimitError
-            )
-            raise error_type(attempt_outcome="REJECTED")
-        if 400 <= status < 500:
-            error_type = (
-                OXContextLimitError
-                if _safe_error_code(response) in _CONTEXT_ERROR_CODES
-                else OXRequestError
-            )
-            raise error_type(attempt_outcome="REJECTED")
-        if status >= 500:
-            raise OXProviderUnavailableError(attempt_outcome="REJECTED")
-        raise OXRequestError(attempt_outcome="REJECTED")
 
 
 def _transport_error(
@@ -231,11 +417,47 @@ def _transport_error(
     )
 
 
-def _safe_error_code(response: httpx.Response) -> str | None:
+def _provider_http_error(
+    status: int,
+    error_code: str | None,
+    observation: ProviderTransportObservation | None,
+):
+    kwargs = {
+        "attempt_outcome": "REJECTED",
+        "transport_observation": observation,
+    }
+    if status == 401:
+        return OXAuthenticationError(**kwargs)
+    if status == 403:
+        return OXPermissionError(**kwargs)
+    if status == 429:
+        error_type = OXQuotaError if error_code in _QUOTA_ERROR_CODES else OXRateLimitError
+        return error_type(**kwargs)
+    if 400 <= status < 500:
+        error_type = OXContextLimitError if error_code in _CONTEXT_ERROR_CODES else OXRequestError
+        return error_type(**kwargs)
+    if status >= 500:
+        return OXProviderUnavailableError(**kwargs)
+    return OXRequestError(**kwargs)
+
+
+def _safe_error_code_bytes(response_body: bytes) -> str | None:
+    try:
+        payload = json.loads(response_body)
+    except Exception:
+        return None
+    return _error_code_from_payload(payload)
+
+
+def _safe_error_code_legacy(response: object) -> str | None:
     try:
         payload = response.json()
     except Exception:
         return None
+    return _error_code_from_payload(payload)
+
+
+def _error_code_from_payload(payload: object) -> str | None:
     if not isinstance(payload, Mapping):
         return None
     error = payload.get("error")
@@ -243,6 +465,10 @@ def _safe_error_code(response: httpx.Response) -> str | None:
         return None
     code = error.get("code")
     return code if isinstance(code, str) else None
+
+
+def _proxy_environment_present() -> bool:
+    return any(bool(os.environ.get(name)) for name in _PROXY_ENV_KEYS)
 
 
 def _parse_response(raw_response: dict[str, object]) -> ProviderResult:
