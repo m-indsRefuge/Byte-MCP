@@ -214,10 +214,16 @@ def test_q03ja_complete_response_carries_completed_transport_observation(monkeyp
     assert observation.first_body_elapsed_ms is not None
     assert observation.last_body_elapsed_ms is not None
     assert 0 <= observation.response_headers_elapsed_ms <= observation.first_body_elapsed_ms
-    assert observation.first_body_elapsed_ms <= observation.last_body_elapsed_ms <= observation.elapsed_ms
+    assert (
+        observation.first_body_elapsed_ms
+        <= observation.last_body_elapsed_ms
+        <= observation.elapsed_ms
+    )
 
 
-def test_q03ja_complete_malformed_json_is_protocol_failure_with_complete_transport(monkeypatch) -> None:
+def test_q03ja_complete_malformed_json_is_protocol_failure_with_complete_transport(
+    monkeypatch,
+) -> None:
     payload = b'{"broken":'
     server = _RawHTTPServer(_response_with_body(payload))
     thread = _start_server(server)
