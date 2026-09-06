@@ -114,7 +114,7 @@ PARTIAL_CHUNKED_BODY = (
         (NO_HEADERS, False, False, 0),
         (HEADERS_NO_BODY, True, False, 0),
         (PARTIAL_FIXED_BODY, True, True, 3),
-        (PARTIAL_CHUNKED_BODY, True, True, 3),
+        (PARTIAL_CHUNKED_BODY, True, True, 5),
     ],
 )
 def test_q03ja_remote_protocol_failure_reports_receive_progress(
