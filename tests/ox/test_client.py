@@ -64,6 +64,7 @@ _APPROVED_TRANSPORT_ERROR_FIELDS = frozenset(
         "provider_started_at",
         "provider_finished_at",
         "elapsed_ms",
+        "transport_observation",
     }
 )
 
@@ -74,7 +75,14 @@ def assert_safe_transport_error_state(
     sentinel: str,
     original_exception: BaseException,
 ) -> None:
-    assert set(error.__dict__) == _APPROVED_TRANSPORT_ERROR_FIELDS
+    assert {
+        "attempt_outcome",
+        "transport_failure_kind",
+        "provider_started_at",
+        "provider_finished_at",
+        "elapsed_ms",
+    } <= set(error.__dict__)
+    assert set(error.__dict__) <= _APPROVED_TRANSPORT_ERROR_FIELDS
     _assert_state_does_not_retain_transport_failure(
         error.__dict__, sentinel=sentinel, original_exception=original_exception
     )

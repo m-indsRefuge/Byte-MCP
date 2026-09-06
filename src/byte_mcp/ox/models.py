@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from byte_mcp.errors import OXTransportFailureKind
+
 
 class OXAvailability(StrEnum):
     AVAILABLE = "AVAILABLE"
@@ -53,12 +55,32 @@ class ProviderUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderTransportObservation:
+    response_headers_received: bool
+    response_headers_at: str | None
+    response_headers_elapsed_ms: int | None
+    http_status_code: int | None
+    response_body_started: bool
+    first_body_at: str | None
+    first_body_elapsed_ms: int | None
+    last_body_at: str | None
+    last_body_elapsed_ms: int | None
+    decoded_body_bytes_received: int
+    provider_finished_at: str
+    elapsed_ms: int
+    transport_failure_kind: OXTransportFailureKind | None
+    trust_env_enabled: bool
+    proxy_environment_present: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderResult:
     content: str
     usage: ProviderUsage | None = None
     response_id: str | None = None
     model: str | None = None
     raw_response: dict[str, object] | None = None
+    transport_observation: ProviderTransportObservation | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,6 +1,12 @@
 """Domain errors for Byte-MCP."""
 
+from __future__ import annotations
+
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from byte_mcp.ox.models import ProviderTransportObservation
 
 
 class ByteMCPError(Exception):
@@ -110,10 +116,17 @@ class OXEvidenceError(ByteMCPError):
 class _ProviderCallError(ByteMCPError):
     _APPROVED_OUTCOMES = frozenset({"NOT_SENT", "REJECTED", "COMPLETED", "OUTCOME_UNKNOWN"})
 
-    def __init__(self, *, attempt_outcome: str = "OUTCOME_UNKNOWN"):
+    def __init__(
+        self,
+        *,
+        attempt_outcome: str = "OUTCOME_UNKNOWN",
+        transport_observation: ProviderTransportObservation | None = None,
+    ) -> None:
         if attempt_outcome not in self._APPROVED_OUTCOMES:
             raise ValueError("attempt_outcome must use an approved outcome")
         self.attempt_outcome = attempt_outcome
+        if transport_observation is not None:
+            self.transport_observation = transport_observation
         super().__init__()
 
 
@@ -167,12 +180,16 @@ class OXTransportError(_ProviderCallError):
         provider_started_at: str | None = None,
         provider_finished_at: str | None = None,
         elapsed_ms: int | None = None,
+        transport_observation: ProviderTransportObservation | None = None,
     ) -> None:
         self.transport_failure_kind = transport_failure_kind
         self.provider_started_at = provider_started_at
         self.provider_finished_at = provider_finished_at
         self.elapsed_ms = elapsed_ms
-        super().__init__(attempt_outcome=attempt_outcome)
+        super().__init__(
+            attempt_outcome=attempt_outcome,
+            transport_observation=transport_observation,
+        )
 
 
 class OXProtocolError(_ProviderCallError):

@@ -96,6 +96,7 @@ def test_provider_result_preserves_complete_usage_and_safe_response_evidence():
         "response_id": "resp-123",
         "model": "zai/glm-5.3-flash",
         "raw_response": {"id": "resp-123", "choices": []},
+        "transport_observation": None,
     }
     with pytest.raises(FrozenInstanceError):
         result.response_id = "other"
