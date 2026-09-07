@@ -318,7 +318,7 @@ def test_q03ja_diagnostics_never_persist_secrets_or_partial_content(
         return httpx.Response(
             200,
             stream=_FailingStream(
-                f'{{"partial":"{sentinel}"'.encode("utf-8"),
+                f'{{"partial":"{sentinel}"'.encode(),
                 f"transport failure {sentinel}",
             ),
         )
@@ -348,7 +348,7 @@ def test_q03ja_diagnostics_never_persist_secrets_or_partial_content(
         observation=value,
     )
     events = (tmp_path / "reviews" / review_id / "events.jsonl").read_bytes()
-    assert sentinel.encode("utf-8") not in events
+    assert sentinel.encode() not in events
     reconstructed = store.get_review(review_id)["attempts"][-1]
     assert reconstructed["proxy_environment_present"] is True
     assert reconstructed["decoded_body_bytes_received"] > 0
