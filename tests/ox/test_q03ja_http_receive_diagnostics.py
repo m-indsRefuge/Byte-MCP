@@ -260,3 +260,37 @@ def test_q03ja_proxy_diagnostic_records_presence_only(monkeypatch) -> None:
     assert observation.proxy_environment_present is True
     assert sentinel not in repr(result)
     assert sentinel not in repr(observation)
+
+
+@pytest.mark.parametrize(
+    ("response", "hold_open_seconds", "read_timeout", "expected_error"),
+    [
+        (NO_HEADERS, 0.0, 0.2, OXTransportError),
+        (HEADERS_NO_BODY, 0.0, 0.2, OXTransportError),
+        (PARTIAL_FIXED_BODY, 0.0, 0.2, OXTransportError),
+        (PARTIAL_CHUNKED_BODY, 0.0, 0.2, OXTransportError),
+        (HEADERS_NO_BODY, 0.2, 0.05, OXTransportError),
+        (_response_with_body(_success_payload()), 0.0, 0.2, None),
+        (_response_with_body(b'{"broken":'), 0.0, 0.2, OXProtocolError),
+    ],
+)
+def test_q03ja_each_transport_case_performs_exactly_one_request(
+    monkeypatch,
+    response: bytes,
+    hold_open_seconds: float,
+    read_timeout: float,
+    expected_error,
+) -> None:
+    server = _RawHTTPServer(response, hold_open_seconds=hold_open_seconds)
+    thread = _start_server(server)
+    client = _client_for_server(monkeypatch, server, read_timeout=read_timeout)
+    try:
+        if expected_error is None:
+            client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+        else:
+            with pytest.raises(expected_error):
+                client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+    finally:
+        _shutdown(server, thread)
+
+    assert server.request_count == 1
