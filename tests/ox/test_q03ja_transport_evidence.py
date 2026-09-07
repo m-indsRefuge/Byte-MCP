@@ -29,7 +29,6 @@ from tests.ox.q03h_revalidation_support import (
     establish_initial_review,
     make_revalidation_service,
     prepare_revalidation,
-    wait_for_lane_release as wait_for_revalidation_lane_release,
     wait_for_revalidation_state,
 )
 
@@ -100,7 +99,10 @@ def _observation(
     )
 
 
-def _observed_result(attempt_id: str, content: str = "Natural OX engineering review.") -> ProviderResult:
+def _observed_result(
+    attempt_id: str,
+    content: str = "Natural OX engineering review.",
+) -> ProviderResult:
     raw = {
         "id": f"response-{attempt_id}",
         "model": "zai/glm-5.3-flash",
@@ -457,7 +459,11 @@ def test_q03ja_service_generated_protocol_error_preserves_result_observation(tmp
     assert attempt["outcome"] == AttemptOutcome.REJECTED.value
     for field in Q03JA_FIELDS:
         assert field in attempt
-    assert order.index("outcome:REJECTED") < order.index("transport-metadata") < order.index("audit")
+    assert (
+        order.index("outcome:REJECTED")
+        < order.index("transport-metadata")
+        < order.index("audit")
+    )
 
 
 def test_q03ja_blind_revalidation_records_observation(tmp_path) -> None:
@@ -476,7 +482,7 @@ def test_q03ja_blind_revalidation_records_observation(tmp_path) -> None:
 
     service.transmit_blind_revalidation(revalidation_id)
     wait_for_revalidation_state(store, revalidation_id, ReviewState.BLIND_REVALIDATED)
-    wait_for_revalidation_lane_release(jobs)
+    wait_for_lane_release(jobs)
 
     attempt = store.get_revalidation(revalidation_id)["attempts"][-1]
     for field in Q03JA_FIELDS:
