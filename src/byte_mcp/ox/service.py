@@ -31,7 +31,12 @@ from .jobs import (
     OXOperationKey,
     OXProviderJobManager,
 )
-from .models import AttemptOutcome, ProviderResult, ReviewState
+from .models import (
+    AttemptOutcome,
+    ProviderResult,
+    ProviderTransportObservation,
+    ReviewState,
+)
 from .protocol import build_initial_messages, parse_findings
 
 
@@ -1040,6 +1045,36 @@ class OXReviewService(_Q03GReviewService):
             raise OXEvidenceError("revalidation launch descriptor is malformed")
         return revalidation_id
 
+    def _record_review_transport_observation(
+        self,
+        review_id: str,
+        attempt_id: str,
+        observation: ProviderTransportObservation | None,
+    ) -> None:
+        if observation is None:
+            return
+        self._evidence.record_provider_transport_metadata(
+            review_id,
+            attempt_id,
+            runtime_session_id=self._jobs.runtime_session_id,
+            observation=observation,
+        )
+
+    def _record_revalidation_transport_observation(
+        self,
+        revalidation_id: str,
+        attempt_id: str,
+        observation: ProviderTransportObservation | None,
+    ) -> None:
+        if observation is None:
+            return
+        self._evidence.record_revalidation_provider_transport_metadata(
+            revalidation_id,
+            attempt_id,
+            runtime_session_id=self._jobs.runtime_session_id,
+            observation=observation,
+        )
+
     def _run_claimed_initial_attempt(self, descriptor: OXLaunchDescriptor) -> None:
         """Execute one already-claimed structured base-service initial attempt."""
         self._evidence.record_provider_request_started(
@@ -1064,7 +1099,14 @@ class OXReviewService(_Q03GReviewService):
             return
 
         if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.COMPLETED.value,
+                transport_observation=(
+                    result.transport_observation
+                    if isinstance(result, ProviderResult)
+                    else None
+                ),
+            )
             self._record_provider_error(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -1096,6 +1138,11 @@ class OXReviewService(_Q03GReviewService):
                 descriptor.attempt_id,
                 AttemptOutcome.COMPLETED,
             )
+            self._record_review_transport_observation(
+                descriptor.review_id,
+                descriptor.attempt_id,
+                result.transport_observation,
+            )
             self._audit_attempt(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -1115,6 +1162,11 @@ class OXReviewService(_Q03GReviewService):
             descriptor.review_id,
             descriptor.attempt_id,
             AttemptOutcome.COMPLETED,
+        )
+        self._record_review_transport_observation(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            result.transport_observation,
         )
         self._audit_attempt(
             descriptor.review_id,
@@ -1153,7 +1205,14 @@ class OXReviewService(_Q03GReviewService):
             return
 
         if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.COMPLETED.value,
+                transport_observation=(
+                    result.transport_observation
+                    if isinstance(result, ProviderResult)
+                    else None
+                ),
+            )
             self._record_provider_error(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -1174,7 +1233,10 @@ class OXReviewService(_Q03GReviewService):
             result.raw_response,
         )
         if not isinstance(result.content, str) or not result.content.strip():
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.REJECTED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.REJECTED.value,
+                transport_observation=result.transport_observation,
+            )
             self._record_provider_error(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -1198,6 +1260,11 @@ class OXReviewService(_Q03GReviewService):
             descriptor.review_id,
             descriptor.attempt_id,
             AttemptOutcome.COMPLETED,
+        )
+        self._record_review_transport_observation(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            result.transport_observation,
         )
         self._audit_attempt(
             descriptor.review_id,
@@ -1238,7 +1305,14 @@ class OXReviewService(_Q03GReviewService):
             return
 
         if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.COMPLETED.value,
+                transport_observation=(
+                    result.transport_observation
+                    if isinstance(result, ProviderResult)
+                    else None
+                ),
+            )
             self._record_revalidation_provider_error(
                 revalidation_id,
                 descriptor.attempt_id,
@@ -1278,6 +1352,11 @@ class OXReviewService(_Q03GReviewService):
                 descriptor.attempt_id,
                 AttemptOutcome.COMPLETED,
             )
+            self._record_revalidation_transport_observation(
+                revalidation_id,
+                descriptor.attempt_id,
+                result.transport_observation,
+            )
             self._audit_attempt(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -1302,6 +1381,11 @@ class OXReviewService(_Q03GReviewService):
             descriptor.attempt_id,
             AttemptOutcome.COMPLETED,
         )
+        self._record_revalidation_transport_observation(
+            revalidation_id,
+            descriptor.attempt_id,
+            result.transport_observation,
+        )
         self._audit_attempt(
             descriptor.review_id,
             descriptor.attempt_id,
@@ -1324,7 +1408,14 @@ class OXReviewService(_Q03GReviewService):
     ) -> None:
         outcome = error.attempt_outcome
         self._evidence.record_attempt_outcome(review_id, attempt_id, outcome)
-        if isinstance(error, OXTransportError):
+        observation = getattr(error, "transport_observation", None)
+        if isinstance(observation, ProviderTransportObservation):
+            self._record_review_transport_observation(
+                review_id,
+                attempt_id,
+                observation,
+            )
+        elif isinstance(error, OXTransportError):
             kind = error.transport_failure_kind
             finished_at = error.provider_finished_at
             elapsed_ms = error.elapsed_ms
@@ -1361,7 +1452,14 @@ class OXReviewService(_Q03GReviewService):
             attempt_id,
             outcome,
         )
-        if isinstance(error, OXTransportError):
+        observation = getattr(error, "transport_observation", None)
+        if isinstance(observation, ProviderTransportObservation):
+            self._record_revalidation_transport_observation(
+                revalidation_id,
+                attempt_id,
+                observation,
+            )
+        elif isinstance(error, OXTransportError):
             kind = error.transport_failure_kind
             finished_at = error.provider_finished_at
             elapsed_ms = error.elapsed_ms
