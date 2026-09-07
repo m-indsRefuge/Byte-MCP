@@ -227,7 +227,14 @@ class OXReviewService(_Q03GNaturalReviewService):
             return
 
         if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.COMPLETED.value,
+                transport_observation=(
+                    result.transport_observation
+                    if isinstance(result, ProviderResult)
+                    else None
+                ),
+            )
             self._record_provider_error(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -243,7 +250,10 @@ class OXReviewService(_Q03GNaturalReviewService):
         )
 
         if not isinstance(result.content, str) or not result.content.strip():
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.REJECTED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.REJECTED.value,
+                transport_observation=result.transport_observation,
+            )
             self._record_provider_error(
                 descriptor.review_id,
                 descriptor.attempt_id,
@@ -261,6 +271,11 @@ class OXReviewService(_Q03GNaturalReviewService):
             descriptor.review_id,
             descriptor.attempt_id,
             AttemptOutcome.COMPLETED,
+        )
+        self._record_review_transport_observation(
+            descriptor.review_id,
+            descriptor.attempt_id,
+            result.transport_observation,
         )
         self._audit_attempt(
             descriptor.review_id,
@@ -294,7 +309,14 @@ class OXReviewService(_Q03GNaturalReviewService):
             return
 
         if not isinstance(result, ProviderResult) or not isinstance(result.raw_response, dict):
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.COMPLETED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.COMPLETED.value,
+                transport_observation=(
+                    result.transport_observation
+                    if isinstance(result, ProviderResult)
+                    else None
+                ),
+            )
             self._record_revalidation_provider_error(
                 revalidation_id,
                 descriptor.attempt_id,
@@ -311,7 +333,10 @@ class OXReviewService(_Q03GNaturalReviewService):
         )
 
         if not isinstance(result.content, str) or not result.content.strip():
-            error = OXProtocolError(attempt_outcome=AttemptOutcome.REJECTED.value)
+            error = OXProtocolError(
+                attempt_outcome=AttemptOutcome.REJECTED.value,
+                transport_observation=result.transport_observation,
+            )
             self._record_revalidation_provider_error(
                 revalidation_id,
                 descriptor.attempt_id,
@@ -335,6 +360,11 @@ class OXReviewService(_Q03GNaturalReviewService):
             revalidation_id,
             descriptor.attempt_id,
             AttemptOutcome.COMPLETED,
+        )
+        self._record_revalidation_transport_observation(
+            revalidation_id,
+            descriptor.attempt_id,
+            result.transport_observation,
         )
         self._audit_attempt(
             descriptor.review_id,
