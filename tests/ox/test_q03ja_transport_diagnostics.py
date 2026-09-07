@@ -314,6 +314,9 @@ def test_q03ja_diagnostics_never_persist_secrets_or_partial_content(
     monkeypatch.setenv("HTTP_PROXY", f"http://{sentinel}.invalid")
     monkeypatch.setenv("HTTPS_PROXY", f"http://{sentinel}.invalid")
 
+    store = EvidenceStore(tmp_path)
+    review_id, attempt_id = _prepare_started_attempt(store)
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -338,8 +341,6 @@ def test_q03ja_diagnostics_never_persist_secrets_or_partial_content(
     assert sentinel not in repr(value)
     assert sentinel not in str(error)
 
-    store = EvidenceStore(tmp_path)
-    review_id, attempt_id = _prepare_started_attempt(store)
     store.record_attempt_outcome(review_id, attempt_id, AttemptOutcome.OUTCOME_UNKNOWN)
     store.record_provider_transport_metadata(
         review_id,
