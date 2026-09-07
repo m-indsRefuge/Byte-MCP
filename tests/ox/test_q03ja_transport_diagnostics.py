@@ -1,6 +1,10 @@
+import json
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, asdict, fields, is_dataclass, replace
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from byte_mcp.errors import (
@@ -16,9 +20,34 @@ from byte_mcp.errors import (
     OXTransportError,
     OXTransportFailureKind,
 )
-from byte_mcp.ox.models import ProviderResult, ProviderTransportObservation, ProviderUsage
+from byte_mcp.ox.client import OXClient
+from byte_mcp.ox.evidence import EvidenceStore
+from byte_mcp.ox.models import (
+    AttemptOutcome,
+    ProviderResult,
+    ProviderTransportObservation,
+    ProviderUsage,
+)
 
 SENTINEL = "Q03JA-SENSITIVE-CONTENT"
+MANIFEST_SHA256 = "a" * 64
+RUNTIME_SESSION_ID = "b" * 32
+ATTEMPT_ID = "OX-000001-A001"
+MESSAGES = [{"role": "user", "content": "q03ja diagnostic"}]
+Q03JA_FIELDS = (
+    "response_headers_received",
+    "response_headers_at",
+    "response_headers_elapsed_ms",
+    "http_status_code",
+    "response_body_started",
+    "first_body_at",
+    "first_body_elapsed_ms",
+    "last_body_at",
+    "last_body_elapsed_ms",
+    "decoded_body_bytes_received",
+    "trust_env_enabled",
+    "proxy_environment_present",
+)
 
 
 def observation(
@@ -193,3 +222,156 @@ def test_q03ja_privacy_walker_inspects_dataclass_slots(unsafe_value) -> None:
 
     with pytest.raises(AssertionError):
         _assert_bounded_diagnostic_state({"transport_observation": value})
+
+
+class _FailingStream(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes, message: str) -> None:
+        self._payload = payload
+        self._message = message
+
+    async def __aiter__(self):
+        yield self._payload
+        raise httpx.ReadError(self._message)
+
+
+def _success_payload() -> bytes:
+    return json.dumps(
+        {
+            "id": "chatcmpl-q03ja",
+            "model": "zai/glm-5.3-flash",
+            "choices": [
+                {"message": {"role": "assistant", "content": "diagnostic success"}}
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+
+
+def _prepare_started_attempt(store: EvidenceStore) -> tuple[str, str]:
+    review_id = store.persist_prepared_review(
+        identity={
+            "repository": "fixture",
+            "subsystem": "privacy",
+            "objective": "bounded diagnostics",
+        },
+        manifest={"manifest_sha256": MANIFEST_SHA256},
+        bundle={"packet": "prepared"},
+    )
+    attempt = store.claim_initial_transmission(
+        review_id,
+        MANIFEST_SHA256,
+        runtime_session_id=RUNTIME_SESSION_ID,
+    )
+    attempt_id = str(attempt["attempt_id"])
+    store.record_provider_request_started(
+        review_id,
+        attempt_id,
+        runtime_session_id=RUNTIME_SESSION_ID,
+        phase="initial",
+    )
+    return review_id, attempt_id
+
+
+def test_q03ja_request_body_and_q03i_attribution_are_unchanged(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(200, content=_success_payload())
+
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    client = OXClient(
+        SimpleNamespace(api_key="test-key", max_output_tokens=128),
+        transport=httpx.MockTransport(handler),
+    )
+    client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+
+    body = captured["body"]
+    headers = captured["headers"]
+    assert isinstance(body, dict)
+    assert isinstance(headers, dict)
+    assert body["stream"] is False
+    assert body["model"] == "zai/glm-5.3-flash"
+    assert body["providerOptions"] == {"gateway": {"only": ["zai"]}}
+    assert headers["ai-reporting-tags"] == (
+        "component:byte-mcp-ox,review:OX-000001,attempt:OX-000001-A001"
+    )
+    assert "ai-reporting-user" not in headers
+
+
+def test_q03ja_diagnostics_never_persist_secrets_or_partial_content(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    sentinel = "Q03JA-SECRET-SENTINEL"
+    monkeypatch.setenv("HTTP_PROXY", f"http://{sentinel}.invalid")
+    monkeypatch.setenv("HTTPS_PROXY", f"http://{sentinel}.invalid")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=_FailingStream(
+                f'{{"partial":"{sentinel}"'.encode("utf-8"),
+                f"transport failure {sentinel}",
+            ),
+        )
+
+    client = OXClient(
+        SimpleNamespace(api_key=sentinel, max_output_tokens=128),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(OXTransportError) as raised:
+        client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+
+    error = raised.value
+    value = error.transport_observation
+    assert error.transport_failure_kind is OXTransportFailureKind.READ_ERROR
+    assert value.proxy_environment_present is True
+    assert sentinel not in repr(error.__dict__)
+    assert sentinel not in repr(value)
+    assert sentinel not in str(error)
+
+    store = EvidenceStore(tmp_path)
+    review_id, attempt_id = _prepare_started_attempt(store)
+    store.record_attempt_outcome(review_id, attempt_id, AttemptOutcome.OUTCOME_UNKNOWN)
+    store.record_provider_transport_metadata(
+        review_id,
+        attempt_id,
+        runtime_session_id=RUNTIME_SESSION_ID,
+        observation=value,
+    )
+    events = (tmp_path / "reviews" / review_id / "events.jsonl").read_bytes()
+    assert sentinel.encode("utf-8") not in events
+    reconstructed = store.get_review(review_id)["attempts"][-1]
+    assert reconstructed["proxy_environment_present"] is True
+    assert reconstructed["decoded_body_bytes_received"] > 0
+
+
+def test_q03ja_legacy_event_bytes_are_unchanged_by_reconstruction(tmp_path) -> None:
+    store = EvidenceStore(tmp_path)
+    review_id, attempt_id = _prepare_started_attempt(store)
+    store.record_attempt_outcome(review_id, attempt_id, AttemptOutcome.OUTCOME_UNKNOWN)
+    store.record_provider_transport_metadata(
+        review_id,
+        attempt_id,
+        runtime_session_id=RUNTIME_SESSION_ID,
+        provider_finished_at=datetime.now(UTC).isoformat(),
+        elapsed_ms=17,
+        transport_failure_kind=OXTransportFailureKind.READ_ERROR,
+    )
+    events_path = tmp_path / "reviews" / review_id / "events.jsonl"
+    before = events_path.read_bytes()
+
+    attempt = store.get_review(review_id)["attempts"][-1]
+
+    after = events_path.read_bytes()
+    assert after == before
+    for field in Q03JA_FIELDS:
+        assert field not in attempt
