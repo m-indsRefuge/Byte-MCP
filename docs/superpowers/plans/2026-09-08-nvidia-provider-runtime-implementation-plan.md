@@ -4,7 +4,7 @@
 
 **Goal:** Build the provider-neutral model/outcome contracts and a bounded, non-generative NVIDIA hosted-catalog discovery adapter required by NVIDIA-00, with zero live requests in tests and zero changes to OX or Wolfram provider behavior.
 
-**Architecture:** Add a new `byte_mcp.providers` package for provider-neutral identities, model lifecycle state, normalized attempt outcomes, transport-failure categories, and an immutable in-memory registry. Add a separate `byte_mcp.nvidia` package for hosted settings, safe catalog errors, bounded `/v1/models` parsing/client behavior, and the provisional qualification roster. NVIDIA-00 does not expose an MCP tool, does not implement inference, and does not modify the existing OX/Wolfram packages.
+**Architecture:** Add a new `byte_mcp.providers` package for provider-neutral identities, lifecycle state, normalized attempt outcomes, transport-failure categories, and an immutable in-memory registry. Add a separate `byte_mcp.nvidia` package for hosted settings, safe catalog errors, bounded `/v1/models` parsing/client behavior, and the provisional qualification roster. NVIDIA-00 does not expose an MCP tool, does not implement inference, and does not modify the existing OX/Wolfram packages.
 
 **Tech Stack:** Python 3.12+, stdlib dataclasses/enums/regex/datetime/mappingproxy, existing `httpx>=0.28.1,<1`, pytest, Ruff. No new dependency.
 
@@ -12,16 +12,16 @@
 
 ## Global Constraints
 
-- Base branch for this plan: `feat/nvidia-provider-n00-discovery`, whose design predecessor is `94ff28810a06b7af2207196ac98c1152cc65b4b1`.
+- Work on `feat/nvidia-provider-n00-discovery`; architectural predecessor is `94ff28810a06b7af2207196ac98c1152cc65b4b1`.
 - NVIDIA-00 performs no `/v1/chat/completions`, `/v1/responses`, embedding, reranking, OCR, image, video, speech, or self-hosted NIM call.
-- Unit/integration tests perform zero real NVIDIA requests; every catalog client test uses `httpx.MockTransport` or static data.
-- The first real `GET https://integrate.api.nvidia.com/v1/models` remains separately authorization-gated and is not part of this plan.
+- Tests perform zero real NVIDIA requests; every catalog client test uses `httpx.MockTransport` or static data.
+- The first real `GET https://integrate.api.nvidia.com/v1/models` remains separately authorization-gated and is outside this plan.
 - `NVIDIA_API_KEY` is the only hosted NVIDIA credential. `NGC_API_KEY` must never be treated as a hosted-inference fallback.
 - Hosted base URL is exactly `https://integrate.api.nvidia.com/v1`; production settings do not accept an arbitrary override.
 - Automatic retries, reconnects, model fallback, and provider fallback are forbidden.
 - Catalog discovery is advisory only. It cannot create `QUALIFIED` or `ENABLED` state.
 - Provider-neutral code must not import `byte_mcp.ox`, `byte_mcp.nvidia`, or provider-specific exceptions.
-- `src/byte_mcp/ox/**` is frozen for NVIDIA-00 and NVIDIA-01 except for a separately approved compatibility repair that is proven strictly necessary. If implementation discovers such a need, stop before mutation.
+- `src/byte_mcp/ox/**` is frozen for NVIDIA-00 and NVIDIA-01 except for a separately approved compatibility repair proven strictly necessary. If execution discovers such a need, stop before mutation and report it.
 - `src/byte_mcp/wolfram/**`, `src/byte_mcp/server.py`, and `pyproject.toml` are not modified by NVIDIA-00.
 - Historical OX evidence is never modified.
 - No API key, authorization header, arbitrary response header, raw exception string, or raw catalog payload may appear in ordinary returned domain objects.
@@ -31,21 +31,19 @@
 
 ## File Structure
 
-Create the following files only unless a task below explicitly says otherwise:
-
 ```text
 src/byte_mcp/providers/
-  __init__.py        # safe exports for provider-neutral contracts
-  models.py          # provider/model identity, capability profile, lifecycle state
-  outcomes.py        # normalized attempt outcome + transport-failure enums
-  registry.py        # immutable registry + explicit lifecycle transition function
+  __init__.py
+  models.py
+  outcomes.py
+  registry.py
 
 src/byte_mcp/nvidia/
-  __init__.py        # safe NVIDIA exports
-  errors.py          # bounded catalog failure classification
-  settings.py        # NVIDIA_API_KEY + exact hosted origin + bounded timeout
-  catalog.py         # bounded /v1/models parser and one-GET client
-  registry.py        # NVIDIA provider identity + four provisional candidates
+  __init__.py
+  errors.py
+  settings.py
+  catalog.py
+  registry.py
 
 tests/providers/
   __init__.py
@@ -61,7 +59,7 @@ tests/nvidia/
   test_security_invariants.py
 ```
 
-No NVIDIA-00 task edits an existing production file.
+No NVIDIA-00 task edits a production file that existed before this plan.
 
 ---
 
@@ -80,7 +78,7 @@ No NVIDIA-00 task edits an existing production file.
 
 - [ ] **Step 1: Write the failing contract tests**
 
-Create `tests/providers/__init__.py` as an empty file, then create `tests/providers/test_contracts.py` with:
+Create empty `tests/providers/__init__.py`, then create `tests/providers/test_contracts.py`:
 
 ```python
 from dataclasses import FrozenInstanceError
@@ -98,8 +96,28 @@ from byte_mcp.providers.outcomes import (
     ProviderTransportFailureKind,
 )
 
-
 OBSERVED_AT = "2026-09-08T00:00:00+00:00"
+
+
+def make_profile(**overrides):
+    values = {
+        "model_id": "nvidia/example-model",
+        "publisher": "nvidia",
+        "provider_id": "nvidia-api-catalog",
+        "endpoint_family": "openai-chat",
+        "input_modalities": ("text",),
+        "output_modalities": ("text",),
+        "context_window": None,
+        "supports_streaming": None,
+        "supports_tool_calling": None,
+        "supports_reasoning": None,
+        "reasoning_dialect": None,
+        "hosted_status": "unknown",
+        "qualification_state": ModelLifecycleState.DISCOVERED,
+        "observed_at": OBSERVED_AT,
+    }
+    values.update(overrides)
+    return ModelCapabilityProfile(**values)
 
 
 def test_provider_identity_is_immutable_and_validated():
@@ -133,22 +151,7 @@ def test_provider_identity_rejects_invalid_slugs(field, value):
 
 
 def test_model_profile_preserves_explicit_unknown_capabilities():
-    profile = ModelCapabilityProfile(
-        model_id="nvidia/example-model",
-        publisher="nvidia",
-        provider_id="nvidia-api-catalog",
-        endpoint_family="openai-chat",
-        input_modalities=("text",),
-        output_modalities=("text",),
-        context_window=None,
-        supports_streaming=None,
-        supports_tool_calling=None,
-        supports_reasoning=None,
-        reasoning_dialect=None,
-        hosted_status="unknown",
-        qualification_state=ModelLifecycleState.DISCOVERED,
-        observed_at=OBSERVED_AT,
-    )
+    profile = make_profile()
     assert profile.context_window is None
     assert profile.supports_streaming is None
     assert profile.supports_tool_calling is None
@@ -186,42 +189,12 @@ def test_validate_model_id_rejects_invalid_shape(model_id):
 
 def test_context_window_must_be_positive_when_known():
     with pytest.raises(ValueError):
-        ModelCapabilityProfile(
-            model_id="nvidia/example-model",
-            publisher="nvidia",
-            provider_id="nvidia-api-catalog",
-            endpoint_family="openai-chat",
-            input_modalities=("text",),
-            output_modalities=("text",),
-            context_window=0,
-            supports_streaming=None,
-            supports_tool_calling=None,
-            supports_reasoning=None,
-            reasoning_dialect=None,
-            hosted_status="unknown",
-            qualification_state=ModelLifecycleState.DISCOVERED,
-            observed_at=OBSERVED_AT,
-        )
+        make_profile(context_window=0)
 
 
 def test_observed_at_must_be_timezone_aware_iso8601():
     with pytest.raises(ValueError):
-        ModelCapabilityProfile(
-            model_id="nvidia/example-model",
-            publisher="nvidia",
-            provider_id="nvidia-api-catalog",
-            endpoint_family="openai-chat",
-            input_modalities=("text",),
-            output_modalities=("text",),
-            context_window=None,
-            supports_streaming=None,
-            supports_tool_calling=None,
-            supports_reasoning=None,
-            reasoning_dialect=None,
-            hosted_status="unknown",
-            qualification_state=ModelLifecycleState.DISCOVERED,
-            observed_at="2026-09-08T00:00:00",
-        )
+        make_profile(observed_at="2026-09-08T00:00:00")
 
 
 def test_attempt_outcome_values_are_frozen_contract():
@@ -250,17 +223,15 @@ def test_transport_failure_values_match_frozen_contract():
 
 - [ ] **Step 2: Run the focused tests and verify RED**
 
-Run:
-
 ```powershell
 python -m pytest tests/providers/test_contracts.py -q
 ```
 
-Expected: collection fails because `byte_mcp.providers` does not exist yet.
+Expected: collection fails because `byte_mcp.providers` does not exist.
 
 - [ ] **Step 3: Implement the provider-neutral contracts**
 
-Create `src/byte_mcp/providers/outcomes.py` with:
+Create `src/byte_mcp/providers/outcomes.py`:
 
 ```python
 """Provider-neutral attempt outcomes and transport-failure categories."""
@@ -288,7 +259,7 @@ class ProviderTransportFailureKind(StrEnum):
     POOL_TIMEOUT = "POOL_TIMEOUT"
 ```
 
-Create `src/byte_mcp/providers/models.py` with:
+Create `src/byte_mcp/providers/models.py`:
 
 ```python
 """Provider-neutral model identity and lifecycle contracts."""
@@ -402,7 +373,8 @@ class ModelCapabilityProfile:
         _require_modalities(self.input_modalities, "input_modalities")
         _require_modalities(self.output_modalities, "output_modalities")
         if self.context_window is not None and (
-            not isinstance(self.context_window, int) or isinstance(self.context_window, bool)
+            not isinstance(self.context_window, int)
+            or isinstance(self.context_window, bool)
             or self.context_window <= 0
         ):
             raise ValueError("context_window must be a positive integer or None")
@@ -418,7 +390,7 @@ class ModelCapabilityProfile:
         _require_observed_at(self.observed_at)
 ```
 
-Create `src/byte_mcp/providers/__init__.py` with:
+Create `src/byte_mcp/providers/__init__.py`:
 
 ```python
 """Provider-neutral Byte-MCP contracts."""
@@ -441,28 +413,17 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Run the focused tests and verify GREEN**
-
-Run:
+- [ ] **Step 4: Run focused tests and Ruff**
 
 ```powershell
 python -m pytest tests/providers/test_contracts.py -q
-```
-
-Expected: all tests pass.
-
-- [ ] **Step 5: Run Ruff on the new contract files**
-
-Run:
-
-```powershell
 python -m ruff check src/byte_mcp/providers tests/providers
 python -m ruff format --check src/byte_mcp/providers tests/providers
 ```
 
-Expected: both commands pass.
+Expected: all pass.
 
-- [ ] **Step 6: Commit Task 1**
+- [ ] **Step 5: Commit Task 1**
 
 ```powershell
 git add src/byte_mcp/providers tests/providers
@@ -479,19 +440,18 @@ git commit -m "feat: add provider-neutral model contracts"
 - Modify: `src/byte_mcp/providers/__init__.py`
 
 **Interfaces:**
-- Consumes: `ModelCapabilityProfile`, `ModelLifecycleState` from Task 1.
+- Consumes: `ModelCapabilityProfile`, `ModelLifecycleState`.
 - Produces: `ModelRegistry`, `transition_model_profile`.
 
 - [ ] **Step 1: Write failing registry tests**
 
-Create `tests/providers/test_registry.py` with:
+Create `tests/providers/test_registry.py`:
 
 ```python
 import pytest
 
 from byte_mcp.providers.models import ModelCapabilityProfile, ModelLifecycleState
 from byte_mcp.providers.registry import ModelRegistry, transition_model_profile
-
 
 OBSERVED_AT = "2026-09-08T00:00:00+00:00"
 LATER = "2026-09-08T01:00:00+00:00"
@@ -540,9 +500,7 @@ def test_discovered_cannot_jump_directly_to_qualified():
 
 def test_forward_lifecycle_requires_explicit_steps():
     characterized = transition_model_profile(
-        profile(),
-        ModelLifecycleState.CHARACTERIZED,
-        observed_at=LATER,
+        profile(), ModelLifecycleState.CHARACTERIZED, observed_at=LATER
     )
     qualified = transition_model_profile(
         characterized,
@@ -591,9 +549,7 @@ def test_deprecated_cannot_be_reenabled_directly():
         )
 ```
 
-- [ ] **Step 2: Run the registry tests and verify RED**
-
-Run:
+- [ ] **Step 2: Run registry tests and verify RED**
 
 ```powershell
 python -m pytest tests/providers/test_registry.py -q
@@ -601,9 +557,9 @@ python -m pytest tests/providers/test_registry.py -q
 
 Expected: import fails because `byte_mcp.providers.registry` does not exist.
 
-- [ ] **Step 3: Implement the immutable registry and transition policy**
+- [ ] **Step 3: Implement registry and transition policy**
 
-Create `src/byte_mcp/providers/registry.py` with:
+Create `src/byte_mcp/providers/registry.py`:
 
 ```python
 """Immutable model registry and explicit lifecycle transitions."""
@@ -683,7 +639,7 @@ class ModelRegistry:
         if not isinstance(state, ModelLifecycleState):
             raise ValueError("state is invalid")
         return tuple(
-            profile for profile in self._profiles.values() if profile.qualification_state is state
+            item for item in self._profiles.values() if item.qualification_state is state
         )
 
 
@@ -702,14 +658,10 @@ def transition_model_profile(
             f"invalid lifecycle transition: {profile.qualification_state.value} -> "
             f"{target_state.value}"
         )
-    return replace(
-        profile,
-        qualification_state=target_state,
-        observed_at=observed_at,
-    )
+    return replace(profile, qualification_state=target_state, observed_at=observed_at)
 ```
 
-Update `src/byte_mcp/providers/__init__.py` to export the new interfaces:
+Replace `src/byte_mcp/providers/__init__.py` with:
 
 ```python
 """Provider-neutral Byte-MCP contracts."""
@@ -735,26 +687,17 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Run provider tests and verify GREEN**
-
-Run:
+- [ ] **Step 4: Run provider tests and Ruff**
 
 ```powershell
 python -m pytest tests/providers -q
-```
-
-Expected: all provider-neutral tests pass.
-
-- [ ] **Step 5: Run Ruff on provider-neutral code**
-
-```powershell
 python -m ruff check src/byte_mcp/providers tests/providers
 python -m ruff format --check src/byte_mcp/providers tests/providers
 ```
 
-Expected: both commands pass.
+Expected: all pass.
 
-- [ ] **Step 6: Commit Task 2**
+- [ ] **Step 5: Commit Task 2**
 
 ```powershell
 git add src/byte_mcp/providers tests/providers/test_registry.py
@@ -774,11 +717,11 @@ git commit -m "feat: add provider model lifecycle registry"
 
 **Interfaces:**
 - Produces: `NvidiaHostedSettings`, `NvidiaCatalogError`, `NvidiaCatalogFailureKind`, `NVIDIA_HOSTED_BASE_URL`.
-- Consumes: `ByteMCPError` only; no OX/Wolfram imports.
+- Consumes: `ByteMCPError`; no OX/Wolfram imports.
 
-- [ ] **Step 1: Write failing NVIDIA settings tests**
+- [ ] **Step 1: Write failing settings tests**
 
-Create `tests/nvidia/__init__.py` as an empty file, then create `tests/nvidia/test_settings.py` with:
+Create empty `tests/nvidia/__init__.py`, then create `tests/nvidia/test_settings.py`:
 
 ```python
 import pytest
@@ -807,6 +750,11 @@ def test_settings_repr_redacts_hosted_key(monkeypatch):
     assert "NVIDIA-SENTINEL-SECRET" not in repr(settings)
 
 
+def test_blank_direct_key_is_rejected():
+    with pytest.raises(ValueError):
+        NvidiaHostedSettings(api_key=" ")
+
+
 def test_hosted_origin_is_exact_and_not_environment_overridable(monkeypatch):
     monkeypatch.setenv("BYTE_MCP_NVIDIA_BASE_URL", "https://example.invalid/v1")
     settings = NvidiaHostedSettings.load()
@@ -831,7 +779,7 @@ def test_catalog_timeout_default(monkeypatch):
     assert NvidiaHostedSettings.load().catalog_timeout_seconds == 10
 ```
 
-- [ ] **Step 2: Run the settings tests and verify RED**
+- [ ] **Step 2: Run settings tests and verify RED**
 
 ```powershell
 python -m pytest tests/nvidia/test_settings.py -q
@@ -841,7 +789,7 @@ Expected: import fails because `byte_mcp.nvidia` does not exist.
 
 - [ ] **Step 3: Implement safe NVIDIA errors**
 
-Create `src/byte_mcp/nvidia/errors.py` with:
+Create `src/byte_mcp/nvidia/errors.py`:
 
 ```python
 """Bounded NVIDIA catalog error classification."""
@@ -872,7 +820,7 @@ class NvidiaCatalogError(ByteMCPError):
 
 - [ ] **Step 4: Implement hosted settings**
 
-Create `src/byte_mcp/nvidia/settings.py` with:
+Create `src/byte_mcp/nvidia/settings.py`:
 
 ```python
 """Hosted NVIDIA API Catalog settings."""
@@ -902,6 +850,12 @@ class NvidiaHostedSettings:
     catalog_timeout_seconds: int = 10
 
     def __post_init__(self) -> None:
+        if self.api_key is not None and (
+            not isinstance(self.api_key, str)
+            or not self.api_key
+            or self.api_key != self.api_key.strip()
+        ):
+            raise ValueError("api_key is invalid")
         if self.base_url != NVIDIA_HOSTED_BASE_URL:
             raise ValueError("NVIDIA hosted base_url is invalid")
         if not isinstance(self.catalog_timeout_seconds, int) or isinstance(
@@ -920,15 +874,12 @@ class NvidiaHostedSettings:
         return cls(
             api_key=key,
             catalog_timeout_seconds=_bounded_int(
-                "BYTE_MCP_NVIDIA_CATALOG_TIMEOUT_SECONDS",
-                10,
-                1,
-                60,
+                "BYTE_MCP_NVIDIA_CATALOG_TIMEOUT_SECONDS", 10, 1, 60
             ),
         )
 ```
 
-Create `src/byte_mcp/nvidia/__init__.py` with:
+Create `src/byte_mcp/nvidia/__init__.py`:
 
 ```python
 """NVIDIA API Catalog integration primitives."""
@@ -944,24 +895,17 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 5: Run NVIDIA settings tests and verify GREEN**
+- [ ] **Step 5: Run settings tests and Ruff**
 
 ```powershell
 python -m pytest tests/nvidia/test_settings.py -q
-```
-
-Expected: all tests pass.
-
-- [ ] **Step 6: Run Ruff for the new NVIDIA settings surface**
-
-```powershell
 python -m ruff check src/byte_mcp/nvidia tests/nvidia/test_settings.py
 python -m ruff format --check src/byte_mcp/nvidia tests/nvidia/test_settings.py
 ```
 
-Expected: both commands pass.
+Expected: all pass.
 
-- [ ] **Step 7: Commit Task 3**
+- [ ] **Step 6: Commit Task 3**
 
 ```powershell
 git add src/byte_mcp/nvidia tests/nvidia
@@ -980,18 +924,17 @@ git commit -m "feat: add NVIDIA hosted settings"
 **Interfaces:**
 - Consumes: `validate_model_id`, NVIDIA catalog error types.
 - Produces: `NvidiaCatalogSnapshot`, `parse_catalog_payload`.
-- No HTTP execution is added in this task.
+- Adds no HTTP execution.
 
 - [ ] **Step 1: Write failing parser tests**
 
-Create `tests/nvidia/test_catalog_parser.py` with:
+Create `tests/nvidia/test_catalog_parser.py`:
 
 ```python
 import pytest
 
 from byte_mcp.nvidia.catalog import NvidiaCatalogSnapshot, parse_catalog_payload
 from byte_mcp.nvidia.errors import NvidiaCatalogError, NvidiaCatalogFailureKind
-
 
 OBSERVED_AT = "2026-09-08T00:00:00+00:00"
 
@@ -1006,10 +949,7 @@ def test_parser_returns_only_bounded_model_ids():
                 "owned_by": "ignored",
                 "arbitrary": {"nested": "ignored"},
             },
-            {
-                "id": "deepseek-ai/deepseek-v4-pro-0813",
-                "object": "model",
-            },
+            {"id": "deepseek-ai/deepseek-v4-pro-0813", "object": "model"},
         ],
         "secret-looking-field": "must-not-propagate",
     }
@@ -1069,25 +1009,22 @@ python -m pytest tests/nvidia/test_catalog_parser.py -q
 
 Expected: import fails because `byte_mcp.nvidia.catalog` does not exist.
 
-- [ ] **Step 3: Implement the parser and snapshot**
+- [ ] **Step 3: Implement parser and snapshot**
 
-Create `src/byte_mcp/nvidia/catalog.py` initially with:
+Create `src/byte_mcp/nvidia/catalog.py` exactly with the parser-only imports used in this task:
 
 ```python
-"""Bounded NVIDIA hosted model-catalog parsing and transport."""
+"""Bounded NVIDIA hosted model-catalog parsing."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Mapping
-
-import httpx
 
 from byte_mcp.providers.models import validate_model_id
 
 from .errors import NvidiaCatalogError, NvidiaCatalogFailureKind
-from .settings import NvidiaHostedSettings
 
 _MAX_CATALOG_BYTES = 1_000_000
 _MAX_CATALOG_MODELS = 1_000
@@ -1137,37 +1074,39 @@ def parse_catalog_payload(
     )
 ```
 
-At this step, leave the imported `httpx`, `UTC`, and `NvidiaHostedSettings` for Task 5 only if Ruff permits unused imports; otherwise do not add those imports until Task 5. The Task 4 committed file must contain only imports actually used by the parser.
-
-Update `src/byte_mcp/nvidia/__init__.py` to export:
+Replace `src/byte_mcp/nvidia/__init__.py` with:
 
 ```python
+"""NVIDIA API Catalog integration primitives."""
+
 from .catalog import NvidiaCatalogSnapshot, parse_catalog_payload
+from .errors import NvidiaCatalogError, NvidiaCatalogFailureKind
+from .settings import NVIDIA_HOSTED_BASE_URL, NvidiaHostedSettings
+
+__all__ = [
+    "NVIDIA_HOSTED_BASE_URL",
+    "NvidiaCatalogError",
+    "NvidiaCatalogFailureKind",
+    "NvidiaCatalogSnapshot",
+    "NvidiaHostedSettings",
+    "parse_catalog_payload",
+]
 ```
 
-and include both names in `__all__`.
-
-- [ ] **Step 4: Run parser tests and verify GREEN**
+- [ ] **Step 4: Run parser tests and Ruff**
 
 ```powershell
 python -m pytest tests/nvidia/test_catalog_parser.py -q
+python -m ruff check src/byte_mcp/nvidia tests/nvidia/test_catalog_parser.py
+python -m ruff format --check src/byte_mcp/nvidia tests/nvidia/test_catalog_parser.py
 ```
 
-Expected: all tests pass.
+Expected: all pass.
 
-- [ ] **Step 5: Run Ruff on parser code**
-
-```powershell
-python -m ruff check src/byte_mcp/nvidia/catalog.py tests/nvidia/test_catalog_parser.py
-python -m ruff format --check src/byte_mcp/nvidia/catalog.py tests/nvidia/test_catalog_parser.py
-```
-
-Expected: both commands pass.
-
-- [ ] **Step 6: Commit Task 4**
+- [ ] **Step 5: Commit Task 4**
 
 ```powershell
-git add src/byte_mcp/nvidia/catalog.py src/byte_mcp/nvidia/__init__.py tests/nvidia/test_catalog_parser.py
+git add src/byte_mcp/nvidia tests/nvidia/test_catalog_parser.py
 git commit -m "feat: parse NVIDIA hosted model catalog"
 ```
 
@@ -1183,11 +1122,11 @@ git commit -m "feat: parse NVIDIA hosted model catalog"
 **Interfaces:**
 - Consumes: `NvidiaHostedSettings`, `NvidiaCatalogError`, `parse_catalog_payload`.
 - Produces: `NvidiaCatalogClient.discover() -> NvidiaCatalogSnapshot`.
-- Test seam: constructor accepts `transport: httpx.BaseTransport | None = None`.
+- Test seam: `transport: httpx.BaseTransport | None = None`.
 
 - [ ] **Step 1: Write failing one-request client tests**
 
-Create `tests/nvidia/test_catalog_client.py` with:
+Create `tests/nvidia/test_catalog_client.py`:
 
 ```python
 import json
@@ -1198,7 +1137,6 @@ import pytest
 from byte_mcp.nvidia.catalog import NvidiaCatalogClient
 from byte_mcp.nvidia.errors import NvidiaCatalogError, NvidiaCatalogFailureKind
 from byte_mcp.nvidia.settings import NvidiaHostedSettings
-
 
 KEY = "NVIDIA-SENTINEL-SECRET"
 
@@ -1212,14 +1150,10 @@ def test_discover_makes_exactly_one_get_to_models_with_internal_bearer_header():
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(
-            200,
-            json={"data": [{"id": "nvidia/example-model"}]},
-        )
+        return httpx.Response(200, json={"data": [{"id": "nvidia/example-model"}]})
 
     client = NvidiaCatalogClient(settings(), transport=httpx.MockTransport(handler))
     snapshot = client.discover()
-
     assert snapshot.model_ids == ("nvidia/example-model",)
     assert len(requests) == 1
     assert requests[0].method == "GET"
@@ -1245,6 +1179,7 @@ def test_missing_key_fails_before_transport():
 @pytest.mark.parametrize(
     ("status", "kind"),
     [
+        (302, NvidiaCatalogFailureKind.REQUEST),
         (400, NvidiaCatalogFailureKind.REQUEST),
         (401, NvidiaCatalogFailureKind.AUTHENTICATION),
         (403, NvidiaCatalogFailureKind.PERMISSION),
@@ -1330,7 +1265,7 @@ def test_unknown_response_headers_are_not_returned():
     assert "SERVER-HEADER-SECRET" not in repr(snapshot)
 ```
 
-- [ ] **Step 2: Run the client tests and verify RED**
+- [ ] **Step 2: Run client tests and verify RED**
 
 ```powershell
 python -m pytest tests/nvidia/test_catalog_client.py -q
@@ -1338,9 +1273,9 @@ python -m pytest tests/nvidia/test_catalog_client.py -q
 
 Expected: import fails because `NvidiaCatalogClient` is not defined.
 
-- [ ] **Step 3: Implement the one-GET client**
+- [ ] **Step 3: Extend the catalog module with the one-GET client**
 
-Extend `src/byte_mcp/nvidia/catalog.py` with the following imports and client. Keep the parser from Task 4 unchanged except for shared imports/constants.
+Add these imports to `src/byte_mcp/nvidia/catalog.py`:
 
 ```python
 import json
@@ -1350,6 +1285,8 @@ import httpx
 
 from .settings import NvidiaHostedSettings
 ```
+
+The resulting datetime import must be `from datetime import UTC, datetime`, replacing the Task 4 datetime-only import.
 
 Add:
 
@@ -1408,7 +1345,7 @@ class NvidiaCatalogClient:
                 follow_redirects=False,
             ) as client:
                 with client.stream("GET", url, headers=headers) as response:
-                    if response.status_code >= 400:
+                    if response.status_code >= 300:
                         raise _http_failure(response.status_code)
                     body = bytearray()
                     for chunk in response.iter_bytes():
@@ -1441,28 +1378,39 @@ class NvidiaCatalogClient:
         )
 ```
 
-Do not add a retry loop, retry library, alternate URL, alternate model, POST, or fallback path.
+Replace `src/byte_mcp/nvidia/__init__.py` with:
 
-Update `src/byte_mcp/nvidia/__init__.py` to export `NvidiaCatalogClient`.
+```python
+"""NVIDIA API Catalog integration primitives."""
 
-- [ ] **Step 4: Run parser + client tests and verify GREEN**
+from .catalog import NvidiaCatalogClient, NvidiaCatalogSnapshot, parse_catalog_payload
+from .errors import NvidiaCatalogError, NvidiaCatalogFailureKind
+from .settings import NVIDIA_HOSTED_BASE_URL, NvidiaHostedSettings
+
+__all__ = [
+    "NVIDIA_HOSTED_BASE_URL",
+    "NvidiaCatalogClient",
+    "NvidiaCatalogError",
+    "NvidiaCatalogFailureKind",
+    "NvidiaCatalogSnapshot",
+    "NvidiaHostedSettings",
+    "parse_catalog_payload",
+]
+```
+
+Do not add a retry loop, retry library, alternate URL, POST, reconnect/resume, or fallback path.
+
+- [ ] **Step 4: Run parser/client tests and Ruff**
 
 ```powershell
 python -m pytest tests/nvidia/test_catalog_parser.py tests/nvidia/test_catalog_client.py -q
-```
-
-Expected: all tests pass.
-
-- [ ] **Step 5: Run Ruff on NVIDIA catalog code**
-
-```powershell
 python -m ruff check src/byte_mcp/nvidia tests/nvidia
 python -m ruff format --check src/byte_mcp/nvidia tests/nvidia
 ```
 
-Expected: both commands pass.
+Expected: all pass.
 
-- [ ] **Step 6: Commit Task 5**
+- [ ] **Step 5: Commit Task 5**
 
 ```powershell
 git add src/byte_mcp/nvidia tests/nvidia/test_catalog_client.py
@@ -1481,11 +1429,11 @@ git commit -m "feat: add bounded NVIDIA catalog discovery client"
 **Interfaces:**
 - Consumes: `ProviderIdentity`, `ModelCapabilityProfile`, `ModelLifecycleState`, `ModelRegistry`.
 - Produces: `NVIDIA_PROVIDER`, `NvidiaQualificationCandidate`, `initial_qualification_candidates`, `initial_model_registry`.
-- No client/transport branching is keyed by model ID.
+- No client/transport branch is keyed by model ID.
 
 - [ ] **Step 1: Write failing roster tests**
 
-Create `tests/nvidia/test_registry.py` with:
+Create `tests/nvidia/test_registry.py`:
 
 ```python
 from byte_mcp.nvidia.registry import (
@@ -1494,7 +1442,6 @@ from byte_mcp.nvidia.registry import (
     initial_qualification_candidates,
 )
 from byte_mcp.providers.models import ModelLifecycleState
-
 
 EXPECTED_MODELS = {
     "nvidia/nemotron-3.5-lightning-30b-a3b",
@@ -1528,7 +1475,10 @@ def test_initial_registry_contains_no_qualified_or_enabled_model():
 
 
 def test_candidate_roles_are_explicit_and_distinct():
-    roles = {candidate.profile.model_id: candidate.intended_role for candidate in initial_qualification_candidates()}
+    roles = {
+        candidate.profile.model_id: candidate.intended_role
+        for candidate in initial_qualification_candidates()
+    }
     assert roles == {
         "nvidia/nemotron-3.5-lightning-30b-a3b": "routine-review",
         "nvidia/nemotron-3-ultra-550b-a55b": "deep-review",
@@ -1545,9 +1495,9 @@ python -m pytest tests/nvidia/test_registry.py -q
 
 Expected: import fails because `byte_mcp.nvidia.registry` does not exist.
 
-- [ ] **Step 3: Implement the provisional roster**
+- [ ] **Step 3: Implement provisional roster**
 
-Create `src/byte_mcp/nvidia/registry.py` with:
+Create `src/byte_mcp/nvidia/registry.py`:
 
 ```python
 """Provisional NVIDIA model qualification roster."""
@@ -1602,14 +1552,10 @@ def _candidate(model_id: str, publisher: str, intended_role: str) -> NvidiaQuali
 
 _INITIAL_CANDIDATES = (
     _candidate(
-        "nvidia/nemotron-3.5-lightning-30b-a3b",
-        "nvidia",
-        "routine-review",
+        "nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia", "routine-review"
     ),
     _candidate(
-        "nvidia/nemotron-3-ultra-550b-a55b",
-        "nvidia",
-        "deep-review",
+        "nvidia/nemotron-3-ultra-550b-a55b", "nvidia", "deep-review"
     ),
     _candidate(
         "deepseek-ai/deepseek-v4-pro-0813",
@@ -1617,9 +1563,7 @@ _INITIAL_CANDIDATES = (
         "independent-coding-review",
     ),
     _candidate(
-        "moonshotai/kimi-k3",
-        "moonshotai",
-        "long-horizon-challenger",
+        "moonshotai/kimi-k3", "moonshotai", "long-horizon-challenger"
     ),
 )
 
@@ -1632,26 +1576,47 @@ def initial_model_registry() -> ModelRegistry:
     return ModelRegistry(candidate.profile for candidate in _INITIAL_CANDIDATES)
 ```
 
-Update `src/byte_mcp/nvidia/__init__.py` to export the four new names.
+Replace `src/byte_mcp/nvidia/__init__.py` with:
 
-- [ ] **Step 4: Run all NVIDIA tests and verify GREEN**
+```python
+"""NVIDIA API Catalog integration primitives."""
+
+from .catalog import NvidiaCatalogClient, NvidiaCatalogSnapshot, parse_catalog_payload
+from .errors import NvidiaCatalogError, NvidiaCatalogFailureKind
+from .registry import (
+    NVIDIA_PROVIDER,
+    NvidiaQualificationCandidate,
+    initial_model_registry,
+    initial_qualification_candidates,
+)
+from .settings import NVIDIA_HOSTED_BASE_URL, NvidiaHostedSettings
+
+__all__ = [
+    "NVIDIA_HOSTED_BASE_URL",
+    "NVIDIA_PROVIDER",
+    "NvidiaCatalogClient",
+    "NvidiaCatalogError",
+    "NvidiaCatalogFailureKind",
+    "NvidiaCatalogSnapshot",
+    "NvidiaHostedSettings",
+    "NvidiaQualificationCandidate",
+    "initial_model_registry",
+    "initial_qualification_candidates",
+    "parse_catalog_payload",
+]
+```
+
+- [ ] **Step 4: Run NVIDIA tests and Ruff**
 
 ```powershell
 python -m pytest tests/nvidia -q
-```
-
-Expected: all NVIDIA tests pass and no network request is made.
-
-- [ ] **Step 5: Run Ruff on NVIDIA code**
-
-```powershell
 python -m ruff check src/byte_mcp/nvidia tests/nvidia
 python -m ruff format --check src/byte_mcp/nvidia tests/nvidia
 ```
 
-Expected: both commands pass.
+Expected: all pass with zero live network requests.
 
-- [ ] **Step 6: Commit Task 6**
+- [ ] **Step 5: Commit Task 6**
 
 ```powershell
 git add src/byte_mcp/nvidia tests/nvidia/test_registry.py
@@ -1664,17 +1629,18 @@ git commit -m "feat: add NVIDIA qualification candidates"
 
 **Files:**
 - Create: `tests/nvidia/test_security_invariants.py`
-- No production file should require modification if Tasks 1-6 followed the plan.
+- No production modification expected.
 
 **Interfaces:**
-- Verifies: secret redaction, no import coupling, no automatic qualification, no OX/Wolfram coupling, no accidental inference route.
+- Verifies: secret redaction, import isolation, no automatic qualification, no OX/Wolfram dependency, no accidental inference route.
 
-- [ ] **Step 1: Write the security/isolation tests**
+- [ ] **Step 1: Write security/isolation tests**
 
-Create `tests/nvidia/test_security_invariants.py` with:
+Create `tests/nvidia/test_security_invariants.py`:
 
 ```python
 import importlib
+import inspect
 
 import httpx
 
@@ -1683,15 +1649,18 @@ from byte_mcp.nvidia.registry import initial_model_registry
 from byte_mcp.nvidia.settings import NvidiaHostedSettings
 from byte_mcp.providers.models import ModelLifecycleState
 
-
 KEY = "NVIDIA-SECURITY-SENTINEL"
 
 
-def test_invalid_nvidia_environment_does_not_break_core_provider_imports(monkeypatch):
+def test_invalid_nvidia_environment_does_not_break_existing_provider_modules(monkeypatch):
     monkeypatch.setenv("BYTE_MCP_NVIDIA_CATALOG_TIMEOUT_SECONDS", "invalid")
-    importlib.import_module("byte_mcp.service")
-    importlib.import_module("byte_mcp.ox.runtime")
-    importlib.import_module("byte_mcp.wolfram.runtime")
+    for module_name in (
+        "byte_mcp.service",
+        "byte_mcp.ox.runtime",
+        "byte_mcp.wolfram.runtime",
+    ):
+        module = importlib.import_module(module_name)
+        importlib.reload(module)
 
 
 def test_nvidia_client_repr_never_contains_key():
@@ -1704,7 +1673,7 @@ def test_catalog_snapshot_contains_no_request_or_header_metadata():
         assert request.url.path == "/v1/models"
         return httpx.Response(
             200,
-            headers={"authorization": KEY, "x-secret": "HEADER-SENTINEL"},
+            headers={"x-secret": "HEADER-SENTINEL"},
             json={"data": [{"id": "nvidia/example-model"}]},
         )
 
@@ -1712,8 +1681,7 @@ def test_catalog_snapshot_contains_no_request_or_header_metadata():
         NvidiaHostedSettings(api_key=KEY),
         transport=httpx.MockTransport(handler),
     )
-    snapshot = client.discover()
-    rendered = repr(snapshot)
+    rendered = repr(client.discover())
     assert KEY not in rendered
     assert "HEADER-SENTINEL" not in rendered
     assert "Authorization" not in rendered
@@ -1725,8 +1693,8 @@ def test_discovery_roster_has_no_qualified_or_enabled_state():
     assert registry.by_state(ModelLifecycleState.ENABLED) == ()
 
 
-def test_nvidia_modules_do_not_import_ox_or_wolfram_namespaces():
-    module_names = (
+def test_new_provider_modules_do_not_import_ox_or_wolfram_packages():
+    for module_name in (
         "byte_mcp.providers.models",
         "byte_mcp.providers.outcomes",
         "byte_mcp.providers.registry",
@@ -1734,64 +1702,59 @@ def test_nvidia_modules_do_not_import_ox_or_wolfram_namespaces():
         "byte_mcp.nvidia.settings",
         "byte_mcp.nvidia.catalog",
         "byte_mcp.nvidia.registry",
-    )
-    for module_name in module_names:
-        module = importlib.import_module(module_name)
-        source_names = set(module.__dict__)
-        assert "OXClient" not in source_names
-        assert "OXRuntime" not in source_names
-        assert "WolframRuntime" not in source_names
+    ):
+        source = inspect.getsource(importlib.import_module(module_name))
+        assert "byte_mcp.ox" not in source
+        assert "byte_mcp.wolfram" not in source
 ```
 
-- [ ] **Step 2: Run the new security tests**
+- [ ] **Step 2: Run security tests**
 
 ```powershell
 python -m pytest tests/nvidia/test_security_invariants.py -q
 ```
 
-Expected: all tests pass. If any test reveals a key leak or provider coupling, make the smallest change inside new NVIDIA/provider-neutral files only; do not edit OX/Wolfram.
+Expected: all pass. Any secret leak or provider coupling must be fixed only inside new provider/NVIDIA files; do not edit OX/Wolfram.
 
-- [ ] **Step 3: Run the complete NVIDIA-00 focused suite**
+- [ ] **Step 3: Run complete NVIDIA-00 focused suite**
 
 ```powershell
 python -m pytest tests/providers tests/nvidia -q
 ```
 
-Expected: all provider-neutral and NVIDIA tests pass.
+Expected: all pass.
 
-- [ ] **Step 4: Run the full Byte-MCP Python regression suite**
+- [ ] **Step 4: Run full Byte-MCP Python regression suite**
 
 ```powershell
 python -m pytest -q
 ```
 
-Expected: full suite passes. No live provider request should occur; existing provider tests are mocked/local as before.
+Expected: full suite passes with no live provider request.
 
-- [ ] **Step 5: Run final lint and format gates**
+- [ ] **Step 5: Run final lint/format gates**
 
 ```powershell
 python -m ruff check .
 python -m ruff format --check .
 ```
 
-Expected: both commands pass.
+Expected: both pass.
 
-- [ ] **Step 6: Prove the frozen OX/Wolfram/runtime boundary in Git**
-
-Run:
+- [ ] **Step 6: Prove frozen OX/Wolfram/runtime boundary in Git**
 
 ```powershell
 git diff --name-only 94ff28810a06b7af2207196ac98c1152cc65b4b1...HEAD
 ```
 
-Expected changed production paths are limited to:
+Allowed production paths:
 
 ```text
 src/byte_mcp/providers/**
 src/byte_mcp/nvidia/**
 ```
 
-Expected additional non-production changes are limited to:
+Allowed non-production paths:
 
 ```text
 tests/providers/**
@@ -1800,18 +1763,16 @@ docs/superpowers/specs/2026-09-08-nvidia-provider-runtime-design.md
 docs/superpowers/plans/2026-09-08-nvidia-provider-runtime-implementation-plan.md
 ```
 
-If any path under `src/byte_mcp/ox/**`, `src/byte_mcp/wolfram/**`, `src/byte_mcp/server.py`, `pyproject.toml`, or historical evidence appears, stop and investigate before completion.
+If `src/byte_mcp/ox/**`, `src/byte_mcp/wolfram/**`, `src/byte_mcp/server.py`, `pyproject.toml`, or historical evidence appears, stop and investigate before completion.
 
-- [ ] **Step 7: Commit the security/verification tests**
+- [ ] **Step 7: Commit security gate**
 
 ```powershell
 git add tests/nvidia/test_security_invariants.py
 git commit -m "test: freeze NVIDIA-00 security invariants"
 ```
 
-- [ ] **Step 8: Record the final NVIDIA-00 candidate identity**
-
-Run:
+- [ ] **Step 8: Record final candidate identity**
 
 ```powershell
 git status --short
@@ -1823,31 +1784,29 @@ Expected:
 
 - working tree clean;
 - HEAD identifies the NVIDIA-00 implementation candidate;
-- commits show the design, plan, provider contracts, lifecycle registry, NVIDIA settings, catalog parser/client, roster, and security gate as separate reviewable units.
+- commits separate design, plan, provider contracts, lifecycle registry, NVIDIA settings, catalog parser/client, roster, and security gate.
 
-Do not promote the runtime, do not call NVIDIA, do not call OX, and do not start NVIDIA-01 until the implementation candidate is reviewed and explicitly accepted.
+Do not promote the runtime, call NVIDIA, call OX, or start NVIDIA-01 until the implementation candidate is reviewed and explicitly accepted.
 
 ---
 
 ## Plan Self-Review Checklist
-
-Before execution is authorized, verify this plan against the approved spec:
 
 1. Provider-neutral identity/model contracts: Task 1.
 2. Frozen attempt outcomes and transport-failure vocabulary: Task 1.
 3. Explicit lifecycle transitions and no `DISCOVERED -> QUALIFIED` shortcut: Task 2.
 4. `NVIDIA_API_KEY` only, exact hosted origin, bounded timeout, secret-safe repr: Task 3.
 5. Advisory/bounded catalog parser: Task 4.
-6. Exactly one catalog GET, zero retry, no inference, bounded body/error handling: Task 5.
+6. Exactly one catalog GET, redirects rejected, zero retry, no inference, bounded body/error handling: Task 5.
 7. Four provisional candidates represented without transport branching: Task 6.
 8. No candidate is `QUALIFIED` or `ENABLED`: Tasks 2, 6, 7.
 9. No server/MCP inference surface: no task touches `server.py`.
 10. OX/Wolfram behavior frozen: Global Constraints + Task 7 Git path gate.
-11. No live NVIDIA request in tests: all HTTP client tests inject `httpx.MockTransport`.
+11. No live NVIDIA request in tests: every HTTP test injects `httpx.MockTransport`.
 12. Secret/response-header isolation: Tasks 3, 5, 7.
 13. Full Python/Ruff regression gates: Task 7.
-14. NVIDIA-01 remains separate: final task explicitly stops before runtime promotion or live calls.
+14. NVIDIA-01 remains separate: Task 7 explicitly stops before runtime promotion or live calls.
 
 ## Execution Boundary
 
-This plan authorizes no implementation by itself. Execution begins only after Nolan approves this plan and selects an execution mode. The recommended mode is subagent-driven development with one fresh implementation context per task and review between tasks. Inline execution is also acceptable if each task preserves the same RED -> GREEN -> Ruff -> commit gates.
+This plan authorizes no implementation by itself. Execution begins only after Nolan approves this plan and selects an execution mode. Recommended mode: subagent-driven development with a fresh implementation context per task and review between tasks. Inline execution is also acceptable if every task preserves the same RED -> GREEN -> Ruff -> commit gates.
