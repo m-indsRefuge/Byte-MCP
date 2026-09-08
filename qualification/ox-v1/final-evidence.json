@@ -1,0 +1,443 @@
+{
+  "protocol": "ox-v1-final-evidence-v1",
+  "baseline_commit": "94ff28810a06b7af2207196ac98c1152cc65b4b1",
+  "last_review_id": "OX-000013",
+  "provider_requests_during_inventory": 0,
+  "files": [
+    {
+      "relative_path": "reviews/OX-000001/attempts/OX-000001-A001.json",
+      "byte_length": 267,
+      "sha256": "2e5c03161ff3696861d631a1da776470db8af2b3b5d9e186ae91d603946c034a"
+    },
+    {
+      "relative_path": "reviews/OX-000001/bundles/prepared.json",
+      "byte_length": 5124,
+      "sha256": "6943a40e64b29ea4efe9a63c0e7d623a6082a0c91678996f7021ffb41969347c"
+    },
+    {
+      "relative_path": "reviews/OX-000001/events.jsonl",
+      "byte_length": 372,
+      "sha256": "e1396cc57df289fcc8b749c81e6e7d79ddedd2ecad1e44f10a511cfa7574cb1d"
+    },
+    {
+      "relative_path": "reviews/OX-000001/findings/FINDINGS_INVALID-OX-000001-A001.json",
+      "byte_length": 151,
+      "sha256": "d89172e6a12762c053f97b59abd4d73fd25f8e8ba5935d5c421df3f28e00157d"
+    },
+    {
+      "relative_path": "reviews/OX-000001/manifest.json",
+      "byte_length": 1715,
+      "sha256": "0553622c8f3353128f44b9211ea4b39e96677a9c1dbde6d1f3bbc7a0403fe0d3"
+    },
+    {
+      "relative_path": "reviews/OX-000001/responses/OX-000001-A001.json",
+      "byte_length": 58002,
+      "sha256": "353c208c345a10085037833c555958618d1c05ee243be48d677c649a48a5dafb"
+    },
+    {
+      "relative_path": "reviews/OX-000001/review.json",
+      "byte_length": 1041,
+      "sha256": "c76f33c3b2ef6eebbfecf5f010cd14fd4f67ec83f6f13398c0fc4abcfb9b0777"
+    },
+    {
+      "relative_path": "reviews/OX-000001/threads/initial.jsonl",
+      "byte_length": 12651,
+      "sha256": "45cc172a6a67d03cea087ead731385544ace9f6796b3b7e8a34370197a43ac59"
+    },
+    {
+      "relative_path": "reviews/OX-000002/attempts/OX-000002-A001.json",
+      "byte_length": 267,
+      "sha256": "14a3c2ce189163aaf004c31a2b5678a06d8fda19eaf0522e5658a98cb79028e9"
+    },
+    {
+      "relative_path": "reviews/OX-000002/bundles/prepared.json",
+      "byte_length": 5124,
+      "sha256": "579c56b08182994dcda6e5d181dc298b6df15fa85d5976979c5dafeb952ba794"
+    },
+    {
+      "relative_path": "reviews/OX-000002/events.jsonl",
+      "byte_length": 372,
+      "sha256": "a1ad96d30191df36742996a17905746393c2266d40a3e15c1fee7f652aafa455"
+    },
+    {
+      "relative_path": "reviews/OX-000002/findings/findings.json",
+      "byte_length": 51,
+      "sha256": "dfa9d629155aa5d493f37df8e7ac5c10043983123fb52802c2f14e3a9db1cd6a"
+    },
+    {
+      "relative_path": "reviews/OX-000002/manifest.json",
+      "byte_length": 1715,
+      "sha256": "0f08168fa6840c6376a571ce82f462248e6dd8d139491d97a7f78e8423f2dc2e"
+    },
+    {
+      "relative_path": "reviews/OX-000002/responses/OX-000002-A001.json",
+      "byte_length": 34187,
+      "sha256": "59e20ce7db0376d2835c2133c1b576bc4dd6b200b31560182e342efb74f4b2c3"
+    },
+    {
+      "relative_path": "reviews/OX-000002/review.json",
+      "byte_length": 1041,
+      "sha256": "a4a43e9f773d664fe0a897778db9dfcd86b4cedcbef5047a6a223cbaf5ca70b0"
+    },
+    {
+      "relative_path": "reviews/OX-000002/threads/initial.jsonl",
+      "byte_length": 7254,
+      "sha256": "e6b59d2ad7ce1c02344eca84b15d4a3366d049cba1315f5426aa8603b7982375"
+    },
+    {
+      "relative_path": "reviews/OX-000003/attempts/OX-000003-A001.json",
+      "byte_length": 267,
+      "sha256": "fe8a91c15959da835e1714e63c9b2ee800b53e55aa9c6b7de52f2892d5b7c16d"
+    },
+    {
+      "relative_path": "reviews/OX-000003/bundles/prepared.json",
+      "byte_length": 686185,
+      "sha256": "c875140743fedb8ad9cd763a4a8785c1e437ee45b37a5585772bfd56f37ebfef"
+    },
+    {
+      "relative_path": "reviews/OX-000003/events.jsonl",
+      "byte_length": 378,
+      "sha256": "dc9550067751ed9351b9c45befac47731b632039ed0fea69f90460dfe9c59d62"
+    },
+    {
+      "relative_path": "reviews/OX-000003/manifest.json",
+      "byte_length": 7179,
+      "sha256": "19267799c503a9c9907237f1ed20615788cc1b0c393766f6b0e35f63c637ee9a"
+    },
+    {
+      "relative_path": "reviews/OX-000003/review.json",
+      "byte_length": 4210,
+      "sha256": "d00ba2750943f38bd2c29a2506a17874bb726398c82f5537497a8ce56c3a3257"
+    },
+    {
+      "relative_path": "reviews/OX-000003/threads/initial.jsonl",
+      "byte_length": 729485,
+      "sha256": "539f87a601cb4dcc8ecbed0122ea9422cc865a08bb57c18b06fc2f4b40d6f1cc"
+    },
+    {
+      "relative_path": "reviews/OX-000004/attempts/OX-000004-A001.json",
+      "byte_length": 267,
+      "sha256": "f289114ebd8de90834a7291b57b78365097c7c15e6cca1d65af9fa2dfb5b983d"
+    },
+    {
+      "relative_path": "reviews/OX-000004/bundles/prepared.json",
+      "byte_length": 687622,
+      "sha256": "658e324cf66ee835a23b793c985031da7c9277c7a16c76fcd1ce7e1925786a2d"
+    },
+    {
+      "relative_path": "reviews/OX-000004/events.jsonl",
+      "byte_length": 378,
+      "sha256": "d48de64bd3861b360f727f61af98c71c50d55ce116b225516e28ec09e0105631"
+    },
+    {
+      "relative_path": "reviews/OX-000004/manifest.json",
+      "byte_length": 7346,
+      "sha256": "0bf3589e526cf3b5903cc965df3fb19d56b1cb71e2894f76fdac1e0c945ae657"
+    },
+    {
+      "relative_path": "reviews/OX-000004/review.json",
+      "byte_length": 4433,
+      "sha256": "c1f8a4edb860cea08517c3565818a353cb88f34d5bf376d851adde5527822aef"
+    },
+    {
+      "relative_path": "reviews/OX-000004/threads/initial.jsonl",
+      "byte_length": 731005,
+      "sha256": "bf539a3fecb4caeaa490da8f7fdfd2e944b9cdaa7f93de0bcf248f279f89cf14"
+    },
+    {
+      "relative_path": "reviews/OX-000005/attempts/OX-000005-A001.json",
+      "byte_length": 267,
+      "sha256": "0ff30d8c328dedd706c71fa4dbb577b3421a6e4031fa223437d83b59fa7dd6c2"
+    },
+    {
+      "relative_path": "reviews/OX-000005/attempts/OX-000005-A002.json",
+      "byte_length": 273,
+      "sha256": "dc41b7d65511b99b1b204e830cb5ac804381c26a2513a5e9c46cdad0765c4f23"
+    },
+    {
+      "relative_path": "reviews/OX-000005/attempts/OX-000005-A003.json",
+      "byte_length": 273,
+      "sha256": "3453fbfbb5cc76544fd0123ad5c03b9c10194b740ffe9180d5d478416608b3ac"
+    },
+    {
+      "relative_path": "reviews/OX-000005/bundles/prepared.json",
+      "byte_length": 407247,
+      "sha256": "a8c0847a7218aecf7bf4ba8b3975a01e0adaa4f882bd23d22de7b7c59d36f7f5"
+    },
+    {
+      "relative_path": "reviews/OX-000005/events.jsonl",
+      "byte_length": 864,
+      "sha256": "13a1262e797270b9201f60d579368185b329ea1ddb68529145aafa83b2a683af"
+    },
+    {
+      "relative_path": "reviews/OX-000005/manifest.json",
+      "byte_length": 7326,
+      "sha256": "03602558daf867087bf50be6679e988c9fa4fb1f24f88c7b6ebefd7b55c272f9"
+    },
+    {
+      "relative_path": "reviews/OX-000005/review.json",
+      "byte_length": 1525,
+      "sha256": "e5daba9119c25f04441b5c69fd63eab5f08fb972f474fdc5cf74a737651810a7"
+    },
+    {
+      "relative_path": "reviews/OX-000005/threads/initial.jsonl",
+      "byte_length": 433091,
+      "sha256": "d39b9648b34ae7606927b4d926f325efeb01e6a44c8899f38d8c72d7d52d4f28"
+    },
+    {
+      "relative_path": "reviews/OX-000006/attempts/OX-000006-A001.json",
+      "byte_length": 267,
+      "sha256": "dfe129c8e7602d98f4ae4d1a05c63da6da1d52547d54e22769fdd46921441f8f"
+    },
+    {
+      "relative_path": "reviews/OX-000006/bundles/prepared.json",
+      "byte_length": 554882,
+      "sha256": "914691b2273d5f4bc5ad30358cc905a6439233bca1a3af7b3687af309dcb6c47"
+    },
+    {
+      "relative_path": "reviews/OX-000006/events.jsonl",
+      "byte_length": 415,
+      "sha256": "70f252d48da8b4de1835cbcce7f7ca72aa4b402959b9508c8aab85fd46a0180c"
+    },
+    {
+      "relative_path": "reviews/OX-000006/manifest.json",
+      "byte_length": 9599,
+      "sha256": "085924627ab05495563f3b0dd64a9824b6910807ebe70038586dbefb93e2eb41"
+    },
+    {
+      "relative_path": "reviews/OX-000006/review.json",
+      "byte_length": 2878,
+      "sha256": "3da80b89170971609fe840cbb773933deca86ccd9e2365ab27ee0221504e6971"
+    },
+    {
+      "relative_path": "reviews/OX-000006/threads/initial.jsonl",
+      "byte_length": 589162,
+      "sha256": "686b6e018c9243de518c7d1f06bc5a4fa3a1f49943d8d149671d6996be8faa5a"
+    },
+    {
+      "relative_path": "reviews/OX-000007/attempts/OX-000007-A001.json",
+      "byte_length": 267,
+      "sha256": "8cf1c74d821d4d4a284a51c2506b1841eb23ee3176eeefe5398fc572329b5263"
+    },
+    {
+      "relative_path": "reviews/OX-000007/bundles/prepared.json",
+      "byte_length": 407283,
+      "sha256": "0f527fb5708a995bff1c97d918a91c9439754975482266b16d9d5d3fbe49b467"
+    },
+    {
+      "relative_path": "reviews/OX-000007/events.jsonl",
+      "byte_length": 378,
+      "sha256": "2c35d56d9848b6c5696cd6e43e77d719da11ac8caa45a6f2044237d0bf57d6d0"
+    },
+    {
+      "relative_path": "reviews/OX-000007/manifest.json",
+      "byte_length": 7328,
+      "sha256": "6962745af66b692a97dac42bc885d4a29689a63fc43035f69d67003a566bb1bb"
+    },
+    {
+      "relative_path": "reviews/OX-000007/review.json",
+      "byte_length": 1287,
+      "sha256": "5c907cd263ad6d35e97278582082a9b0e8cffb6e7a3ae2409e95d349cdefa3a9"
+    },
+    {
+      "relative_path": "reviews/OX-000007/threads/initial.jsonl",
+      "byte_length": 432795,
+      "sha256": "fa75c1824685bc27670caa30d3065f35d597f812f1671d71111cc0042299edac"
+    },
+    {
+      "relative_path": "reviews/OX-000008/attempts/OX-000008-A001.json",
+      "byte_length": 267,
+      "sha256": "7f920be548d6e3ff85bb52c8edbd29de1e405483d2cfdc1eacaec0af37bf7bdb"
+    },
+    {
+      "relative_path": "reviews/OX-000008/bundles/prepared.json",
+      "byte_length": 513663,
+      "sha256": "40283e202e22bccb326861e328fec52bdb382642335b14d320d02f3ef1a81749"
+    },
+    {
+      "relative_path": "reviews/OX-000008/events.jsonl",
+      "byte_length": 427,
+      "sha256": "54451fc2f9413e8ab65b2485ddf5e980dbc8d731c0b2c1957b2960259fce7539"
+    },
+    {
+      "relative_path": "reviews/OX-000008/manifest.json",
+      "byte_length": 8273,
+      "sha256": "d739dd9f1f13ba5210a2eca9110a61ab95086eb302fdb15e41936fe2821702e4"
+    },
+    {
+      "relative_path": "reviews/OX-000008/review.json",
+      "byte_length": 2740,
+      "sha256": "79905994b3e06c309abdb72b0b0893b3ab9f1a32f0f1dc98c414d3de11325c5d"
+    },
+    {
+      "relative_path": "reviews/OX-000008/threads/initial.jsonl",
+      "byte_length": 546241,
+      "sha256": "ee0274686e11041cfc14e86e69528fcd06f93f77f21d4f7068289b7c97de45ca"
+    },
+    {
+      "relative_path": "reviews/OX-000009/attempts/OX-000009-A001.json",
+      "byte_length": 267,
+      "sha256": "b20cffa0bdc45d71b4a1b1cee7aaf9b4d4668c95e2f8b717505716810f938367"
+    },
+    {
+      "relative_path": "reviews/OX-000009/bundles/prepared.json",
+      "byte_length": 461547,
+      "sha256": "5000e26055528f8c7017909247445a00fcb0c6656b69aea6329c530d0e67e2c0"
+    },
+    {
+      "relative_path": "reviews/OX-000009/events.jsonl",
+      "byte_length": 421,
+      "sha256": "3eac98a517840f69e9220d8c132738092b48cd7f37c872411c16a1b7cc790949"
+    },
+    {
+      "relative_path": "reviews/OX-000009/manifest.json",
+      "byte_length": 8445,
+      "sha256": "41848de962ad2974b14eb560bad2e04ea58f11dadff636965036b832cc633781"
+    },
+    {
+      "relative_path": "reviews/OX-000009/responses/OX-000009-A001.json",
+      "byte_length": 59543,
+      "sha256": "be3ce837351f082c5cb4228ec18642107bef2d24e2a3359861f3fe8c7f97fccf"
+    },
+    {
+      "relative_path": "reviews/OX-000009/review.json",
+      "byte_length": 2471,
+      "sha256": "dd9154754daea06ccb3bcd6f2184812f86fef24d97010548bd5a848b1790d750"
+    },
+    {
+      "relative_path": "reviews/OX-000009/threads/initial.jsonl",
+      "byte_length": 499020,
+      "sha256": "cf4fffda1da7eb7f708a130fd7de87efbfc1f6c46ada4efe890111715d4aea26"
+    },
+    {
+      "relative_path": "reviews/OX-000010/attempts/OX-000010-A001.json",
+      "byte_length": 267,
+      "sha256": "69bd60acee377d30b4bb561bfd397201d7a2bca0599e6583215c5422567321cc"
+    },
+    {
+      "relative_path": "reviews/OX-000010/bundles/prepared.json",
+      "byte_length": 558477,
+      "sha256": "bfb696f7d3bddc050c85eb778894398b9b13423ade128a536af726e5b739cb9f"
+    },
+    {
+      "relative_path": "reviews/OX-000010/events.jsonl",
+      "byte_length": 427,
+      "sha256": "49209c8812a4d627ffc0d381f2496566851a1e3393b4742e37b549859dc4ede5"
+    },
+    {
+      "relative_path": "reviews/OX-000010/manifest.json",
+      "byte_length": 8454,
+      "sha256": "1d6590e52ff027ecc5ac62845166d99b4353b0d3a338bbec24d2f62ec78daccd"
+    },
+    {
+      "relative_path": "reviews/OX-000010/review.json",
+      "byte_length": 3010,
+      "sha256": "e0ef3e9a047b7afdef5d7e501edb006919de220600863040c9dfe99988d455db"
+    },
+    {
+      "relative_path": "reviews/OX-000010/threads/initial.jsonl",
+      "byte_length": 592855,
+      "sha256": "5c9e79b2ca102194cd8e2063b435eb00b4b0cd7739c0edb9fa16ebb00cb43d26"
+    },
+    {
+      "relative_path": "reviews/OX-000011/attempts/OX-000011-A001.json",
+      "byte_length": 323,
+      "sha256": "a0367a5f3de48f6a41be57294279054b42e36111947e49711d5e41b512e114a4"
+    },
+    {
+      "relative_path": "reviews/OX-000011/bundles/prepared.json",
+      "byte_length": 1255314,
+      "sha256": "5b42bc04b5b172694a061851dcb9fa0422859bccb3daca47c699a67246f50e71"
+    },
+    {
+      "relative_path": "reviews/OX-000011/events.jsonl",
+      "byte_length": 936,
+      "sha256": "6a27d0f26b8633a56f1618d24275c7107d75a38d99a3c02bf49565814c73d0f5"
+    },
+    {
+      "relative_path": "reviews/OX-000011/manifest.json",
+      "byte_length": 9278,
+      "sha256": "20ec73f4ec558b56e4c0ea1aec86e7e09981efe2e1e5aeadcc3c203067f95b06"
+    },
+    {
+      "relative_path": "reviews/OX-000011/review.json",
+      "byte_length": 1185,
+      "sha256": "40be40173715ce38fcdbbce972559d0c38107e533176277e39df74f46619ff84"
+    },
+    {
+      "relative_path": "reviews/OX-000011/threads/initial.jsonl",
+      "byte_length": 1322863,
+      "sha256": "e639b3ffef737e5cb104410fb4cb98df1755ab6fc64b77d4e85f6607dcf4c7ae"
+    },
+    {
+      "relative_path": "reviews/OX-000012/attempts/OX-000012-A001.json",
+      "byte_length": 323,
+      "sha256": "5ef39622a75fc8d597b008c777ef3dddc8a0be9c7877c1631cc22cd0b54934ce"
+    },
+    {
+      "relative_path": "reviews/OX-000012/bundles/prepared.json",
+      "byte_length": 681441,
+      "sha256": "846f287c398f86668d29954b99417328401b405e63108ff9f5b5fb328ae518ff"
+    },
+    {
+      "relative_path": "reviews/OX-000012/events.jsonl",
+      "byte_length": 672,
+      "sha256": "c37e49578ba5a39ce341a0cf178950133dc51c47972d7f4cf51a2b7ab20dfc1f"
+    },
+    {
+      "relative_path": "reviews/OX-000012/manifest.json",
+      "byte_length": 10069,
+      "sha256": "74d57c22a930d8e726f03be92ec34b8ca89a4e4abeb59479a624e0feb3eb5f34"
+    },
+    {
+      "relative_path": "reviews/OX-000012/responses/OX-000012-A001.json",
+      "byte_length": 31432,
+      "sha256": "186db7dea5db2271c9e3e17b25143af5e4dca5ca68750a39223e19108eba0d95"
+    },
+    {
+      "relative_path": "reviews/OX-000012/review.json",
+      "byte_length": 2372,
+      "sha256": "f84c7f3c8eb73eee2fa02d7eefd60519baa568cdcb5b3ed82aad3a01357e7e78"
+    },
+    {
+      "relative_path": "reviews/OX-000012/threads/initial.jsonl",
+      "byte_length": 729730,
+      "sha256": "d3f2a16970010d71d29a52991e00b5df98942813d42d7f2165741324268de15c"
+    },
+    {
+      "relative_path": "reviews/OX-000013/attempts/OX-000013-A001.json",
+      "byte_length": 323,
+      "sha256": "bd97f0d1c0ea75c6a3c730b942ae4084250f160a5829eb403755700e522915b1"
+    },
+    {
+      "relative_path": "reviews/OX-000013/bundles/prepared.json",
+      "byte_length": 929276,
+      "sha256": "82e072e8e4d82fe7345f59279310fe402e5fa6cd43813a2b56b84c2964c308b9"
+    },
+    {
+      "relative_path": "reviews/OX-000013/events.jsonl",
+      "byte_length": 1348,
+      "sha256": "251e175b19339da66e9588235389a9fdcb934b5479f1dc3d34f3932e4d09e107"
+    },
+    {
+      "relative_path": "reviews/OX-000013/manifest.json",
+      "byte_length": 10197,
+      "sha256": "2f3c466144eb598609c85afd977aaff0af21b1d1864ae8a785dc5f87944dda67"
+    },
+    {
+      "relative_path": "reviews/OX-000013/responses/OX-000013-A001.json",
+      "byte_length": 146074,
+      "sha256": "583d1bde819a6e8821200e9cc381aa4db524f0c0b4c1ed71598b8035601a52a1"
+    },
+    {
+      "relative_path": "reviews/OX-000013/review.json",
+      "byte_length": 1217,
+      "sha256": "7bfb5f8c6ab887e1131aff986323e88ca3425469924b1e61ee6c5482d6813e3c"
+    },
+    {
+      "relative_path": "reviews/OX-000013/threads/initial.jsonl",
+      "byte_length": 989200,
+      "sha256": "565e641a875460b67a4f013c45f2db2c96ac8e321339887f5e917b0032b444a0"
+    }
+  ]
+}
