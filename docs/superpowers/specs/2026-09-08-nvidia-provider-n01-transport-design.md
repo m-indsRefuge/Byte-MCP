@@ -150,9 +150,25 @@ provider_id = "nvidia-api-catalog"
 
 The object is frozen/immutable.
 
-Its ordinary `repr` must never include `body_bytes`, message content, API credentials, or authorization headers. It may expose only bounded metadata such as provider/model/path and hashes.
+Its ordinary `repr` must never include `body_bytes`, message content, system-managed API credentials, or authorization headers. It may expose only bounded metadata such as provider/model/path and hashes.
 
-### 6.1 Exact wire-byte rule
+### 6.1 Target validation
+
+NVIDIA-01 supports `POST` only.
+
+A provider-neutral prepared target must satisfy all of the following:
+
+- method is exactly `POST`;
+- target origin uses HTTPS;
+- target origin contains scheme + host only, with optional explicit port;
+- target origin contains no user info, path, query, or fragment;
+- endpoint path begins with `/`;
+- endpoint path contains no scheme, authority, query, or fragment;
+- provider/model identifiers pass existing NVIDIA-00 validation.
+
+The NVIDIA adapter fixes the exact NVIDIA target and does not accept caller-controlled production origins.
+
+### 6.2 Exact wire-byte rule
 
 The request body is converted to canonical JSON **exactly once** during preparation.
 
@@ -174,7 +190,7 @@ The resulting `body_bytes` are the exact bytes later transmitted by the transpor
 
 The transport must send the bytes using request content/body semantics. It must not pass the original Python mapping through `httpx`'s `json=` parameter, because that could serialize a representation different from the one that was hashed and authorized.
 
-### 6.2 Request body bound
+### 6.3 Request body bound
 
 Canonical request bytes are limited to:
 
@@ -186,7 +202,7 @@ An oversized prepared request fails locally before transport execution and there
 
 NVIDIA-01 request preparation itself does not create an attempt outcome because it occurs before transmission.
 
-### 6.3 Payload hash
+### 6.4 Payload hash
 
 `payload_sha256` is:
 
@@ -196,7 +212,7 @@ SHA256(body_bytes)
 
 encoded as lowercase hexadecimal.
 
-### 6.4 Request identity hash
+### 6.5 Request identity hash
 
 `request_sha256` is derived from a canonical metadata envelope that binds the exact payload to the exact logical destination:
 
@@ -223,7 +239,7 @@ Therefore `request_sha256` changes if any of the following changes:
 - model identity;
 - exact body bytes.
 
-The API key is not part of either hash.
+The system-managed API key is not part of either hash.
 
 ## 7. Transmission context
 
@@ -234,11 +250,14 @@ It therefore consumes a caller-supplied immutable transmission context:
 ```text
 ProviderTransmissionContext
   provider_started_at: str
+  expected_request_sha256: str
 ```
 
 `provider_started_at` must be timezone-aware ISO-8601.
 
-The transport may validate and return this timestamp, but it does not create durable evidence for it.
+`expected_request_sha256` must be a lowercase SHA-256 hex digest and must exactly match the `PreparedProviderRequest.request_sha256` supplied to execution.
+
+The transport may defensively validate these values, but it does not create durable evidence for them.
 
 This is intentional. NVIDIA-02 must be able to perform:
 
@@ -246,13 +265,51 @@ This is intentional. NVIDIA-02 must be able to perform:
 prepare request
   -> persist immutable request identity
   -> obtain explicit human authorization
-  -> durably persist provider_started_at
+  -> durably persist provider_started_at + approved request_sha256
   -> immediately call execute_once(...)
 ```
 
 without changing the NVIDIA-01 transport API.
 
-## 8. Timeout policy
+A request-hash mismatch must fail locally without network transmission. NVIDIA-02 will terminalize such a future attempt as `NOT_SENT`; NVIDIA-01 itself does not persist attempt state.
+
+## 8. Provider-neutral authorization value
+
+Execution credentials remain separate from prepared request identity and durable request evidence.
+
+NVIDIA-01 introduces a small immutable/redacted execution credential wrapper conceptually equivalent to:
+
+```text
+ProviderAuthorization
+  authorization_header_value: str
+```
+
+Rules:
+
+- value is non-empty and bounded;
+- CR/LF/control-character injection is rejected;
+- ordinary `repr` reveals only that authorization is configured;
+- the value is never persisted by transport observation or returned domain objects.
+
+The provider-neutral transport does not accept arbitrary execution-time headers.
+
+It sets only:
+
+```text
+Authorization: <ProviderAuthorization value>
+Content-Type: application/json
+Accept: application/json
+```
+
+This prevents un-hashed caller-controlled headers from silently changing request semantics after `request_sha256` has been frozen.
+
+NVIDIA constructs the value as:
+
+```text
+Bearer <NVIDIA_API_KEY>
+```
+
+## 9. Timeout policy
 
 NVIDIA-01 introduces a provider-neutral immutable `ProviderTimeoutPolicy`.
 
@@ -268,13 +325,34 @@ absolute_deadline_seconds: 300
 
 All timeout values must be finite positive numbers with a hard maximum of 600 seconds.
 
-The generic contract may accept sub-second positive values so deterministic tests can exercise absolute-deadline behavior without slow tests. Production NVIDIA settings must enforce sensible production minimums and the fixed/hard maxima.
+The generic contract may accept sub-second positive values so deterministic tests can exercise absolute-deadline behavior without slow tests.
+
+`NvidiaHostedSettings.load()` gains these exact bounded environment settings:
+
+```text
+BYTE_MCP_NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS
+  default 10, allowed 1..60
+
+BYTE_MCP_NVIDIA_CHAT_WRITE_TIMEOUT_SECONDS
+  default 30, allowed 1..120
+
+BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS
+  default 300, allowed 1..600
+
+BYTE_MCP_NVIDIA_CHAT_POOL_TIMEOUT_SECONDS
+  default 10, allowed 1..60
+
+BYTE_MCP_NVIDIA_CHAT_ABSOLUTE_DEADLINE_SECONDS
+  default 300, allowed 1..600
+```
+
+The resulting production values are converted into `ProviderTimeoutPolicy` before provider start.
 
 The absolute deadline wraps the complete provider operation and is authoritative even if an individual component timeout is longer.
 
 No timeout path grants retry authority.
 
-## 9. Provider-neutral transport observation
+## 10. Provider-neutral transport observation
 
 NVIDIA-01 introduces an immutable bounded `ProviderTransportObservation` containing only metadata:
 
@@ -309,7 +387,7 @@ It must never retain:
 
 `decoded_body_bytes_received` counts decoded bytes yielded by `httpx`, consistent with the existing OX receive-path convention.
 
-## 10. Exactly-once provider-neutral HTTP transport
+## 11. Exactly-once provider-neutral HTTP transport
 
 The shared transport exposes one async execution operation conceptually equivalent to:
 
@@ -317,6 +395,7 @@ The shared transport exposes one async execution operation conceptually equivale
 await execute_once(
   prepared_request,
   transmission_context,
+  authorization,
   timeout_policy,
   transport=<optional injected httpx async transport>,
 )
@@ -335,22 +414,31 @@ trust_env = True
 
 The transport must not contain a retry loop, retry helper, backoff helper, reconnect helper, alternate target URL, alternate model, or alternate provider.
 
-### 10.1 Exact transmission
+### 11.1 Pre-transmission local checks
+
+All request construction, JSON serialization, hashing, NVIDIA request validation, timeout construction, and credential loading occur before the future NVIDIA-02 provider-start evidence write.
+
+Immediately before network dispatch, `execute_once` performs only bounded deterministic checks of already-created objects, including the request-hash equality check.
+
+No catalog lookup, model lookup, filesystem access, payload reconstruction, payload reserialization, DNS probe, or auxiliary provider operation is allowed between future durable provider-start evidence and the one HTTP request.
+
+### 11.2 Exact transmission
 
 The transport constructs the URL from the validated `target_origin + endpoint_path` and transmits:
 
 ```text
 method: POST
 Content-Type: application/json
-Authorization: Bearer <provider credential supplied outside prepared body>
+Accept: application/json
+Authorization: <redacted execution credential>
 body: prepared_request.body_bytes
 ```
 
-The provider-neutral transport does **not** know the NVIDIA credential. NVIDIA supplies the complete bounded header mapping at the adapter boundary.
+The provider-neutral transport does **not** know the NVIDIA API key as a named setting and never stores the authorization value after execution.
 
-The transport must reject attempts to override the prepared method/URL/body through separate caller arguments.
+The transport rejects attempts to override the prepared method/URL/body or add arbitrary headers through separate caller arguments.
 
-### 10.2 Response-body bound
+### 11.3 Response-body bound
 
 The transport buffers at most:
 
@@ -358,11 +446,17 @@ The transport buffers at most:
 8,000,000 decoded response bytes
 ```
 
-If the response exceeds the limit after headers were received, the attempt is a complete/known transmission with an unusable oversized response only if the transport has received a complete bounded rejection envelope before crossing the limit. Otherwise, crossing the local receive bound before complete response consumption is treated conservatively as `OUTCOME_UNKNOWN`, because Byte-MCP cannot prove a complete terminal provider response was received.
+If consuming the response would exceed this bound before complete response consumption, the local receive operation aborts and the attempt is classified conservatively as:
 
-The implementation plan must test and preserve this conservative rule.
+```text
+OUTCOME_UNKNOWN
+```
 
-## 11. Provider-neutral transport outcomes
+This rule applies regardless of the HTTP status already received. Headers alone are not proof that Byte-MCP received a complete terminal provider response.
+
+No oversized-response path may automatically retry or resend.
+
+## 12. Provider-neutral transport outcomes
 
 NVIDIA-01 uses the NVIDIA-00 `ProviderAttemptOutcome` values unchanged:
 
@@ -375,7 +469,7 @@ OUTCOME_UNKNOWN
 
 The transport maps failures as follows.
 
-### 11.1 NOT_SENT
+### 12.1 NOT_SENT
 
 The following are classified as `NOT_SENT` because Byte-MCP has trustworthy local evidence that no provider-capable remote service accepted request bytes:
 
@@ -385,7 +479,7 @@ CONNECT_ERROR
 POOL_TIMEOUT
 ```
 
-### 11.2 OUTCOME_UNKNOWN
+### 12.2 OUTCOME_UNKNOWN
 
 The following are classified as `OUTCOME_UNKNOWN` because transmission may have occurred and Byte-MCP lacks proof of a complete terminal response:
 
@@ -403,7 +497,7 @@ A local response-size abort before complete response consumption is also `OUTCOM
 
 No `OUTCOME_UNKNOWN` path may resend automatically.
 
-### 11.3 Complete HTTP responses
+### 12.3 Complete HTTP responses
 
 A fully received HTTP response has deterministic transport outcome:
 
@@ -414,7 +508,7 @@ A fully received HTTP response has deterministic transport outcome:
 
 `REJECTED` describes transmission/HTTP completion only. It grants no retry permission.
 
-## 12. Provider-neutral transport error
+## 13. Provider-neutral transport error
 
 Transport failures surface as a bounded provider-neutral error object containing at least:
 
@@ -430,7 +524,7 @@ It must not retain the original `httpx` exception as `__cause__` or `__context__
 
 NVIDIA-specific code must not translate a provider-neutral ambiguous transport error into a deterministic application rejection.
 
-## 13. NVIDIA hosted settings extension
+## 14. NVIDIA hosted settings extension
 
 `NvidiaHostedSettings` remains the single hosted NVIDIA credential/configuration object.
 
@@ -442,7 +536,7 @@ Existing rules remain frozen:
 - key is absent from `repr`;
 - missing configuration fail-isolates NVIDIA.
 
-NVIDIA-01 adds validated chat timeout configuration only if required by the implementation plan. It must not add an arbitrary production base-URL override.
+NVIDIA-01 adds the five chat timeout values defined in section 9. It does not add an arbitrary production base-URL override.
 
 The production chat target is exactly:
 
@@ -450,7 +544,7 @@ The production chat target is exactly:
 https://integrate.api.nvidia.com/v1/chat/completions
 ```
 
-## 14. NVIDIA chat request contract
+## 15. NVIDIA chat request contract
 
 NVIDIA-01 supports one deliberately small non-streaming text-chat request shape.
 
@@ -480,7 +574,7 @@ Wire body:
 }
 ```
 
-### 14.1 Message roles
+### 15.1 Message roles
 
 NVIDIA-01 text-chat messages allow only:
 
@@ -501,7 +595,7 @@ content: str
 
 Unknown message fields are rejected before request preparation rather than forwarded.
 
-### 14.2 Numeric bounds
+### 15.2 Numeric bounds
 
 The adapter validates:
 
@@ -517,7 +611,7 @@ Booleans are not accepted as numeric values. NaN and Infinity are forbidden.
 
 These are Byte-MCP safety/schema bounds, not claims that every NVIDIA model supports the maximum values.
 
-### 14.3 Excluded NVIDIA/model-specific fields
+### 15.3 Excluded NVIDIA/model-specific fields
 
 NVIDIA-01 does not send:
 
@@ -536,14 +630,14 @@ provider-specific routing hints
 
 Model-specific reasoning controls belong to NVIDIA-03 characterization, not shared transport.
 
-## 15. NVIDIA chat adapter ownership
+## 16. NVIDIA chat adapter ownership
 
 `byte_mcp.nvidia.chat` owns:
 
 - NVIDIA chat request validation;
 - construction of the canonical request mapping;
 - creation of `PreparedProviderRequest`;
-- NVIDIA Authorization header construction at execution time;
+- NVIDIA `ProviderAuthorization` construction at execution time;
 - safe HTTP status classification;
 - successful response-envelope parsing;
 - bounded `NvidiaChatResult` values.
@@ -558,7 +652,7 @@ It does not own:
 - qualification state transitions;
 - runtime/MCP registration.
 
-## 16. NVIDIA safe HTTP rejection classification
+## 17. NVIDIA safe HTTP rejection classification
 
 For a fully received non-2xx response, NVIDIA maps status to a bounded chat failure kind:
 
@@ -581,7 +675,7 @@ Arbitrary provider error prose is never returned or persisted.
 
 A full non-2xx response remains transport outcome `REJECTED` even if the body is malformed or absent. Application classification may fall back to the bounded status-based category.
 
-## 17. Successful response-envelope contract
+## 18. Successful response-envelope contract
 
 A 2xx response is transport outcome `COMPLETED` before protocol parsing begins.
 
@@ -589,7 +683,7 @@ The NVIDIA parser requires a bounded OpenAI-compatible object with:
 
 ```text
 model: string
-choices: list containing exactly one usable choice
+choices: list containing exactly one choice
 choices[0].index: 0
 choices[0].message.role: "assistant"
 choices[0].message.content: string
@@ -602,7 +696,7 @@ The returned `model` must equal the prepared request's `model_id` exactly.
 
 Unknown top-level, choice-level, message-level, and usage fields are ignored rather than persisted.
 
-### 17.1 Result bounds
+### 18.1 Result bounds
 
 `NvidiaChatResult` retains only:
 
@@ -617,11 +711,22 @@ payload_sha256
 transport_observation
 ```
 
+Assistant `content` is bounded indirectly by the 8 MB complete response-body limit. `NvidiaChatResult.__repr__` must not include assistant content; it may expose only bounded metadata such as model, character count, hashes, finish reason, and usage.
+
 The result is provider output data only. It is never interpreted as executable instructions.
 
 The adapter does not persist it automatically.
 
-### 17.2 Usage
+### 18.2 Bounded scalar fields
+
+If present:
+
+- `finish_reason` must be `null` or a string of at most 64 characters containing only ASCII letters, digits, `.`, `_`, or `-`;
+- response `id` must be a string of at most 256 characters with no control characters.
+
+The assistant content may contain arbitrary Unicode text because it is provider output, but it remains bounded by the complete response-body cap.
+
+### 18.3 Usage
 
 If `usage` is present, accepted fields are:
 
@@ -631,18 +736,20 @@ completion_tokens
 total_tokens
 ```
 
-Each must be a non-negative integer if present. Unknown usage fields are discarded.
+Each must be a non-negative integer no greater than `2_147_483_647` if present. Booleans are rejected as integers. Unknown usage fields are discarded.
 
 Missing usage is allowed.
 
-### 17.3 Protocol failure after complete transport
+### 18.4 Protocol failure after complete transport
 
 If a fully received 2xx response has malformed JSON, the wrong model, malformed choices, invalid content, or otherwise fails the bounded response contract:
 
 ```text
 transport outcome: COMPLETED
-usable result state: PROTOCOL_FAILURE
+NVIDIA chat error kind: PROTOCOL
 ```
+
+NVIDIA-01 does not add a second provider-neutral result-state enum. The distinction is represented by `ProviderAttemptOutcome.COMPLETED` plus the NVIDIA-specific bounded `PROTOCOL` error.
 
 This distinction is frozen.
 
@@ -650,7 +757,7 @@ Protocol failure must never be rewritten as `OUTCOME_UNKNOWN` merely because the
 
 Likewise, protocol failure does not authorize an automatic retry.
 
-## 18. NVIDIA chat error contract
+## 19. NVIDIA chat error contract
 
 NVIDIA application/protocol failures surface through a bounded NVIDIA-specific error carrying at least:
 
@@ -678,14 +785,14 @@ The error must not retain:
 
 - provider response prose;
 - raw body bytes;
-- API key;
+- system-managed API key;
 - authorization headers;
 - arbitrary headers;
 - raw `httpx` exception text.
 
-## 19. Credential boundary
+## 20. Credential boundary
 
-The API key is never included in:
+The system-managed NVIDIA API key is never inserted by Byte-MCP into:
 
 - `PreparedProviderRequest`;
 - canonical request body;
@@ -697,6 +804,8 @@ The API key is never included in:
 - test snapshots;
 - durable evidence in future phases.
 
+User-provided message content remains user-controlled data; Byte-MCP does not claim to detect secrets a caller intentionally places inside a prompt.
+
 The NVIDIA adapter adds the Authorization header only at the final execution boundary:
 
 ```text
@@ -705,25 +814,25 @@ Authorization: Bearer <NVIDIA_API_KEY>
 
 Redirect following is disabled, so the bearer credential is never intentionally forwarded to a redirect target.
 
-## 20. Provider-start adjacency preparation
+## 21. Provider-start adjacency preparation
 
 NVIDIA-01 itself does not persist provider-start evidence.
 
 However, its API is designed so NVIDIA-02 can enforce the following adjacency:
 
 ```text
-durable provider_started_at write
-  -> execute_once(prepared_request, same provider_started_at)
+durable provider_started_at + approved request_sha256 write
+  -> execute_once(prepared_request, matching transmission_context)
   -> exactly one HTTP transmission
 ```
 
 No catalog call, model lookup, payload reserialization, filesystem scan, or other potentially blocking operation may be required between the future durable provider-start write and `execute_once`.
 
-All validation/preparation that can fail must therefore occur before NVIDIA-02 records provider start.
+All validation/preparation that can fail must occur before NVIDIA-02 records provider start, except for bounded defensive object/hash consistency checks that perform no I/O and cannot contact a provider.
 
 This requirement is a design constraint on NVIDIA-01 even though durable evidence arrives in NVIDIA-02.
 
-## 21. Offline testing strategy
+## 22. Offline testing strategy
 
 All NVIDIA-01 tests are provider-offline.
 
@@ -731,7 +840,7 @@ No real NVIDIA API key is required.
 
 All HTTP tests use injected `httpx` transports or deterministic local async test doubles.
 
-### 21.1 Prepared request tests
+### 22.1 Prepared request tests
 
 Verify:
 
@@ -740,12 +849,24 @@ Verify:
 - message list ordering does change identity when semantically changed;
 - `payload_sha256` hashes exact transmitted bytes;
 - `request_sha256` changes when target/provider/model/path/body changes;
-- API credential is absent from prepared state;
+- target origin/path validation fails closed;
+- system-managed API credential is absent from prepared state;
 - `repr` does not expose request content;
 - 4 MB request bound is enforced before transport;
 - NaN/Infinity and unsupported values fail closed.
 
-### 21.2 Transport tests
+### 22.2 Transmission/authorization tests
+
+Verify:
+
+- transmission context requires timezone-aware `provider_started_at`;
+- transmission context requires lowercase SHA-256 expected request identity;
+- expected hash mismatch fails with zero network calls;
+- authorization wrapper is redacted;
+- CR/LF/control characters in authorization are rejected;
+- no arbitrary caller headers can be added at execution.
+
+### 22.3 Transport tests
 
 Verify:
 
@@ -761,17 +882,18 @@ Verify:
 - full 2xx -> `COMPLETED`;
 - full 3xx/4xx/5xx -> `REJECTED`;
 - response observation contains metadata only;
-- 8 MB response bound is enforced conservatively;
+- every response-size overflow before complete consumption -> `OUTCOME_UNKNOWN`;
 - proxy presence is recorded as boolean only;
 - provider-start timestamp is preserved from caller context;
 - raw exceptions do not survive in exception cause/context.
 
-### 21.3 NVIDIA request tests
+### 22.4 NVIDIA request tests
 
 Verify:
 
 - exact NVIDIA origin/path;
 - only `NVIDIA_API_KEY` is used;
+- five production timeout settings have the exact defaults/bounds in section 9;
 - supported roles only;
 - unknown message fields rejected;
 - numeric bounds enforced;
@@ -780,7 +902,7 @@ Verify:
 - Nemotron Lightning can be represented without model-specific transport branching;
 - preparation performs zero provider calls.
 
-### 21.4 NVIDIA response/error tests
+### 22.5 NVIDIA response/error tests
 
 Verify:
 
@@ -790,11 +912,12 @@ Verify:
 - one assistant choice/index 0;
 - bounded content/finish/id/usage parsing;
 - unknown fields discarded;
-- malformed 2xx -> `COMPLETED` + protocol failure;
+- result `repr` does not expose assistant content;
+- malformed 2xx -> `COMPLETED` + NVIDIA `PROTOCOL` error;
 - non-2xx complete response -> `REJECTED`;
-- raw body/headers/key absent from returned errors/results except the explicitly allowed assistant content in the result.
+- raw body/headers/key absent from returned errors/results except the explicitly returned assistant content field.
 
-### 21.5 Security/isolation tests
+### 22.6 Security/isolation tests
 
 Verify:
 
@@ -805,7 +928,7 @@ Verify:
 - no live provider network route is exercised by tests;
 - no retry/fallback helper exists in the NVIDIA-01 execution path.
 
-## 22. Quality gates
+## 23. Quality gates
 
 NVIDIA-01 uses the baseline-aware quality policy established during NVIDIA-00.
 
@@ -824,7 +947,7 @@ Repository-wide historical Ruff formatting debt that is byte-for-byte unchanged 
 
 The repository-wide `ruff format --check .` result may remain non-zero only when every remaining failure is proven to predate NVIDIA-01 and lies outside the NVIDIA-01 changed-file set.
 
-## 23. Provider call boundary
+## 24. Provider call boundary
 
 During NVIDIA-01 design, implementation, and qualification:
 
@@ -840,7 +963,7 @@ fallbacks: 0
 
 The first live `/v1/chat/completions` request belongs to NVIDIA-02 and requires a separate explicit authorization tied to an immutable prepared request identity.
 
-## 24. Expected implementation file boundary
+## 25. Expected implementation file boundary
 
 The implementation plan should preferentially limit production changes to:
 
@@ -869,33 +992,36 @@ The implementation plan may refine test filenames while preserving responsibilit
 
 No NVIDIA-01 task should require production edits outside this boundary unless a separately surfaced compatibility blocker proves otherwise.
 
-## 25. Acceptance criteria
+## 26. Acceptance criteria
 
 NVIDIA-01 is qualified only when all of the following are evidenced:
 
 1. `PreparedProviderRequest` binds exact canonical wire bytes to provider/target/model identity.
 2. The transport sends the exact prepared bytes without JSON reserialization.
 3. Exactly one POST is possible per execution invocation.
-4. No automatic retry, reconnect, model fallback, provider fallback, or redirect following exists.
-5. Provider-neutral timeout and transport observation contracts are implemented and tested.
-6. Transport failures map conservatively to `NOT_SENT` or `OUTCOME_UNKNOWN` according to this spec.
-7. Fully received HTTP responses map deterministically to `COMPLETED` or `REJECTED`.
-8. NVIDIA safely classifies complete HTTP rejections without propagating provider prose.
-9. NVIDIA parses a bounded non-streaming OpenAI-compatible chat response.
-10. A malformed complete 2xx response remains transport `COMPLETED` with separate protocol failure state.
-11. API keys and authorization headers never enter prepared request identity, observations, results, or errors.
-12. Request/response byte bounds are enforced.
-13. NVIDIA chat remains text-only, non-streaming, single-choice, no-tools, no-reasoning-dialect infrastructure.
-14. NVIDIA-00 model/registry contracts remain intact.
-15. No NVIDIA inference MCP tool exists.
-16. OX, Wolfram, server wiring, dependencies, and historical evidence remain unchanged.
-17. All tests and lint/compile gates pass.
-18. NVIDIA-01 changed-scope formatting passes with zero new formatting regressions.
-19. Final pushed commit passes GitHub CI on Windows and Linux.
-20. Zero live provider requests occur during NVIDIA-01.
-21. NVIDIA-02 can persist provider start and invoke the transport immediately without payload reconstruction or catalog/model discovery.
+4. No automatic retry, reconnect, model fallback, provider fallback, arbitrary header override, or redirect following exists.
+5. `ProviderTransmissionContext` binds provider start to the expected request hash.
+6. Execution authorization is ephemeral/redacted and excluded from request identity/evidence.
+7. Provider-neutral timeout and transport observation contracts are implemented and tested.
+8. Transport failures map conservatively to `NOT_SENT` or `OUTCOME_UNKNOWN` according to this spec.
+9. Every response-size abort before complete consumption is `OUTCOME_UNKNOWN`.
+10. Fully received HTTP responses map deterministically to `COMPLETED` or `REJECTED`.
+11. NVIDIA safely classifies complete HTTP rejections without propagating provider prose.
+12. NVIDIA parses a bounded non-streaming OpenAI-compatible chat response.
+13. A malformed complete 2xx response remains transport `COMPLETED` with NVIDIA `PROTOCOL` error.
+14. System-managed API keys and authorization headers never enter prepared request identity, observations, results, or errors.
+15. Request/response byte bounds are enforced.
+16. NVIDIA chat remains text-only, non-streaming, single-choice, no-tools, no-reasoning-dialect infrastructure.
+17. NVIDIA-00 model/registry/catalog contracts remain intact.
+18. No NVIDIA inference MCP tool exists.
+19. OX, Wolfram, server wiring, dependencies, and historical evidence remain unchanged.
+20. All tests and lint/compile gates pass.
+21. NVIDIA-01 changed-scope formatting passes with zero new formatting regressions.
+22. Final pushed commit passes GitHub CI on Windows and Linux.
+23. Zero live provider requests occur during NVIDIA-01.
+24. NVIDIA-02 can persist provider start/request identity and invoke the transport immediately without payload reconstruction, catalog/model discovery, or arbitrary header mutation.
 
-## 26. Phase transition to NVIDIA-02
+## 27. Phase transition to NVIDIA-02
 
 After NVIDIA-01 qualification, NVIDIA-02 will design and implement the smallest durable canary path around one candidate model, initially Nemotron 3.5 Lightning.
 
@@ -914,7 +1040,7 @@ NVIDIA-02 will not change the NVIDIA-01 exactly-once transport contract merely t
 
 If the live request has an ambiguous transmission outcome, the attempt ends `OUTCOME_UNKNOWN` and no automatic resend occurs.
 
-## 27. Frozen design decision
+## 28. Frozen design decision
 
 The NVIDIA-01 transport is the first implementation of a provider-neutral Byte-MCP execution substrate.
 
@@ -931,6 +1057,8 @@ provider request layer owns:
 
 provider transport owns:
   exactly-one HTTP transmission
+  execution request-hash binding
+  ephemeral authorization handling
   bounded timeouts/deadline
   receive observations
   provider-neutral transport outcome
