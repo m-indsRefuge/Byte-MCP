@@ -78,31 +78,7 @@ src/byte_mcp/nvidia/settings.py
 - Create: `tests/providers/test_requests.py`
 - Modify: `src/byte_mcp/providers/__init__.py`
 
-**Produces:**
-
-```python
-@dataclass(frozen=True, slots=True, repr=False)
-class PreparedProviderRequest:
-    provider_id: str
-    method: str
-    target_origin: str
-    endpoint_path: str
-    model_id: str
-    body_bytes: bytes
-    payload_sha256: str
-    request_sha256: str
-
-
-def prepare_provider_request(
-    *,
-    provider_id: str,
-    method: str,
-    target_origin: str,
-    endpoint_path: str,
-    model_id: str,
-    body: object,
-) -> PreparedProviderRequest: ...
-```
+**Produces:** immutable `PreparedProviderRequest` with fields `provider_id`, `method`, `target_origin`, `endpoint_path`, `model_id`, `body_bytes`, `payload_sha256`, `request_sha256`; and function `prepare_provider_request(*, provider_id: str, method: str, target_origin: str, endpoint_path: str, model_id: str, body: object) -> PreparedProviderRequest`.
 
 - [ ] **Step 1: Write RED tests** proving canonical key order, UTF-8 non-ASCII handling, exact `payload_sha256`, stable `request_sha256`, changed hash when body/destination changes, safe repr, invalid JSON numbers, invalid provider/model/origin/path/method, and `4_000_000` byte bound.
 
@@ -194,7 +170,23 @@ class ProviderTimeoutPolicy:
     absolute_deadline_seconds: float
 
 @dataclass(frozen=True, slots=True)
-class ProviderTransportObservation: ...
+class ProviderTransportObservation:
+    response_headers_received: bool
+    response_headers_at: str | None
+    response_headers_elapsed_ms: int | None
+    http_status_code: int | None
+    response_body_started: bool
+    first_body_at: str | None
+    first_body_elapsed_ms: int | None
+    last_body_at: str | None
+    last_body_elapsed_ms: int | None
+    decoded_body_bytes_received: int
+    provider_started_at: str
+    provider_finished_at: str
+    elapsed_ms: int
+    transport_failure_kind: ProviderTransportFailureKind | None
+    trust_env_enabled: bool
+    proxy_environment_present: bool
 
 @dataclass(frozen=True, slots=True, repr=False)
 class ProviderTransportResponse:
@@ -203,12 +195,13 @@ class ProviderTransportResponse:
     body: bytes
     observation: ProviderTransportObservation
 
-class ProviderTransportError(ByteMCPError): ...
+class ProviderTransportError(ByteMCPError):
+    attempt_outcome: ProviderAttemptOutcome
+    transport_failure_kind: ProviderTransportFailureKind
+    transport_observation: ProviderTransportObservation
 ```
 
-Observation fields are exactly those frozen in the spec: response header/body timing booleans/timestamps/elapsed values, `http_status_code`, decoded byte count, provider start/finish, elapsed, failure kind, `trust_env_enabled`, and proxy-environment-present boolean.
-
-- [ ] **Step 1: Write RED tests** for timezone-aware `provider_started_at`, lowercase 64-hex expected hash, timeout finite positive values `<=600`, safe repr/error text, and observation metadata-only contract.
+- [ ] **Step 1: Write RED tests** for timezone-aware `provider_started_at`, lowercase 64-hex expected hash, timeout finite positive values `<=600`, safe response repr/error text, and observation metadata-only contract.
 
 - [ ] **Step 2: Run RED**
 
@@ -250,18 +243,7 @@ git commit -m "feat: add provider transport contracts"
 - Modify: `src/byte_mcp/providers/transport.py`
 - Modify: `tests/providers/test_transport.py`
 
-**Produces:**
-
-```python
-async def execute_once(
-    prepared_request: PreparedProviderRequest,
-    transmission_context: ProviderTransmissionContext,
-    timeout_policy: ProviderTimeoutPolicy,
-    *,
-    headers: Mapping[str, str],
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> ProviderTransportResponse: ...
-```
+**Produces:** `execute_once(prepared_request: PreparedProviderRequest, transmission_context: ProviderTransmissionContext, timeout_policy: ProviderTimeoutPolicy, *, headers: Mapping[str, str], transport: httpx.AsyncBaseTransport | None = None) -> ProviderTransportResponse`.
 
 - [ ] **Step 1: Write RED tests** proving exact prepared bytes sent once; exact URL/method; hash mismatch -> zero handler calls; missing/extra/wrong headers -> zero calls; redirect not followed; complete 4xx/5xx -> `REJECTED`; complete 2xx -> `COMPLETED`; all contacted paths invoke handler exactly once.
 
@@ -275,31 +257,35 @@ async def execute_once(
 python -m pytest tests/providers/test_transport.py -q
 ```
 
-- [ ] **Step 5: Implement one-shot execution** with exactly one `httpx.AsyncClient` and one `client.stream(...)` call:
+- [ ] **Step 5: Implement one-shot execution** with exactly one `httpx.AsyncClient` and one `client.stream()` call:
 
 ```python
 async with httpx.AsyncClient(
     transport=transport,
     timeout=httpx.Timeout(
-        connect=policy.connect_seconds,
-        read=policy.read_seconds,
-        write=policy.write_seconds,
-        pool=policy.pool_seconds,
+        connect=timeout_policy.connect_seconds,
+        read=timeout_policy.read_seconds,
+        write=timeout_policy.write_seconds,
+        pool=timeout_policy.pool_seconds,
     ),
     follow_redirects=False,
     trust_env=True,
 ) as client:
-    async with asyncio.timeout(policy.absolute_deadline_seconds):
+    async with asyncio.timeout(timeout_policy.absolute_deadline_seconds):
         async with client.stream(
-            prepared.method,
-            prepared.target_origin + prepared.endpoint_path,
+            prepared_request.method,
+            prepared_request.target_origin + prepared_request.endpoint_path,
             headers=validated_headers,
-            content=prepared.body_bytes,
+            content=prepared_request.body_bytes,
         ) as response:
-            ...
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(body) + len(chunk) > MAX_RESPONSE_BODY_BYTES:
+                    raise _ResponseBodyLimitExceeded
+                body.extend(chunk)
 ```
 
-Validate hash/header contract before client creation. Stream to EOF while tracking metadata. Abort before appending a chunk that would exceed bound and raise safe `ProviderTransportError(OUTCOME_UNKNOWN, HTTP_TRANSPORT_ERROR, ...) from None`. Never call `json=`.
+Validate hash/header contract before client creation. Catch private `_ResponseBodyLimitExceeded` outside the stream and raise safe `ProviderTransportError` with `OUTCOME_UNKNOWN` + `HTTP_TRANSPORT_ERROR` from `None`. Never call `json=`.
 
 - [ ] **Step 6: GREEN + Ruff**
 
@@ -325,27 +311,7 @@ git commit -m "feat: add exactly-once provider transport"
 - Create: `tests/nvidia/test_chat_request.py`
 - Modify: `src/byte_mcp/nvidia/__init__.py`
 
-**Produces:**
-
-```python
-NVIDIA_CHAT_TARGET_ORIGIN = "https://integrate.api.nvidia.com"
-NVIDIA_CHAT_ENDPOINT_PATH = "/v1/chat/completions"
-
-@dataclass(frozen=True, slots=True)
-class NvidiaChatMessage:
-    role: str
-    content: str
-
-
-def prepare_nvidia_chat_request(
-    *,
-    model_id: str,
-    messages: Sequence[NvidiaChatMessage | Mapping[str, object]],
-    temperature: float = 0.2,
-    top_p: float = 0.95,
-    max_tokens: int = 1024,
-) -> PreparedProviderRequest: ...
-```
+**Produces:** constants `NVIDIA_CHAT_TARGET_ORIGIN = "https://integrate.api.nvidia.com"`, `NVIDIA_CHAT_ENDPOINT_PATH = "/v1/chat/completions"`; immutable `NvidiaChatMessage(role: str, content: str)`; function `prepare_nvidia_chat_request(*, model_id: str, messages: Sequence[NvidiaChatMessage | Mapping[str, object]], temperature: float = 0.2, top_p: float = 0.95, max_tokens: int = 1024) -> PreparedProviderRequest`.
 
 - [ ] **Step 1: Write RED tests** for exact body keys/values, fixed provider/origin/path, roles `system/user/assistant`, exact mapping keys `role/content`, string content including empty string, non-empty message sequence, numeric bounds, bool/NaN/Infinity rejection, invalid model IDs, and absence of excluded fields.
 
@@ -398,36 +364,7 @@ git commit -m "feat: prepare bounded NVIDIA chat requests"
 - Modify: `src/byte_mcp/nvidia/__init__.py`
 - Create: `tests/nvidia/test_chat_response.py`
 
-**Produces:**
-
-```python
-class NvidiaChatFailureKind(StrEnum):
-    CONFIGURATION = "CONFIGURATION"
-    AUTHENTICATION = "AUTHENTICATION"
-    PERMISSION = "PERMISSION"
-    REQUEST = "REQUEST"
-    REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE"
-    RATE_LIMIT = "RATE_LIMIT"
-    UNAVAILABLE = "UNAVAILABLE"
-    REDIRECT_REJECTED = "REDIRECT_REJECTED"
-    PROTOCOL = "PROTOCOL"
-
-class NvidiaChatError(ByteMCPError): ...
-
-@dataclass(frozen=True, slots=True)
-class NvidiaChatUsage:
-    prompt_tokens: int | None
-    completion_tokens: int | None
-    total_tokens: int | None
-
-@dataclass(frozen=True, slots=True)
-class NvidiaChatResult:
-    response_id: str | None
-    model_id: str
-    content: str
-    finish_reason: str | None
-    usage: NvidiaChatUsage
-```
+**Produces:** enum `NvidiaChatFailureKind` with exactly `CONFIGURATION`, `AUTHENTICATION`, `PERMISSION`, `REQUEST`, `REQUEST_TOO_LARGE`, `RATE_LIMIT`, `UNAVAILABLE`, `REDIRECT_REJECTED`, `PROTOCOL`; `NvidiaChatError`; immutable `NvidiaChatUsage(prompt_tokens: int | None, completion_tokens: int | None, total_tokens: int | None)`; immutable `NvidiaChatResult(response_id: str | None, model_id: str, content: str, finish_reason: str | None, usage: NvidiaChatUsage)`.
 
 - [ ] **Step 1: Write RED status tests** for `3xx REDIRECT_REJECTED`, `400 REQUEST`, `401 AUTHENTICATION`, `403 PERMISSION`, `404 UNAVAILABLE`, `413 REQUEST_TOO_LARGE`, `422 REQUEST`, `429 RATE_LIMIT`, `5xx UNAVAILABLE`, other non-2xx `REQUEST`. Error text contains enum only, never body prose.
 
@@ -468,27 +405,9 @@ git commit -m "feat: parse bounded NVIDIA chat responses"
 - Modify: `tests/nvidia/test_settings.py`
 - Create: `tests/nvidia/test_chat_execution.py`
 
-**Produces:**
+**Produces:** fixed `NVIDIA_CHAT_TIMEOUT_POLICY = ProviderTimeoutPolicy(connect_seconds=10.0, write_seconds=30.0, read_seconds=300.0, pool_seconds=10.0, absolute_deadline_seconds=300.0)`; function `execute_prepared_nvidia_chat(prepared_request: PreparedProviderRequest, transmission_context: ProviderTransmissionContext, settings: NvidiaHostedSettings, *, transport: httpx.AsyncBaseTransport | None = None) -> NvidiaChatResult`.
 
-```python
-NVIDIA_CHAT_TIMEOUT_POLICY = ProviderTimeoutPolicy(
-    connect_seconds=10.0,
-    write_seconds=30.0,
-    read_seconds=300.0,
-    pool_seconds=10.0,
-    absolute_deadline_seconds=300.0,
-)
-
-async def execute_prepared_nvidia_chat(
-    prepared_request: PreparedProviderRequest,
-    transmission_context: ProviderTransmissionContext,
-    settings: NvidiaHostedSettings,
-    *,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> NvidiaChatResult: ...
-```
-
-- [ ] **Step 1: Write RED settings tests** preserving catalog settings and proving the fixed NVIDIA-01 timeout policy values above. Do not add arbitrary base URL configuration.
+- [ ] **Step 1: Write RED settings tests** preserving catalog settings and proving fixed chat timeout values. Do not add arbitrary base URL configuration.
 
 - [ ] **Step 2: Write RED execution tests** using MockTransport only: missing key -> `CONFIGURATION` with zero calls; exact three headers; secret absent from prepared hashes/reprs/results/errors; one successful call; complete rejection mappings; transport errors propagate unchanged; hash mismatch -> zero calls; each contacted path exactly one call.
 
@@ -523,18 +442,7 @@ git commit -m "feat: execute NVIDIA chat through shared transport"
 - Create: `tests/nvidia/test_n01_security_invariants.py`
 - No production modification expected.
 
-- [ ] **Step 1: Write tests** proving:
-  - provider-neutral modules import no NVIDIA/OX/Wolfram modules;
-  - NVIDIA chat imports no OX/Wolfram;
-  - server contains no NVIDIA inference registration;
-  - production contains no retry/backoff/fallback behavior;
-  - secrets absent from all ordinary repr/error/result/observation surfaces;
-  - observation contains no bodies or headers;
-  - transmitted bytes equal prepared bytes exactly;
-  - request-hash mismatch causes zero calls;
-  - catalog/registry state does not change through preparation/execution;
-  - `NGC_API_KEY` alone never satisfies hosted credential;
-  - invalid NVIDIA configuration does not break core/OX/Wolfram imports.
+- [ ] **Step 1: Write tests** proving provider-neutral modules import no NVIDIA/OX/Wolfram modules; NVIDIA chat imports no OX/Wolfram; server contains no NVIDIA inference registration; production contains no retry/backoff/fallback behavior; secrets are absent from all ordinary repr/error/result/observation surfaces; observation contains no bodies or headers; transmitted bytes equal prepared bytes exactly; request-hash mismatch causes zero calls; catalog/registry state does not change through preparation/execution; `NGC_API_KEY` alone never satisfies hosted credential; invalid NVIDIA configuration does not break core/OX/Wolfram imports.
 
 - [ ] **Step 2: Run**
 
@@ -638,13 +546,7 @@ git log --oneline de1b931e000969210379c8326f0f8c9a097ccbb2..HEAD
 
 - [ ] **Step 7: Require fresh GitHub Actions CI** on exact final remote HEAD. Required jobs: Linux Python 3.12 compile/lint/test PASS, Windows Python 3.12 compile/lint/test PASS, both Windows launcher jobs PASS.
 
-Only then may final report state:
-
-```text
-NVIDIA-01_STATUS: QUALIFIED
-```
-
-Otherwise state `NOT_QUALIFIED` with exact blocker and resume boundary.
+Only then may final report state `NVIDIA-01_STATUS: QUALIFIED`; otherwise state `NOT_QUALIFIED` with exact blocker and resume boundary.
 
 ---
 
