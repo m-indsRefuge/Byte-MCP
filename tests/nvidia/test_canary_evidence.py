@@ -18,6 +18,10 @@ from byte_mcp.nvidia.chat import prepare_nvidia_chat_request
 QUALIFIED_PREDECESSOR = "29daea6ef68ebb3d46031ce302b0108617bd1221"
 MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 PROMPT = "Reply with exactly: BYTE_NVIDIA_CANARY_OK"
+PREPARED_AT = "2026-09-09T12:00:00+00:00"
+AUTHORIZED_AT = "2026-09-09T12:01:00+00:00"
+STARTED_AT = "2026-09-09T12:02:00+00:00"
+FINISHED_AT = "2026-09-09T12:02:01+00:00"
 
 
 def _manifest(**overrides: object) -> NvidiaCanaryManifest:
@@ -32,7 +36,7 @@ def _manifest(**overrides: object) -> NvidiaCanaryManifest:
         "payload_sha256": "a" * 64,
         "request_sha256": "b" * 64,
         "body_bytes": 128,
-        "prepared_at": "2026-09-09T12:00:00+00:00",
+        "prepared_at": PREPARED_AT,
         "probe_expected_text": "BYTE_NVIDIA_CANARY_OK",
         "qualified_predecessor_sha": QUALIFIED_PREDECESSOR,
     }
@@ -47,6 +51,60 @@ def _prepared_request():
         temperature=1.0,
         top_p=0.95,
         max_tokens=64,
+    )
+
+
+def _prepared_store(tmp_path: Path) -> tuple[NvidiaCanaryEvidenceStore, NvidiaCanaryManifest]:
+    store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
+    manifest = store.prepare(
+        _prepared_request(),
+        probe_expected_text="BYTE_NVIDIA_CANARY_OK",
+        qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
+        prepared_at=PREPARED_AT,
+    )
+    return store, manifest
+
+
+def _terminal_event(manifest: NvidiaCanaryManifest) -> dict[str, object]:
+    return {
+        "event_type": "CANARY_TERMINAL",
+        "canary_id": manifest.canary_id,
+        "request_sha256": manifest.request_sha256,
+        "provider_id": "nvidia-api-catalog",
+        "model_id": MODEL_ID,
+        "provider_started_at": STARTED_AT,
+        "provider_finished_at": FINISHED_AT,
+        "attempt_outcome": "COMPLETED",
+        "nvidia_failure_kind": None,
+        "transport_failure_kind": None,
+        "http_status_code": 200,
+        "response_headers_received": True,
+        "response_body_started": True,
+        "decoded_body_bytes_received": 128,
+        "elapsed_ms": 125,
+        "finish_reason": "stop",
+        "response_id": "chatcmpl-evidence-test",
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+        "total_tokens": 7,
+        "semantic_probe_match": True,
+        "recorded_at": FINISHED_AT,
+    }
+
+
+def _advance_to_start(
+    store: NvidiaCanaryEvidenceStore,
+    manifest: NvidiaCanaryManifest,
+) -> None:
+    store.append_authorized(
+        manifest.canary_id,
+        request_sha256=manifest.request_sha256,
+        recorded_at=AUTHORIZED_AT,
+    )
+    store.append_provider_start(
+        manifest.canary_id,
+        request_sha256=manifest.request_sha256,
+        recorded_at=STARTED_AT,
     )
 
 
@@ -176,7 +234,7 @@ def test_prepare_persists_exact_body_manifest_and_prepared_event(tmp_path: Path)
         prepared,
         probe_expected_text="BYTE_NVIDIA_CANARY_OK",
         qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
+        prepared_at=PREPARED_AT,
     )
 
     canary_dir = store.root / "canaries" / "NVC-000001"
@@ -202,7 +260,7 @@ def test_prepare_allocates_next_identity_without_overwrite(tmp_path: Path) -> No
         prepared,
         probe_expected_text="BYTE_NVIDIA_CANARY_OK",
         qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
+        prepared_at=PREPARED_AT,
     )
     second = store.prepare(
         prepared,
@@ -222,7 +280,7 @@ def test_load_reconstructs_and_validates_prepared_identity(tmp_path: Path) -> No
         prepared,
         probe_expected_text="BYTE_NVIDIA_CANARY_OK",
         qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
+        prepared_at=PREPARED_AT,
     )
 
     snapshot = store.load(manifest.canary_id)
@@ -239,7 +297,7 @@ def test_load_rejects_tampered_body_and_malformed_events(tmp_path: Path) -> None
         _prepared_request(),
         probe_expected_text="BYTE_NVIDIA_CANARY_OK",
         qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
+        prepared_at=PREPARED_AT,
     )
     canary_dir = store.root / "canaries" / manifest.canary_id
 
@@ -254,42 +312,21 @@ def test_load_rejects_tampered_body_and_malformed_events(tmp_path: Path) -> None
 
 
 def test_authorized_and_provider_start_events_reconstruct_state(tmp_path: Path) -> None:
-    store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
-    manifest = store.prepare(
-        _prepared_request(),
-        probe_expected_text="BYTE_NVIDIA_CANARY_OK",
-        qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
-    )
-    store.append_authorized(
-        manifest.canary_id,
-        request_sha256=manifest.request_sha256,
-        recorded_at="2026-09-09T12:01:00+00:00",
-    )
-    store.append_provider_start(
-        manifest.canary_id,
-        request_sha256=manifest.request_sha256,
-        recorded_at="2026-09-09T12:02:00+00:00",
-    )
+    store, manifest = _prepared_store(tmp_path)
+    _advance_to_start(store, manifest)
 
     snapshot = store.load(manifest.canary_id)
 
-    assert snapshot.authorized_at == "2026-09-09T12:01:00+00:00"
-    assert snapshot.provider_started_at == "2026-09-09T12:02:00+00:00"
+    assert snapshot.authorized_at == AUTHORIZED_AT
+    assert snapshot.provider_started_at == STARTED_AT
 
 
 def test_duplicate_or_out_of_order_lifecycle_events_fail_closed(tmp_path: Path) -> None:
-    store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
-    manifest = store.prepare(
-        _prepared_request(),
-        probe_expected_text="BYTE_NVIDIA_CANARY_OK",
-        qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
-    )
+    store, manifest = _prepared_store(tmp_path)
     store.append_authorized(
         manifest.canary_id,
         request_sha256=manifest.request_sha256,
-        recorded_at="2026-09-09T12:01:00+00:00",
+        recorded_at=AUTHORIZED_AT,
     )
     with pytest.raises(NvidiaCanaryEvidenceError):
         store.append_authorized(
@@ -299,6 +336,69 @@ def test_duplicate_or_out_of_order_lifecycle_events_fail_closed(tmp_path: Path) 
         )
 
 
+def test_terminal_event_reconstructs_bounded_state(tmp_path: Path) -> None:
+    store, manifest = _prepared_store(tmp_path)
+    _advance_to_start(store, manifest)
+    terminal = _terminal_event(manifest)
+
+    store.append_terminal(manifest.canary_id, terminal)
+    snapshot = store.load(manifest.canary_id)
+
+    assert snapshot.terminal_event == terminal
+    assert snapshot.events[-1] == terminal
+    assert snapshot.provider_started_at == STARTED_AT
+
+
+def test_terminal_before_provider_start_is_rejected(tmp_path: Path) -> None:
+    store, manifest = _prepared_store(tmp_path)
+
+    with pytest.raises(NvidiaCanaryEvidenceError):
+        store.append_terminal(manifest.canary_id, _terminal_event(manifest))
+
+    assert store.load(manifest.canary_id).terminal_event is None
+
+
+def test_duplicate_terminal_is_rejected_without_mutation(tmp_path: Path) -> None:
+    store, manifest = _prepared_store(tmp_path)
+    _advance_to_start(store, manifest)
+    terminal = _terminal_event(manifest)
+    store.append_terminal(manifest.canary_id, terminal)
+    events_path = store.root / "canaries" / manifest.canary_id / "events.jsonl"
+    before = events_path.read_bytes()
+
+    with pytest.raises(NvidiaCanaryEvidenceError):
+        store.append_terminal(manifest.canary_id, terminal)
+
+    assert events_path.read_bytes() == before
+
+
+def test_event_after_terminal_is_rejected_during_reconstruction(tmp_path: Path) -> None:
+    store, manifest = _prepared_store(tmp_path)
+    _advance_to_start(store, manifest)
+    store.append_terminal(manifest.canary_id, _terminal_event(manifest))
+    events_path = store.root / "canaries" / manifest.canary_id / "events.jsonl"
+    extra_event = {
+        "event_type": "CANARY_AUTHORIZED",
+        "canary_id": manifest.canary_id,
+        "request_sha256": manifest.request_sha256,
+        "recorded_at": "2026-09-09T12:03:00+00:00",
+    }
+    with events_path.open("ab") as handle:
+        handle.write(
+            json.dumps(
+                extra_event,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+
+    with pytest.raises(NvidiaCanaryEvidenceError):
+        store.load(manifest.canary_id)
+
+
 def test_prepare_and_transmit_locks_reject_contention(tmp_path: Path) -> None:
     store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
     prepared = _prepared_request()
@@ -306,7 +406,7 @@ def test_prepare_and_transmit_locks_reject_contention(tmp_path: Path) -> None:
         prepared,
         probe_expected_text="BYTE_NVIDIA_CANARY_OK",
         qualified_predecessor_sha=QUALIFIED_PREDECESSOR,
-        prepared_at="2026-09-09T12:00:00+00:00",
+        prepared_at=PREPARED_AT,
     )
 
     lock_path = store.root / ".prepare.lock"
