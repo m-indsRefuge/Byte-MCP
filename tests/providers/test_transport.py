@@ -373,19 +373,51 @@ class _RaisingTransport(httpx.AsyncBaseTransport):
 @pytest.mark.parametrize(
     ("exception_type", "expected_outcome", "expected_kind"),
     [
-        (httpx.ConnectTimeout, ProviderAttemptOutcome.NOT_SENT, ProviderTransportFailureKind.CONNECT_TIMEOUT),
-        (httpx.ConnectError, ProviderAttemptOutcome.NOT_SENT, ProviderTransportFailureKind.CONNECT_ERROR),
-        (httpx.PoolTimeout, ProviderAttemptOutcome.NOT_SENT, ProviderTransportFailureKind.POOL_TIMEOUT),
-        (httpx.WriteTimeout, ProviderAttemptOutcome.OUTCOME_UNKNOWN, ProviderTransportFailureKind.WRITE_TIMEOUT),
-        (httpx.WriteError, ProviderAttemptOutcome.OUTCOME_UNKNOWN, ProviderTransportFailureKind.WRITE_ERROR),
-        (httpx.ReadTimeout, ProviderAttemptOutcome.OUTCOME_UNKNOWN, ProviderTransportFailureKind.READ_TIMEOUT),
-        (httpx.ReadError, ProviderAttemptOutcome.OUTCOME_UNKNOWN, ProviderTransportFailureKind.READ_ERROR),
+        (
+            httpx.ConnectTimeout,
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.CONNECT_TIMEOUT,
+        ),
+        (
+            httpx.ConnectError,
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.CONNECT_ERROR,
+        ),
+        (
+            httpx.PoolTimeout,
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.POOL_TIMEOUT,
+        ),
+        (
+            httpx.WriteTimeout,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.WRITE_TIMEOUT,
+        ),
+        (
+            httpx.WriteError,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.WRITE_ERROR,
+        ),
+        (
+            httpx.ReadTimeout,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.READ_TIMEOUT,
+        ),
+        (
+            httpx.ReadError,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.READ_ERROR,
+        ),
         (
             httpx.RemoteProtocolError,
             ProviderAttemptOutcome.OUTCOME_UNKNOWN,
             ProviderTransportFailureKind.REMOTE_PROTOCOL_ERROR,
         ),
-        (httpx.ProxyError, ProviderAttemptOutcome.OUTCOME_UNKNOWN, ProviderTransportFailureKind.HTTP_TRANSPORT_ERROR),
+        (
+            httpx.ProxyError,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.HTTP_TRANSPORT_ERROR,
+        ),
     ],
 )
 def test_execute_once_maps_transport_failures_without_retry_or_raw_exception_retention(
