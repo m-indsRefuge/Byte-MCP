@@ -7,6 +7,31 @@ QUALIFIED_PREDECESSOR = "29daea6ef68ebb3d46031ce302b0108617bd1221"
 FIXED_NOW_TEXT = "2026-09-09T18:00:00+00:00"
 AUTH_NOW_TEXT = "2026-09-09T18:01:00+00:00"
 START_NOW_TEXT = "2026-09-09T18:02:00+00:00"
+FINISH_NOW_TEXT = "2026-09-09T18:02:01+00:00"
+TERMINAL_KEYS = {
+    "event_type",
+    "canary_id",
+    "request_sha256",
+    "provider_id",
+    "model_id",
+    "provider_started_at",
+    "provider_finished_at",
+    "attempt_outcome",
+    "nvidia_failure_kind",
+    "transport_failure_kind",
+    "http_status_code",
+    "response_headers_received",
+    "response_body_started",
+    "decoded_body_bytes_received",
+    "elapsed_ms",
+    "finish_reason",
+    "response_id",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "semantic_probe_match",
+    "recorded_at",
+}
 
 
 def _module(name: str):
@@ -42,8 +67,48 @@ def _valid_settings():
     return _settings_class()(api_key="configured")
 
 
+def _transport_observation(
+    *,
+    provider_started_at: str = START_NOW_TEXT,
+    provider_finished_at: str = FINISH_NOW_TEXT,
+    http_status_code: int | None = 200,
+    response_headers_received: bool = True,
+    response_body_started: bool = True,
+    decoded_body_bytes_received: int = 42,
+    elapsed_ms: int = 125,
+    transport_failure_kind=None,
+):
+    providers = _module("byte_mcp.providers")
+    return providers.ProviderTransportObservation(
+        response_headers_received=response_headers_received,
+        response_headers_at=(provider_finished_at if response_headers_received else None),
+        response_headers_elapsed_ms=(10 if response_headers_received else None),
+        http_status_code=http_status_code,
+        response_body_started=response_body_started,
+        first_body_at=(provider_finished_at if response_body_started else None),
+        first_body_elapsed_ms=(20 if response_body_started else None),
+        last_body_at=(provider_finished_at if response_body_started else None),
+        last_body_elapsed_ms=(elapsed_ms if response_body_started else None),
+        decoded_body_bytes_received=decoded_body_bytes_received,
+        provider_started_at=provider_started_at,
+        provider_finished_at=provider_finished_at,
+        elapsed_ms=elapsed_ms,
+        transport_failure_kind=transport_failure_kind,
+        trust_env_enabled=True,
+        proxy_environment_present=False,
+    )
+
+
 def _successful_executor_result(content: str = EXPECTED_TEXT):
-    return _module("types").SimpleNamespace(model_id=EXPECTED_MODEL_ID, content=content)
+    chat = _module("byte_mcp.nvidia.chat")
+    return _module("types").SimpleNamespace(
+        model_id=EXPECTED_MODEL_ID,
+        content=content,
+        finish_reason="stop",
+        response_id="chatcmpl-n02-test",
+        usage=chat.NvidiaChatUsage(prompt_tokens=3, completion_tokens=4, total_tokens=7),
+        transport_observation=_transport_observation(),
+    )
 
 
 def _forbid_http_client(*args: object, **kwargs: object) -> None:
@@ -557,7 +622,7 @@ def test_transmit_persists_exact_provider_start_before_single_executor_call(tmp_
     snapshot = store.load(receipt.canary_id)
     event_types = [event["event_type"] for event in snapshot.events]
     assert executor_calls == 1
-    assert event_types == ["CANARY_PREPARED", "CANARY_AUTHORIZED", "PROVIDER_START"]
+    assert event_types[:3] == ["CANARY_PREPARED", "CANARY_AUTHORIZED", "PROVIDER_START"]
     assert snapshot.authorized_at == AUTH_NOW_TEXT
     assert snapshot.provider_started_at == START_NOW_TEXT
     assert result.canary_id == receipt.canary_id
@@ -659,3 +724,295 @@ def test_concurrent_duplicate_transmit_allows_at_most_one_executor_and_start(tmp
         assert event_types.count("CANARY_AUTHORIZED") == 1
 
     _module("asyncio").run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_match"),
+    [(EXPECTED_TEXT, True), ("different wording", False)],
+)
+def test_transmit_success_persists_fixed_terminal_event(
+    tmp_path,
+    content: str,
+    expected_match: bool,
+) -> None:
+    canary, store, receipt = _prepared_canary(tmp_path)
+    secret = "configured-secret-not-for-evidence"
+
+    async def executor(*args: object, **kwargs: object):
+        return _successful_executor_result(content)
+
+    result = _module("asyncio").run(
+        canary.transmit_lightning_canary(
+            store,
+            canary_id=receipt.canary_id,
+            expected_request_sha256=receipt.request_sha256,
+            approve=True,
+            settings_loader=lambda: _settings_class()(api_key=secret),
+            executor=executor,
+            now=_clock(AUTH_NOW_TEXT, START_NOW_TEXT),
+        )
+    )
+
+    snapshot = store.load(receipt.canary_id)
+    terminal = snapshot.terminal_event
+    assert terminal is not None
+    assert set(terminal) == TERMINAL_KEYS
+    assert terminal["event_type"] == "CANARY_TERMINAL"
+    assert terminal["canary_id"] == receipt.canary_id
+    assert terminal["request_sha256"] == receipt.request_sha256
+    assert terminal["provider_id"] == "nvidia-api-catalog"
+    assert terminal["model_id"] == EXPECTED_MODEL_ID
+    assert terminal["provider_started_at"] == START_NOW_TEXT
+    assert terminal["provider_finished_at"] == FINISH_NOW_TEXT
+    assert terminal["attempt_outcome"] == "COMPLETED"
+    assert terminal["nvidia_failure_kind"] is None
+    assert terminal["transport_failure_kind"] is None
+    assert terminal["http_status_code"] == 200
+    assert terminal["response_headers_received"] is True
+    assert terminal["response_body_started"] is True
+    assert terminal["decoded_body_bytes_received"] == 42
+    assert terminal["elapsed_ms"] == 125
+    assert terminal["finish_reason"] == "stop"
+    assert terminal["response_id"] == "chatcmpl-n02-test"
+    assert terminal["prompt_tokens"] == 3
+    assert terminal["completion_tokens"] == 4
+    assert terminal["total_tokens"] == 7
+    assert terminal["semantic_probe_match"] is expected_match
+    assert terminal["recorded_at"] == FINISH_NOW_TEXT
+    assert result.semantic_probe_match is expected_match
+
+    raw_events = (
+        store.root / "canaries" / receipt.canary_id / "events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert content not in raw_events
+    assert secret not in raw_events
+    assert "Authorization" not in raw_events
+
+
+@pytest.mark.parametrize(
+    ("kind_name", "outcome_name", "status_code"),
+    [("RATE_LIMIT", "REJECTED", 429), ("PROTOCOL", "COMPLETED", 200)],
+)
+def test_transmit_terminalizes_nvidia_chat_error_and_reraises_same_error(
+    tmp_path,
+    kind_name: str,
+    outcome_name: str,
+    status_code: int,
+) -> None:
+    canary, store, receipt = _prepared_canary(tmp_path)
+    errors = _module("byte_mcp.nvidia.errors")
+    providers = _module("byte_mcp.providers")
+    error = errors.NvidiaChatError(
+        kind=errors.NvidiaChatFailureKind[kind_name],
+        attempt_outcome=providers.ProviderAttemptOutcome[outcome_name],
+        transport_observation=_transport_observation(http_status_code=status_code),
+        request_sha256=receipt.request_sha256,
+    )
+
+    async def executor(*args: object, **kwargs: object):
+        raise error
+
+    with pytest.raises(errors.NvidiaChatError) as caught:
+        _module("asyncio").run(
+            canary.transmit_lightning_canary(
+                store,
+                canary_id=receipt.canary_id,
+                expected_request_sha256=receipt.request_sha256,
+                approve=True,
+                settings_loader=_valid_settings,
+                executor=executor,
+                now=_clock(AUTH_NOW_TEXT, START_NOW_TEXT),
+            )
+        )
+
+    assert caught.value is error
+    terminal = store.load(receipt.canary_id).terminal_event
+    assert terminal is not None
+    assert terminal["attempt_outcome"] == outcome_name
+    assert terminal["nvidia_failure_kind"] == kind_name
+    assert terminal["transport_failure_kind"] is None
+    assert terminal["http_status_code"] == status_code
+    assert terminal["semantic_probe_match"] is None
+    assert terminal["finish_reason"] is None
+    assert terminal["response_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("outcome_name", "failure_name", "status_code", "headers", "body_started"),
+    [
+        ("NOT_SENT", "CONNECT_ERROR", None, False, False),
+        ("OUTCOME_UNKNOWN", "READ_TIMEOUT", 200, True, True),
+    ],
+)
+def test_transmit_terminalizes_provider_transport_error_and_reraises_same_error(
+    tmp_path,
+    outcome_name: str,
+    failure_name: str,
+    status_code: int | None,
+    headers: bool,
+    body_started: bool,
+) -> None:
+    canary, store, receipt = _prepared_canary(tmp_path)
+    providers = _module("byte_mcp.providers")
+    failure_kind = providers.ProviderTransportFailureKind[failure_name]
+    observation = _transport_observation(
+        http_status_code=status_code,
+        response_headers_received=headers,
+        response_body_started=body_started,
+        decoded_body_bytes_received=(11 if body_started else 0),
+        transport_failure_kind=failure_kind,
+    )
+    error = providers.ProviderTransportError(
+        attempt_outcome=providers.ProviderAttemptOutcome[outcome_name],
+        transport_failure_kind=failure_kind,
+        transport_observation=observation,
+    )
+
+    async def executor(*args: object, **kwargs: object):
+        raise error
+
+    with pytest.raises(providers.ProviderTransportError) as caught:
+        _module("asyncio").run(
+            canary.transmit_lightning_canary(
+                store,
+                canary_id=receipt.canary_id,
+                expected_request_sha256=receipt.request_sha256,
+                approve=True,
+                settings_loader=_valid_settings,
+                executor=executor,
+                now=_clock(AUTH_NOW_TEXT, START_NOW_TEXT),
+            )
+        )
+
+    assert caught.value is error
+    terminal = store.load(receipt.canary_id).terminal_event
+    assert terminal is not None
+    assert terminal["attempt_outcome"] == outcome_name
+    assert terminal["nvidia_failure_kind"] is None
+    assert terminal["transport_failure_kind"] == failure_name
+    assert terminal["http_status_code"] == status_code
+    assert terminal["semantic_probe_match"] is None
+
+
+def test_prior_terminal_blocks_settings_and_executor(tmp_path) -> None:
+    canary, store, receipt = _prepared_canary(tmp_path)
+    store.append_authorized(
+        receipt.canary_id,
+        request_sha256=receipt.request_sha256,
+        recorded_at=AUTH_NOW_TEXT,
+    )
+    store.append_provider_start(
+        receipt.canary_id,
+        request_sha256=receipt.request_sha256,
+        recorded_at=START_NOW_TEXT,
+    )
+    store.append_terminal(
+        receipt.canary_id,
+        {
+            "event_type": "CANARY_TERMINAL",
+            "canary_id": receipt.canary_id,
+            "request_sha256": receipt.request_sha256,
+            "provider_id": "nvidia-api-catalog",
+            "model_id": EXPECTED_MODEL_ID,
+            "provider_started_at": START_NOW_TEXT,
+            "provider_finished_at": FINISH_NOW_TEXT,
+            "attempt_outcome": "COMPLETED",
+            "nvidia_failure_kind": None,
+            "transport_failure_kind": None,
+            "http_status_code": 200,
+            "response_headers_received": True,
+            "response_body_started": True,
+            "decoded_body_bytes_received": 1,
+            "elapsed_ms": 10,
+            "finish_reason": "stop",
+            "response_id": "bounded-id",
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+            "semantic_probe_match": True,
+            "recorded_at": FINISH_NOW_TEXT,
+        },
+    )
+    calls = {"settings": 0, "executor": 0}
+
+    def settings_loader():
+        calls["settings"] += 1
+        return _valid_settings()
+
+    async def executor(*args: object, **kwargs: object):
+        calls["executor"] += 1
+        return _successful_executor_result()
+
+    with pytest.raises(ValueError):
+        _module("asyncio").run(
+            canary.transmit_lightning_canary(
+                store,
+                canary_id=receipt.canary_id,
+                expected_request_sha256=receipt.request_sha256,
+                approve=True,
+                settings_loader=settings_loader,
+                executor=executor,
+                now=_fixed_now,
+            )
+        )
+
+    assert calls == {"settings": 0, "executor": 0}
+
+
+def test_unexpected_post_start_exception_leaves_ambiguous_start_and_blocks_retransmission(
+    tmp_path,
+) -> None:
+    canary, store, receipt = _prepared_canary(tmp_path)
+    executor_calls = 0
+
+    async def exploding_executor(*args: object, **kwargs: object):
+        nonlocal executor_calls
+        executor_calls += 1
+        raise RuntimeError("raw-provider-detail-must-not-be-persisted")
+
+    with pytest.raises(RuntimeError):
+        _module("asyncio").run(
+            canary.transmit_lightning_canary(
+                store,
+                canary_id=receipt.canary_id,
+                expected_request_sha256=receipt.request_sha256,
+                approve=True,
+                settings_loader=_valid_settings,
+                executor=exploding_executor,
+                now=_clock(AUTH_NOW_TEXT, START_NOW_TEXT),
+            )
+        )
+
+    snapshot = store.load(receipt.canary_id)
+    assert executor_calls == 1
+    assert snapshot.provider_started_at == START_NOW_TEXT
+    assert snapshot.terminal_event is None
+
+    calls = {"settings": 0, "executor": 0}
+
+    def settings_loader():
+        calls["settings"] += 1
+        return _valid_settings()
+
+    async def second_executor(*args: object, **kwargs: object):
+        calls["executor"] += 1
+        return _successful_executor_result()
+
+    with pytest.raises(ValueError, match="provider-start"):
+        _module("asyncio").run(
+            canary.transmit_lightning_canary(
+                store,
+                canary_id=receipt.canary_id,
+                expected_request_sha256=receipt.request_sha256,
+                approve=True,
+                settings_loader=settings_loader,
+                executor=second_executor,
+                now=_fixed_now,
+            )
+        )
+
+    raw_events = (
+        store.root / "canaries" / receipt.canary_id / "events.jsonl"
+    ).read_text(encoding="utf-8")
+    assert calls == {"settings": 0, "executor": 0}
+    assert "raw-provider-detail-must-not-be-persisted" not in raw_events
