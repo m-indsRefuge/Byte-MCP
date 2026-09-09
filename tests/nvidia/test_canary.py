@@ -7,9 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from byte_mcp.nvidia.canary_evidence import NvidiaCanaryEvidenceStore
-from byte_mcp.nvidia.settings import NvidiaHostedSettings
-
 
 EXPECTED_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 EXPECTED_PROMPT = "Reply with exactly: BYTE_NVIDIA_CANARY_OK"
@@ -22,11 +19,19 @@ def _canary_module():
     return import_module("byte_mcp.nvidia.canary")
 
 
+def _evidence_store_class():
+    return import_module("byte_mcp.nvidia.canary_evidence").NvidiaCanaryEvidenceStore
+
+
+def _settings_class():
+    return import_module("byte_mcp.nvidia.settings").NvidiaHostedSettings
+
+
 def _forbid_http_client(*args: object, **kwargs: object) -> None:
     raise AssertionError("Task 3 must not construct an HTTP client")
 
 
-def _forbid_settings_load(cls: type[NvidiaHostedSettings]) -> NvidiaHostedSettings:
+def _forbid_settings_load(*args: object, **kwargs: object):
     raise AssertionError("Task 3 must not load NVIDIA hosted settings")
 
 
@@ -52,14 +57,12 @@ def test_prepare_lightning_canary_persists_exact_fixed_request_without_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = _canary_module()
+    store_class = _evidence_store_class()
+    settings_class = _settings_class()
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.setattr(import_module("httpx"), "AsyncClient", _forbid_http_client)
-    monkeypatch.setattr(
-        NvidiaHostedSettings,
-        "load",
-        classmethod(_forbid_settings_load),
-    )
-    store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
+    monkeypatch.setattr(settings_class, "load", classmethod(_forbid_settings_load))
+    store = store_class(tmp_path / "evidence")
 
     receipt = canary.prepare_lightning_canary(store, now=lambda: FIXED_NOW)
     snapshot = store.load(receipt.canary_id)
@@ -91,17 +94,15 @@ def test_inspect_lightning_canary_is_read_only_and_credential_blind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = _canary_module()
-    store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
+    store_class = _evidence_store_class()
+    settings_class = _settings_class()
+    store = store_class(tmp_path / "evidence")
     receipt = canary.prepare_lightning_canary(store, now=lambda: FIXED_NOW)
     before = _evidence_bytes(store.root)
 
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.setattr(import_module("httpx"), "AsyncClient", _forbid_http_client)
-    monkeypatch.setattr(
-        NvidiaHostedSettings,
-        "load",
-        classmethod(_forbid_settings_load),
-    )
+    monkeypatch.setattr(settings_class, "load", classmethod(_forbid_settings_load))
 
     inspection = canary.inspect_lightning_canary(store, receipt.canary_id)
     after = _evidence_bytes(store.root)
