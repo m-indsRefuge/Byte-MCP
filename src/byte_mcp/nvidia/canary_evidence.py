@@ -8,7 +8,7 @@ import os
 import re
 import sys
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -119,10 +119,8 @@ def _exclusive_lock(path: Path) -> Iterator[None]:
         try:
             os.close(descriptor)
         finally:
-            try:
+            with suppress(OSError):
                 path.unlink(missing_ok=True)
-            except OSError:
-                pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,7 +326,8 @@ class NvidiaCanaryEvidenceStore:
     def load(self, canary_id: str) -> NvidiaCanarySnapshot:
         canary_dir = self._canary_dir(canary_id)
         try:
-            manifest_payload = json.loads((canary_dir / "manifest.json").read_text(encoding="utf-8"))
+            manifest_text = (canary_dir / "manifest.json").read_text(encoding="utf-8")
+            manifest_payload = json.loads(manifest_text)
             request_body = (canary_dir / "request-body.bin").read_bytes()
             event_lines = (canary_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
