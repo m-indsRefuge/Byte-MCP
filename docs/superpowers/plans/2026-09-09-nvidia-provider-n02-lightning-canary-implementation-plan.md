@@ -4,7 +4,7 @@
 
 **Goal:** Build and offline-qualify one governed NVIDIA Nemotron Lightning canary lifecycle that persists exact prepared request identity, binds explicit human approval to that identity, records durable provider-start evidence, permits exactly one NVIDIA inference transmission, and terminalizes without retry or fallback.
 
-**Architecture:** Reuse the NVIDIA-01 `PreparedProviderRequest`, `ProviderTransmissionContext`, `execute_once()`, and `execute_prepared_nvidia_chat()` contracts unchanged. Add a narrow NVIDIA-specific evidence store and canary orchestrator plus a script operator surface; keep OX, Wolfram, the MCP server, catalog, registry, dependencies, and provider-neutral transport frozen unless a focused RED proves a predecessor defect.
+**Architecture:** Reuse the NVIDIA-01 `PreparedProviderRequest`, `ProviderTransmissionContext`, `execute_once()`, and `execute_prepared_nvidia_chat()` contracts unchanged. Add a narrow NVIDIA-specific evidence store and canary orchestrator plus a script operator surface; keep OX, Wolfram, the MCP server, catalog, registry, dependencies, and provider-neutral transport frozen unless a focused RED proves a predecessor defect and the plan is amended before mutation.
 
 **Tech Stack:** Python 3.12+, stdlib filesystem/JSON/hash/argparse/asyncio primitives, existing `httpx>=0.28.1,<1`, pytest, Ruff, GitHub Actions.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Qualified NVIDIA-01 predecessor is exactly `29daea6ef68ebb3d46031ce302b0108617bd1221`.
-- NVIDIA-02 design commit is exactly `3c381944bc117373366b647a92f02d52a9e8adb3` before this plan commit.
+- NVIDIA-02 design commit is exactly `3c381944bc117373366b647a92f02d52a9e8adb3` before the implementation-plan commits.
 - Work only on `feat/nvidia-provider-n02-lightning-canary` or an isolated worktree linked to it.
 - No live NVIDIA catalog request during implementation or offline qualification.
 - No live NVIDIA inference request during implementation or offline qualification.
@@ -26,7 +26,7 @@
 - `NVIDIA_API_KEY` is never accepted as a CLI argument and is never persisted in Git, evidence, logs, hashes, reprs, or tests.
 - `prepare` and `inspect` must not call `NvidiaHostedSettings.load()` and must not access `NVIDIA_API_KEY`.
 - `transmit` may load `NvidiaHostedSettings` only before durable `PROVIDER_START`.
-- Exact persisted `request-body.bin` bytes are the bytes used to reconstruct the request supplied to NVIDIA-01; do not rebuild the request from prompt parameters after approval.
+- Exact persisted `request-body.bin` bytes are the bytes used to reconstruct the request supplied to NVIDIA-01; never rebuild the prompt/body after approval.
 - `PROVIDER_START` must be appended, flushed, and fsynced before the single call to `execute_prepared_nvidia_chat()`.
 - After `PROVIDER_START` and before the adapter call, perform no filesystem read, credential lookup, catalog operation, routing decision, prompt reconstruction, or provider/model call.
 - Once `PROVIDER_START` is durable, the one authorization is consumed regardless of `COMPLETED`, `REJECTED`, `NOT_SENT`, `OUTCOME_UNKNOWN`, protocol failure, crash, or terminal-evidence failure.
@@ -37,10 +37,11 @@
 - No merge to `main`.
 - No new dependency without amending the approved design first.
 - Frozen paths: `src/byte_mcp/ox/**`, `src/byte_mcp/wolfram/**`, `src/byte_mcp/server.py`, `src/byte_mcp/nvidia/catalog.py`, `src/byte_mcp/nvidia/registry.py`, `pyproject.toml`.
-- Treat `src/byte_mcp/providers/requests.py`, `src/byte_mcp/providers/transport.py`, and `src/byte_mcp/nvidia/chat.py` as qualified predecessor contracts. Modify them only if a focused RED proves a predecessor defect and record the scope exception explicitly.
+- Treat `src/byte_mcp/providers/requests.py`, `src/byte_mcp/providers/transport.py`, and `src/byte_mcp/nvidia/chat.py` as qualified predecessor contracts. Modify them only after a focused RED proves a predecessor defect and this plan is amended with the exact repair.
 - Use strict TDD for production behavior: RED test first, verify the expected failure, smallest GREEN, focused verification, then commit.
 - Do not run the full repository test suite after every task. Use focused tests per task, then full gates in Task 8.
 - Before execution, use `superpowers:using-git-worktrees`; implementation is recommended via `superpowers:subagent-driven-development`.
+- Every committed task surface must contain complete working behavior for its advertised interfaces; do not commit placeholder methods or placeholder branches.
 
 ---
 
@@ -70,19 +71,19 @@
 
 ---
 
-### Task 1: Durable Canary Evidence Contracts and Root Resolution
+### Task 1: Evidence Contracts and Root Resolution
 
 **Files:**
 - Create: `src/byte_mcp/nvidia/canary_evidence.py`
 - Create: `tests/nvidia/test_canary_evidence.py`
 
 **Interfaces:**
-- Consumes: stdlib `Path`, `os`, `json`, `hashlib`, `re`, `datetime`; `PreparedProviderRequest` from `byte_mcp.providers`.
-- Produces:
+- Consumes: stdlib `Path`, `os`, `re`, `datetime`; `ByteMCPError`.
+- Produces these exact public contracts:
 
 ```python
 NVIDIA_CANARY_SCHEMA = "byte-mcp-nvidia-canary-v1"
-NVIDIA_CANARY_ID_PATTERN = r"NVC-[0-9]{6}"
+NVIDIA_CANARY_ID_PATTERN = re.compile(r"NVC-[0-9]{6}\\Z")
 
 @dataclass(frozen=True, slots=True)
 class NvidiaCanaryManifest:
@@ -100,86 +101,89 @@ class NvidiaCanaryManifest:
     probe_expected_text: str
     qualified_predecessor_sha: str
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class NvidiaCanarySnapshot:
     manifest: NvidiaCanaryManifest
-    request_body: bytes
+    request_body: bytes = field(repr=False)
     events: tuple[dict[str, object], ...]
     authorized_at: str | None
     provider_started_at: str | None
     terminal_event: dict[str, object] | None
 
 class NvidiaCanaryEvidenceError(ByteMCPError):
-    pass
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
 
 class NvidiaCanaryLockError(ByteMCPError):
-    pass
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
 
 class NvidiaCanaryEvidenceStore:
-    def __init__(self, root: Path) -> None: ...
+    def __init__(self, root: Path) -> None:
+        if not isinstance(root, Path):
+            raise ValueError("root is invalid")
+        self._root = root
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
     @classmethod
-    def from_environment(cls, environ: Mapping[str, str] | None = None) -> "NvidiaCanaryEvidenceStore": ...
-    def prepare(self, prepared_request: PreparedProviderRequest, *, probe_expected_text: str, qualified_predecessor_sha: str, prepared_at: str) -> NvidiaCanaryManifest: ...
-    def load(self, canary_id: str) -> NvidiaCanarySnapshot: ...
-    def append_authorized(self, canary_id: str, *, request_sha256: str, recorded_at: str) -> None: ...
-    def append_provider_start(self, canary_id: str, *, request_sha256: str, recorded_at: str) -> None: ...
-    def append_terminal(self, canary_id: str, event: Mapping[str, object]) -> None: ...
-    def transmit_lock(self, canary_id: str) -> ContextManager[None]: ...
+    def from_environment(
+        cls,
+        environ: Mapping[str, str] | None = None,
+        *,
+        platform_name: str | None = None,
+        home: Path | None = None,
+    ) -> "NvidiaCanaryEvidenceStore":
+        environment = os.environ if environ is None else environ
+        explicit = environment.get("BYTE_MCP_NVIDIA_EVIDENCE_DIR", "").strip()
+        if explicit:
+            return cls(Path(explicit).expanduser().resolve(strict=False))
+        platform_value = sys.platform if platform_name is None else platform_name
+        home_value = Path.home() if home is None else home
+        if platform_value == "win32":
+            local_app_data = environment.get("LOCALAPPDATA", "").strip()
+            base = Path(local_app_data) if local_app_data else home_value / "AppData" / "Local"
+            return cls(base / "Byte-MCP" / "nvidia")
+        xdg_data_home = environment.get("XDG_DATA_HOME", "").strip()
+        base = Path(xdg_data_home) if xdg_data_home else home_value / ".local" / "share"
+        return cls(base / "byte-mcp" / "nvidia")
 ```
 
-Evidence layout:
-
-```text
-<root>/canaries/NVC-000001/
-  manifest.json
-  request-body.bin
-  events.jsonl
-```
-
-Environment resolution:
-
-```text
-BYTE_MCP_NVIDIA_EVIDENCE_DIR set -> Path(value)
-Windows default -> %LOCALAPPDATA%/Byte-MCP/nvidia
-Unix with XDG_DATA_HOME -> $XDG_DATA_HOME/byte-mcp/nvidia
-Unix fallback -> ~/.local/share/byte-mcp/nvidia
-```
+Task 1 does not advertise persistence methods. Those are added only in Task 2 after their RED tests exist.
 
 - [ ] **Step 1: Write RED tests for root resolution and safe contracts**
 
-Add tests that monkeypatch environment/platform helpers and assert exact roots, reject empty/relative-invalid state only where the implementation contract requires it, validate `NVC-[0-9]{6}`, require timezone-aware ISO timestamps, and ensure manifest/snapshot reprs contain no request body or credential field.
+Add tests for exact explicit/Windows/XDG/fallback roots, valid and invalid canary IDs, timezone-aware manifest timestamps, lowercase 64-hex hashes, nonnegative bounded body byte count, and safe snapshot repr.
 
-Representative test shape:
+Representative tests:
 
 ```python
-def test_store_uses_explicit_evidence_root(monkeypatch, tmp_path):
-    monkeypatch.setenv("BYTE_MCP_NVIDIA_EVIDENCE_DIR", str(tmp_path / "evidence"))
-    store = NvidiaCanaryEvidenceStore.from_environment()
-    assert store.root == tmp_path / "evidence"
+def test_store_uses_explicit_evidence_root(tmp_path):
+    store = NvidiaCanaryEvidenceStore.from_environment(
+        {"BYTE_MCP_NVIDIA_EVIDENCE_DIR": str(tmp_path / "evidence")},
+        platform_name="win32",
+        home=tmp_path / "home",
+    )
+    assert store.root == (tmp_path / "evidence").resolve(strict=False)
 
 
-def test_manifest_rejects_invalid_canary_id():
+def test_store_uses_windows_default(tmp_path):
+    store = NvidiaCanaryEvidenceStore.from_environment(
+        {"LOCALAPPDATA": str(tmp_path / "local")},
+        platform_name="win32",
+        home=tmp_path / "home",
+    )
+    assert store.root == tmp_path / "local" / "Byte-MCP" / "nvidia"
+
+
+def test_manifest_rejects_invalid_canary_id(valid_manifest_kwargs):
     with pytest.raises(ValueError):
-        NvidiaCanaryManifest(
-            schema=NVIDIA_CANARY_SCHEMA,
-            canary_id="NVC-1",
-            provider_id="nvidia-api-catalog",
-            model_id="nvidia/nemotron-3.5-lightning-30b-a3b",
-            method="POST",
-            target_origin="https://integrate.api.nvidia.com",
-            endpoint_path="/v1/chat/completions",
-            payload_sha256="a" * 64,
-            request_sha256="b" * 64,
-            body_bytes=1,
-            prepared_at="2026-09-09T12:00:00+00:00",
-            probe_expected_text="BYTE_NVIDIA_CANARY_OK",
-            qualified_predecessor_sha="29daea6ef68ebb3d46031ce302b0108617bd1221",
-        )
+        NvidiaCanaryManifest(**{**valid_manifest_kwargs, "canary_id": "NVC-1"})
 ```
 
 - [ ] **Step 2: Run RED**
-
-Run:
 
 ```powershell
 python -m pytest tests/nvidia/test_canary_evidence.py -q
@@ -187,9 +191,15 @@ python -m pytest tests/nvidia/test_canary_evidence.py -q
 
 Expected: collection/import failure because `byte_mcp.nvidia.canary_evidence` does not exist.
 
-- [ ] **Step 3: Implement the minimal contracts and environment resolver**
+- [ ] **Step 3: Implement only the Task 1 contracts**
 
-Implement constants, dataclasses, bounded validation, safe errors, and `NvidiaCanaryEvidenceStore.root`. Do not implement persistence methods beyond raising `NotImplementedError` only if they are not exercised by Task 1 tests; before Task 1 commit, remove any such placeholder by either implementing the method in the task where it is first tested or omitting the method until that task. The committed Task 1 surface must contain no `TODO`, `TBD`, `pass`, or `NotImplementedError`.
+Implement the concrete contracts above plus validation helpers:
+- canary ID must full-match `NVC-[0-9]{6}`;
+- `schema` must equal `byte-mcp-nvidia-canary-v1`;
+- `payload_sha256`, `request_sha256`, and `qualified_predecessor_sha` must be lowercase 64-hex;
+- `body_bytes` must be a non-bool integer from `0` through `4_000_000`;
+- `prepared_at` must parse as timezone-aware ISO-8601;
+- `request_body` is excluded from repr.
 
 - [ ] **Step 4: Run focused GREEN**
 
@@ -210,26 +220,35 @@ git commit -m "feat: add NVIDIA canary evidence contracts"
 
 ---
 
-### Task 2: Immutable Preparation, Integrity Reconstruction, and Local Locks
+### Task 2: Immutable Persistence, Reconstruction, Events, and Locks
 
 **Files:**
 - Modify: `src/byte_mcp/nvidia/canary_evidence.py`
 - Modify: `tests/nvidia/test_canary_evidence.py`
 
 **Interfaces:**
-- Consumes: Task 1 contracts and `validate_prepared_provider_request_integrity()`.
-- Produces fully working methods:
+- Consumes: Task 1 contracts; `PreparedProviderRequest` and `validate_prepared_provider_request_integrity()`.
+- Adds these exact methods:
 
-```python
-NvidiaCanaryEvidenceStore.prepare(...)
-NvidiaCanaryEvidenceStore.load(canary_id)
-NvidiaCanaryEvidenceStore.append_authorized(...)
-NvidiaCanaryEvidenceStore.append_provider_start(...)
-NvidiaCanaryEvidenceStore.append_terminal(...)
-NvidiaCanaryEvidenceStore.transmit_lock(canary_id)
+```text
+prepare(self, prepared_request: PreparedProviderRequest, *, probe_expected_text: str, qualified_predecessor_sha: str, prepared_at: str) -> NvidiaCanaryManifest
+load(self, canary_id: str) -> NvidiaCanarySnapshot
+append_authorized(self, canary_id: str, *, request_sha256: str, recorded_at: str) -> None
+append_provider_start(self, canary_id: str, *, request_sha256: str, recorded_at: str) -> None
+append_terminal(self, canary_id: str, event: Mapping[str, object]) -> None
+transmit_lock(self, canary_id: str) -> AbstractContextManager[None]
 ```
 
-Private helpers must use create-once / append-only semantics:
+Evidence layout:
+
+```text
+<root>/canaries/NVC-000001/
+  manifest.json
+  request-body.bin
+  events.jsonl
+```
+
+Private immutable write helper:
 
 ```python
 def _write_immutable_bytes(path: Path, payload: bytes) -> None:
@@ -238,20 +257,40 @@ def _write_immutable_bytes(path: Path, payload: bytes) -> None:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
+```
 
+Private append helper:
 
+```python
 def _append_fsynced_jsonl(path: Path, event: Mapping[str, object]) -> None:
-    payload = canonical_json(event) + b"\n"
+    payload = _canonical_json(event) + b"\n"
     with path.open("ab", buffering=0) as handle:
         handle.write(payload)
         os.fsync(handle.fileno())
 ```
 
-Use a root-level exclusive lock file for allocation/preparation and a per-canary exclusive lock file for transmit. Acquire with `os.O_CREAT | os.O_EXCL`; if a lock already exists, raise `NvidiaCanaryLockError`. Remove the lock on normal context-manager exit. A crash-stale lock is not auto-recovered in NVIDIA-02.
+Canonical JSON is exactly:
 
-Preparation allocation is deterministic: scan `NVC-000001` upward, choose the first absent canary directory while holding the prepare lock, create the directory once, then write immutable evidence. In a fresh production evidence root the first identity is therefore exactly `NVC-000001`.
+```python
+json.dumps(
+    value,
+    sort_keys=True,
+    separators=(",", ":"),
+    ensure_ascii=False,
+    allow_nan=False,
+).encode("utf-8")
+```
 
-Lifecycle event schemas:
+Locking:
+- preparation uses `<root>/.prepare.lock` acquired with `os.O_WRONLY | os.O_CREAT | os.O_EXCL`;
+- transmission uses `<canary-dir>/.transmit.lock` with the same exclusive-create rule;
+- lock contention raises `NvidiaCanaryLockError`;
+- normal context exit removes the lock;
+- a crash-stale lock is never auto-recovered in NVIDIA-02.
+
+Preparation allocation while holding `.prepare.lock`: scan `NVC-000001` upward and claim the first absent canary directory via `mkdir(parents=False, exist_ok=False)`. In a fresh real evidence root the first canary is exactly `NVC-000001`.
+
+Lifecycle records before Task 5:
 
 ```json
 {"event_type":"CANARY_PREPARED","canary_id":"NVC-000001","request_sha256":"<sha>","recorded_at":"<aware-iso>"}
@@ -259,22 +298,11 @@ Lifecycle event schemas:
 {"event_type":"PROVIDER_START","canary_id":"NVC-000001","request_sha256":"<sha>","recorded_at":"<aware-iso>"}
 ```
 
-`CANARY_TERMINAL` accepts the fixed bounded terminal schema defined in Task 5 and must reject arbitrary extra keys.
+`load()` validates these event keys exactly, allows at most one authorization and one provider-start, requires prepared first, and rejects contradictory ordering. Task 5 extends it with the fixed terminal record.
 
-- [ ] **Step 1: Write RED tests for immutable persistence and lifecycle validation**
+- [ ] **Step 1: Write RED tests**
 
-Cover:
-- exact `request-body.bin` bytes equal `PreparedProviderRequest.body_bytes`;
-- manifest byte count/hash/request metadata match the prepared request;
-- manifest and body cannot be overwritten;
-- concurrent/duplicate prepare cannot claim the same NVC directory;
-- `load()` recomputes payload SHA-256 and reconstructs `PreparedProviderRequest`, then calls `validate_prepared_provider_request_integrity()`;
-- tampered body or manifest fails closed;
-- malformed JSONL or invalid event order fails closed;
-- at most one authorization, provider-start, and terminal event;
-- terminal before provider-start rejected;
-- provider-start without terminal reconstructs as consumed/ambiguous;
-- lock contention raises locally.
+Cover exact body persistence; canonical manifest; create-once identity files; deterministic first identity; preparation lock contention; transmit lock contention; body/hash tampering; request-metadata tampering; malformed JSONL; duplicate/ordered events; provider-start without terminal reconstructing as consumed/ambiguous.
 
 - [ ] **Step 2: Run RED**
 
@@ -282,20 +310,14 @@ Cover:
 python -m pytest tests/nvidia/test_canary_evidence.py -q
 ```
 
-Expected: new persistence/lifecycle tests fail because methods are absent or incomplete.
+Expected: new persistence/lifecycle tests fail because Task 2 methods do not exist.
 
-- [ ] **Step 3: Implement canonical immutable persistence and reconstruction**
+- [ ] **Step 3: Implement persistence and integrity reconstruction**
 
-Use canonical JSON:
-
-```python
-json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
-```
-
-`load()` must construct:
+`load()` must reconstruct exactly:
 
 ```python
-PreparedProviderRequest(
+prepared = PreparedProviderRequest(
     provider_id=manifest.provider_id,
     method=manifest.method,
     target_origin=manifest.target_origin,
@@ -305,11 +327,10 @@ PreparedProviderRequest(
     payload_sha256=manifest.payload_sha256,
     request_sha256=manifest.request_sha256,
 )
+validate_prepared_provider_request_integrity(prepared)
 ```
 
-and validate it before returning a snapshot.
-
-Do not persist response body, API key, authorization header, environment dump, or raw exception strings.
+The stored manifest contains no credential or Authorization field. `events.jsonl` never contains request body or provider response body.
 
 - [ ] **Step 4: Run focused GREEN**
 
@@ -330,7 +351,7 @@ git commit -m "feat: persist immutable NVIDIA canary evidence"
 
 ---
 
-### Task 3: Fixed Lightning Prepare and Read-Only Inspect Orchestration
+### Task 3: Fixed Lightning Prepare and Read-Only Inspect
 
 **Files:**
 - Create: `src/byte_mcp/nvidia/canary.py`
@@ -338,7 +359,7 @@ git commit -m "feat: persist immutable NVIDIA canary evidence"
 - Modify: `src/byte_mcp/nvidia/__init__.py`
 
 **Interfaces:**
-- Consumes: `prepare_nvidia_chat_request()`, `NvidiaCanaryEvidenceStore`.
+- Consumes: `prepare_nvidia_chat_request()` and `NvidiaCanaryEvidenceStore`.
 - Produces:
 
 ```python
@@ -346,6 +367,11 @@ NVIDIA_LIGHTNING_CANARY_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 NVIDIA_LIGHTNING_CANARY_PROMPT = "Reply with exactly: BYTE_NVIDIA_CANARY_OK"
 NVIDIA_LIGHTNING_CANARY_EXPECTED_TEXT = "BYTE_NVIDIA_CANARY_OK"
 NVIDIA_01_QUALIFIED_SHA = "29daea6ef68ebb3d46031ce302b0108617bd1221"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
 
 @dataclass(frozen=True, slots=True)
 class NvidiaCanaryPrepareReceipt:
@@ -357,6 +383,7 @@ class NvidiaCanaryPrepareReceipt:
     body_bytes: int
     prepared_at: str
     evidence_root: str
+
 
 @dataclass(frozen=True, slots=True)
 class NvidiaCanaryInspection:
@@ -370,16 +397,19 @@ class NvidiaCanaryInspection:
     probe_text: str
     provider_started_at: str | None
     has_terminal_event: bool
-
-
-def prepare_lightning_canary(store: NvidiaCanaryEvidenceStore, *, now: Callable[[], datetime] = ...) -> NvidiaCanaryPrepareReceipt: ...
-def inspect_lightning_canary(store: NvidiaCanaryEvidenceStore, canary_id: str) -> NvidiaCanaryInspection: ...
 ```
 
-Fixed preparation call:
+Exact function signatures:
+
+```text
+prepare_lightning_canary(store: NvidiaCanaryEvidenceStore, *, now: Callable[[], datetime] = _utc_now) -> NvidiaCanaryPrepareReceipt
+inspect_lightning_canary(store: NvidiaCanaryEvidenceStore, canary_id: str) -> NvidiaCanaryInspection
+```
+
+Fixed request construction:
 
 ```python
-prepare_nvidia_chat_request(
+prepared = prepare_nvidia_chat_request(
     model_id=NVIDIA_LIGHTNING_CANARY_MODEL_ID,
     messages=[{"role": "user", "content": NVIDIA_LIGHTNING_CANARY_PROMPT}],
     temperature=1.0,
@@ -390,13 +420,7 @@ prepare_nvidia_chat_request(
 
 - [ ] **Step 1: Write RED tests**
 
-Prove:
-- exact model/prompt/temperature/top_p/max_tokens;
-- body contains generated `n=1` and `stream=false` from NVIDIA-01;
-- `prepare_lightning_canary()` succeeds with `NVIDIA_API_KEY` absent;
-- prepare performs zero HTTP calls and never invokes `NvidiaHostedSettings.load()`;
-- inspection is read-only, revalidates evidence via `store.load()`, and never loads credentials;
-- inspection reports provider-start/terminal state without exposing body bytes or secrets.
+Prove exact model/prompt/temperature/top_p/max_tokens; generated `n=1` and `stream=false`; prepare succeeds with key absent; prepare makes zero HTTP calls and never invokes `NvidiaHostedSettings.load()`; inspect is read-only, calls `store.load()` integrity validation, and does not access credentials.
 
 - [ ] **Step 2: Run RED**
 
@@ -406,15 +430,15 @@ python -m pytest tests/nvidia/test_canary.py -q
 
 Expected: import/attribute failure for the new canary API.
 
-- [ ] **Step 3: Implement minimal prepare/inspect orchestration**
+- [ ] **Step 3: Implement prepare/inspect**
 
-Use timezone-aware UTC timestamps only:
+Convert injected time to UTC:
 
 ```python
 prepared_at = now().astimezone(UTC).isoformat()
 ```
 
-Pass `NVIDIA_01_QUALIFIED_SHA` into evidence preparation. Do not import or call the catalog client, OX, Wolfram, or `NvidiaHostedSettings.load()` in prepare/inspect.
+Call `store.prepare()` with the exact expected semantic text and `NVIDIA_01_QUALIFIED_SHA`. `inspect_lightning_canary()` maps a verified snapshot to bounded metadata only. Do not import the catalog client, OX, Wolfram, or call `NvidiaHostedSettings.load()`.
 
 - [ ] **Step 4: Run focused GREEN**
 
@@ -443,7 +467,7 @@ git commit -m "feat: prepare and inspect NVIDIA Lightning canary"
 
 **Interfaces:**
 - Consumes: `NvidiaHostedSettings.load()`, `ProviderTransmissionContext`, `execute_prepared_nvidia_chat()`.
-- Produces:
+- Adds:
 
 ```python
 @dataclass(frozen=True, slots=True, repr=False)
@@ -454,57 +478,40 @@ class NvidiaCanaryTransmissionResult:
     model_id: str
     semantic_probe_match: bool | None
     response_content: str | None = field(default=None, repr=False)
-
-async def transmit_lightning_canary(
-    store: NvidiaCanaryEvidenceStore,
-    *,
-    canary_id: str,
-    expected_request_sha256: str,
-    approve: bool,
-    settings_loader: Callable[[], NvidiaHostedSettings] = NvidiaHostedSettings.load,
-    executor: Callable[..., Awaitable[NvidiaChatResult]] = execute_prepared_nvidia_chat,
-    now: Callable[[], datetime] = ...,
-) -> NvidiaCanaryTransmissionResult: ...
 ```
 
-Pre-provider ordering inside `store.transmit_lock(canary_id)`:
+Exact transmit signature:
 
 ```text
-load/revalidate snapshot
-validate approve == True
-validate expected request hash
-validate no prior provider-start
-validate no terminal event
-load NvidiaHostedSettings
-validate api_key configured and timeouts constructed
-reconstruct exact PreparedProviderRequest from persisted body/manifest
-perform all deterministic local checks
-append CANARY_AUTHORIZED if absent; if already present it must match the same hash
-choose provider_started_at in memory
-append + fsync PROVIDER_START with exactly that timestamp/hash
-construct ProviderTransmissionContext in memory
-call executor exactly once
+transmit_lightning_canary(store: NvidiaCanaryEvidenceStore, *, canary_id: str, expected_request_sha256: str, approve: bool, settings_loader: Callable[[], NvidiaHostedSettings] = NvidiaHostedSettings.load, executor: Callable[[PreparedProviderRequest, ProviderTransmissionContext, NvidiaHostedSettings], Awaitable[NvidiaChatResult]] = execute_prepared_nvidia_chat, now: Callable[[], datetime] = _utc_now) -> Awaitable[NvidiaCanaryTransmissionResult]
 ```
 
-After `PROVIDER_START`, there must be no store read, path read, settings load, catalog lookup, route selection, or prompt reconstruction before `executor(...)`.
+Pre-provider ordering while holding `store.transmit_lock(canary_id)`:
+
+```text
+1. load and revalidate snapshot
+2. require approve is exactly True
+3. require expected request hash equals manifest request hash
+4. require no prior provider-start
+5. require no terminal event
+6. load NvidiaHostedSettings
+7. require api_key configured and timeout policy valid
+8. reconstruct exact PreparedProviderRequest from persisted manifest/body
+9. validate prepared request integrity
+10. append+fsync CANARY_AUTHORIZED if absent; if present it must bind the same hash
+11. choose provider_started_at in memory
+12. append+fsync PROVIDER_START using that exact timestamp/hash
+13. construct ProviderTransmissionContext in memory
+14. call executor exactly once
+```
 
 - [ ] **Step 1: Write RED preflight and ordering tests**
 
-Cover zero-call cases:
-- `approve=False`;
-- wrong expected request hash;
-- missing canary;
-- tampered body/manifest;
-- wrong provider/model/origin/path;
-- missing API key;
-- invalid timeout configuration;
-- existing provider-start;
-- existing terminal event;
-- transmit lock contention.
+Zero-executor-call cases: `approve=False`, wrong request hash, missing canary, tampered evidence, wrong provider/model/origin/path, missing API key, invalid timeout configuration, prior provider-start, prior terminal event, and transmit-lock contention.
 
-Ordering test: inject an executor that inspects the already-persisted `events.jsonl` when invoked and asserts the final event is `PROVIDER_START`, and that `ProviderTransmissionContext.provider_started_at` equals that event's `recorded_at` and expected hash equals manifest hash.
+Ordering test: inject an executor that observes already-written lifecycle evidence when called and verifies the final event is `PROVIDER_START`; verify the context timestamp and expected request hash equal the persisted start record and manifest.
 
-Duplicate invocation test: two concurrent local transmit calls against one prepared canary must produce at most one executor invocation and one `PROVIDER_START`.
+Concurrency test: two local transmit calls for one canary yield at most one executor call and one provider-start.
 
 - [ ] **Step 2: Run RED**
 
@@ -512,13 +519,11 @@ Duplicate invocation test: two concurrent local transmit calls against one prepa
 python -m pytest tests/nvidia/test_canary.py -q
 ```
 
-Expected: new transmit tests fail because transmit orchestration is absent.
+Expected: transmit tests fail because transmit orchestration is absent.
 
-- [ ] **Step 3: Implement preflight and exact provider-start adjacency**
+- [ ] **Step 3: Implement preflight and exact start adjacency**
 
-Use the persisted `request_body` and manifest fields to reconstruct `PreparedProviderRequest`; call `validate_prepared_provider_request_integrity()` before provider-start. Instantiate `NvidiaHostedSettings` before provider-start and require `settings.api_key is not None`.
-
-After fsync of `PROVIDER_START`, perform only:
+Before provider-start, reconstruct and validate the persisted request and load settings. After the fsynced `PROVIDER_START`, the only allowed preparation is:
 
 ```python
 context = ProviderTransmissionContext(
@@ -528,7 +533,7 @@ context = ProviderTransmissionContext(
 result = await executor(prepared_request, context, settings)
 ```
 
-No filesystem access may be introduced between those statements and the provider-start append except the append/fsync itself.
+Do not access `store`, `Path`, environment, catalog, registry, routing state, or prompt-building code between the provider-start append and executor call.
 
 - [ ] **Step 4: Run focused GREEN**
 
@@ -538,7 +543,7 @@ python -m ruff check src/byte_mcp/nvidia/canary.py tests/nvidia/test_canary.py
 python -m ruff format --check src/byte_mcp/nvidia/canary.py tests/nvidia/test_canary.py
 ```
 
-Expected: all preflight/order tests pass using injected executors only; provider calls remain zero.
+Expected: all pass using injected executors only; provider activity remains zero.
 
 - [ ] **Step 5: Commit**
 
@@ -549,7 +554,7 @@ git commit -m "feat: govern NVIDIA canary provider start"
 
 ---
 
-### Task 5: Bounded Terminalization and Crash/Outcome Semantics
+### Task 5: Bounded Terminalization and Crash Semantics
 
 **Files:**
 - Modify: `src/byte_mcp/nvidia/canary.py`
@@ -559,10 +564,10 @@ git commit -m "feat: govern NVIDIA canary provider start"
 
 **Interfaces:**
 - Consumes: `NvidiaChatResult`, `NvidiaChatError`, `ProviderTransportError`, `ProviderAttemptOutcome`.
-- Produces a fixed terminal event schema containing only:
+- Extends `load()` and `append_terminal()` for this exact terminal-key set:
 
 ```text
-event_type = CANARY_TERMINAL
+event_type
 canary_id
 request_sha256
 provider_id
@@ -586,7 +591,7 @@ semantic_probe_match
 recorded_at
 ```
 
-No raw response content is durable.
+`event_type` is exactly `CANARY_TERMINAL`. Fields that do not apply are persisted as JSON null so the schema remains fixed.
 
 Success semantics:
 
@@ -595,23 +600,14 @@ semantic_probe_match = result.content == NVIDIA_LIGHTNING_CANARY_EXPECTED_TEXT
 attempt_outcome = ProviderAttemptOutcome.COMPLETED
 ```
 
-Known failure terminalization:
-- `NvidiaChatError`: use its `attempt_outcome`, bounded `kind.value`, and transport observation.
-- `ProviderTransportError`: use its `attempt_outcome`, bounded transport failure kind and observation.
-- Do not catch arbitrary `Exception` after provider-start. An unexpected crash/exception intentionally leaves `PROVIDER_START` without terminal evidence, which blocks retransmission as ambiguous.
+Known failure handling:
+- `NvidiaChatError`: persist its bounded NVIDIA failure kind, attempt outcome, and observation; then re-raise the same safe error.
+- `ProviderTransportError`: persist its bounded transport failure kind, attempt outcome, and observation; then re-raise the same safe error.
+- Do not catch arbitrary exceptions after provider-start. An unexpected exception intentionally leaves provider-start without terminal evidence and therefore blocks retransmission.
 
 - [ ] **Step 1: Write RED terminalization tests**
 
-Inject executor outcomes for:
-- successful exact semantic match;
-- successful nonmatching content;
-- HTTP `REJECTED` represented by `NvidiaChatError`;
-- protocol failure after complete 2xx represented by `NvidiaChatError` with `COMPLETED`;
-- `NOT_SENT` transport error after provider-start;
-- `OUTCOME_UNKNOWN` transport error;
-- unexpected exception after provider-start leaves no terminal event and future transmit is blocked.
-
-Assert exactly one terminal event, no retry, no second executor call, and no response body/credential in `events.jsonl`.
+Inject: parsed success with exact semantic match; parsed success with different content; NVIDIA HTTP rejection; NVIDIA protocol failure after complete 2xx; transport `NOT_SENT` after provider-start; transport `OUTCOME_UNKNOWN`; unexpected exception after provider-start. Assert one terminal event for known outcomes, zero retries, zero duplicate executor calls, no durable response content, and blocked retransmit after unexpected exception.
 
 - [ ] **Step 2: Run RED**
 
@@ -619,11 +615,11 @@ Assert exactly one terminal event, no retry, no second executor call, and no res
 python -m pytest tests/nvidia/test_canary.py tests/nvidia/test_canary_evidence.py -q
 ```
 
-Expected: terminalization tests fail until fixed schema and exception mapping exist.
+Expected: new terminalization assertions fail until the fixed schema and known-error mapping are implemented.
 
-- [ ] **Step 3: Implement minimal bounded terminalization**
+- [ ] **Step 3: Implement terminal mapping and persistence**
 
-Create one helper in `canary.py` that maps `NvidiaChatResult`, `NvidiaChatError`, or `ProviderTransportError` into the fixed terminal event dictionary. Persist once through `store.append_terminal()` while the transmit lock remains held. Re-raise bounded NVIDIA/transport errors after terminal persistence so the operator sees the existing safe error contract; return `NvidiaCanaryTransmissionResult` only on parsed success.
+Create private helpers that map `ProviderTransportObservation` plus result/error metadata into the exact terminal dictionary. Persist the terminal event once while the transmit lock remains held. Return `NvidiaCanaryTransmissionResult` only for parsed success.
 
 - [ ] **Step 4: Run focused GREEN**
 
@@ -652,7 +648,7 @@ git commit -m "feat: terminalize NVIDIA canary outcomes"
 
 **Interfaces:**
 - Consumes: `NvidiaCanaryEvidenceStore.from_environment()`, `prepare_lightning_canary()`, `inspect_lightning_canary()`, `transmit_lightning_canary()`.
-- Produces commands:
+- Produces exactly:
 
 ```text
 python scripts/nvidia_lightning_canary.py prepare
@@ -660,20 +656,17 @@ python scripts/nvidia_lightning_canary.py inspect --canary-id NVC-000001
 python scripts/nvidia_lightning_canary.py transmit --canary-id NVC-000001 --expected-request-sha256 <64-lowercase-hex> --approve
 ```
 
-No `--api-key`, `--token`, `--credential`, model override, endpoint override, prompt override, retry flag, or fallback flag exists.
+No credential, model, endpoint, prompt, retry, or fallback option is accepted.
 
-Output is canonical/sorted JSON metadata. `prepare` and `inspect` never output request body bytes. `inspect` may output the fixed probe text. Successful `transmit` may output immediate `response_content`, but that content must not be written into durable evidence.
+Public script signature:
+
+```text
+main(argv: Sequence[str] | None = None) -> int
+```
 
 - [ ] **Step 1: Write RED CLI tests**
 
-Use subprocess or direct `main(argv)` injection with temporary `BYTE_MCP_NVIDIA_EVIDENCE_DIR`. Prove:
-- exact three subcommands;
-- `prepare` works with `NVIDIA_API_KEY` absent;
-- `inspect` works with key absent;
-- parser rejects `--api-key` and unknown model/endpoint options;
-- transmit requires all three: canary ID, expected request hash, and `--approve`;
-- no command contains retry/fallback switches;
-- JSON output contains only bounded expected keys.
+Test exact three subcommands; prepare/inspect with key absent; rejection of credential/model/endpoint/prompt switches; required transmit ID/hash/approval; no retry/fallback switches; bounded sorted-JSON output.
 
 - [ ] **Step 2: Run RED**
 
@@ -683,9 +676,9 @@ python -m pytest tests/nvidia/test_canary_cli.py -q
 
 Expected: failure because the script does not exist.
 
-- [ ] **Step 3: Implement the CLI**
+- [ ] **Step 3: Implement argparse-only CLI**
 
-Use `argparse` only. `main(argv: Sequence[str] | None = None) -> int` dispatches commands. `transmit` uses `asyncio.run(transmit_lightning_canary(...))`. Convert bounded dataclasses to explicit dictionaries; do not dump `__dict__`, environment, exception objects, or settings.
+`main()` constructs `NvidiaCanaryEvidenceStore.from_environment()`. `prepare` and `inspect` call only their credential-blind functions. `transmit` calls `asyncio.run(transmit_lightning_canary(...))`. Output explicit dictionaries rather than object/environment dumps. Immediate successful transmit may print `response_content`; evidence policy remains unchanged.
 
 - [ ] **Step 4: Run focused GREEN**
 
@@ -695,7 +688,7 @@ python -m ruff check scripts/nvidia_lightning_canary.py tests/nvidia/test_canary
 python -m ruff format --check scripts/nvidia_lightning_canary.py tests/nvidia/test_canary_cli.py
 ```
 
-Expected: all pass, provider calls zero.
+Expected: all pass, provider activity zero.
 
 - [ ] **Step 5: Commit**
 
@@ -706,35 +699,34 @@ git commit -m "feat: add NVIDIA Lightning canary CLI"
 
 ---
 
-### Task 7: Security, Isolation, and Exactly-One Invariant Suite
+### Task 7: Security and Isolation Invariant Suite
 
 **Files:**
 - Create: `tests/nvidia/test_n02_security_invariants.py`
-- Modify production files only if a new RED proves a real NVIDIA-02 defect.
+- No production modification is authorized by this task itself.
 
 **Interfaces:**
 - Consumes all NVIDIA-02 production surfaces.
-- Produces regression invariants, no new public production API expected.
+- Produces only invariant tests.
 
-- [ ] **Step 1: Write adversarial RED/invariant tests**
+- [ ] **Step 1: Add invariant tests**
 
 Prove:
-- `canary.py` / `canary_evidence.py` import neither `byte_mcp.ox` nor `byte_mcp.wolfram`;
+- `canary.py` and `canary_evidence.py` import neither OX nor Wolfram;
 - `server.py` does not import/register NVIDIA canary/inference;
-- `catalog.py` and `registry.py` are not used by transmit;
-- source contains no retry/backoff/sleep/fallback/request replay implementation;
+- transmit does not call catalog or registry;
+- canary source contains no retry/backoff/sleep/fallback/request-replay implementation;
 - CLI exposes no API-key/model/endpoint/prompt override;
-- tracked NVIDIA-02 files contain no strings matching `nvapi-` test secrets;
-- evidence files never contain injected secret sentinel or Authorization header;
-- prepare/inspect never call settings loader;
-- exact persisted body is the body inside reconstructed `PreparedProviderRequest` passed to the injected executor;
-- stale/wrong request hash produces zero executor calls;
-- wrong provider/model/origin/path produces zero executor calls;
-- two transmit calls cannot produce two provider starts or two executor calls;
-- provider-start without terminal blocks forever in NVIDIA-02;
+- tracked NVIDIA-02 content contains no `nvapi-` secret sentinel;
+- evidence never contains injected key/Authorization sentinel;
+- prepare/inspect never call the settings loader;
+- executor receives a prepared request whose `body_bytes` exactly equal persisted `request-body.bin`;
+- wrong hash/provider/model/origin/path yields zero executor calls;
+- duplicate transmit yields at most one provider-start and one executor call;
+- provider-start without terminal blocks retransmission;
 - no A002/retry path exists;
-- no `/v1/models` request exists anywhere in canary code;
-- `NVIDIA_API_KEY` is read only through `NvidiaHostedSettings.load()` on transmit.
+- no `/v1/models` operation exists in canary code;
+- `NVIDIA_API_KEY` is accessed only by the existing `NvidiaHostedSettings.load()` path during transmit.
 
 - [ ] **Step 2: Run invariants**
 
@@ -742,29 +734,31 @@ Prove:
 python -m pytest tests/nvidia/test_n02_security_invariants.py -q
 ```
 
-Expected: PASS if Tasks 1-6 satisfy the frozen design. If a test fails, treat it as RED evidence for a focused repair.
+Expected: PASS if Tasks 1-6 satisfy the approved design.
 
-- [ ] **Step 3: Repair only proven defects**
+- [ ] **Step 3: If any invariant fails, stop for an exact plan amendment**
 
-For each failure, make the smallest production change addressing the exact invariant. Do not refactor unrelated code. If repair would require a frozen OX/Wolfram/server/catalog/registry/dependency change or a live provider call, STOP and amend the design instead.
+Do not mutate production from a generic repair instruction. Record the failing test, root cause, affected file, smallest proposed change, and exact focused verification; amend this plan with that repair before implementation resumes.
 
-- [ ] **Step 4: Re-run scoped regression**
+- [ ] **Step 4: Run scoped regression once invariants pass**
 
 ```powershell
 python -m pytest tests/nvidia/test_n02_security_invariants.py tests/nvidia/test_canary.py tests/nvidia/test_canary_evidence.py tests/nvidia/test_canary_cli.py -q
 python -m ruff check src/byte_mcp/nvidia scripts/nvidia_lightning_canary.py tests/nvidia
+python -m ruff format --check src/byte_mcp/nvidia/canary.py src/byte_mcp/nvidia/canary_evidence.py scripts/nvidia_lightning_canary.py tests/nvidia/test_canary.py tests/nvidia/test_canary_evidence.py tests/nvidia/test_canary_cli.py tests/nvidia/test_n02_security_invariants.py
 ```
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit test-only invariant freeze**
 
 ```powershell
-git add tests/nvidia/test_n02_security_invariants.py src/byte_mcp/nvidia scripts/nvidia_lightning_canary.py tests/nvidia
+git add tests/nvidia/test_n02_security_invariants.py
+git diff --cached --name-only
 git commit -m "test: freeze NVIDIA-02 canary security invariants"
 ```
 
-Before committing, inspect `git diff --cached --name-only`; if unrelated/frozen files appear, unstage them and STOP to investigate.
+The staged filename list must contain only `tests/nvidia/test_n02_security_invariants.py`.
 
 ---
 
@@ -772,11 +766,11 @@ Before committing, inspect `git diff --cached --name-only`; if unrelated/frozen 
 
 **Files:**
 - No production changes expected.
-- Formatting-only repair to NVIDIA-02 changed files is allowed if the baseline-aware Ruff format gate identifies new NVIDIA-02 formatting debt.
+- A formatting-only repair to NVIDIA-02 changed files is allowed only when the baseline-aware format check proves new NVIDIA-02 formatting debt; commit it separately.
 
 **Interfaces:**
 - Consumes the complete NVIDIA-02 branch.
-- Produces an offline-qualified branch eligible to prepare `NVC-000001`; it does **not** authorize live transmission.
+- Produces an offline-qualified branch eligible to prepare `NVC-000001`; it does not authorize live transmission.
 
 - [ ] **Step 1: Verify branch lineage and scope**
 
@@ -810,7 +804,7 @@ docs/superpowers/plans/2026-09-09-nvidia-provider-n02-lightning-canary-implement
 .superpowers/sdd/**
 ```
 
-If `src/byte_mcp/nvidia/settings.py`, provider-neutral NVIDIA-01 code, any frozen path, workflow file, or dependency file changed, require explicit documented justification from a focused RED; otherwise STOP.
+Any other changed path is a STOP unless already covered by an approved plan amendment.
 
 - [ ] **Step 2: Run focused NVIDIA gates**
 
@@ -833,7 +827,7 @@ python -m ruff check .
 
 Expected: pass with only previously accepted warnings.
 
-- [ ] **Step 4: Run repository-wide Ruff format baseline comparison exactly once**
+- [ ] **Step 4: Compare repository-wide format debt to NVIDIA-01 exactly once**
 
 Candidate:
 
@@ -842,22 +836,23 @@ python -m ruff format --check . 2>&1 | Tee-Object "$env:TEMP\n02-final-format.tx
 $FINAL_FORMAT_EXIT = $LASTEXITCODE
 ```
 
-Qualified NVIDIA-01 baseline in a detached worktree:
+NVIDIA-01 baseline:
 
 ```powershell
-git worktree add --detach "$env:TEMP\Byte-MCP-N01-format-baseline" 29daea6ef68ebb3d46031ce302b0108617bd1221
-Push-Location "$env:TEMP\Byte-MCP-N01-format-baseline"
+$BASE_WT = Join-Path $env:TEMP "Byte-MCP-N01-format-baseline"
+git worktree add --detach $BASE_WT 29daea6ef68ebb3d46031ce302b0108617bd1221
+Push-Location $BASE_WT
 python -m ruff format --check . 2>&1 | Tee-Object "$env:TEMP\n01-format-baseline.txt"
 $BASE_FORMAT_EXIT = $LASTEXITCODE
 Pop-Location
 Compare-Object (Get-Content "$env:TEMP\n01-format-baseline.txt") (Get-Content "$env:TEMP\n02-final-format.txt")
 ```
 
-Acceptance: NVIDIA-02 changed-scope format gate is zero and repository-wide failures introduce no new NVIDIA-02 file relative to the N01 baseline. Do not format historical unrelated debt.
+Acceptance: the changed-scope format check is zero and repository-wide output introduces no new NVIDIA-02 file relative to the N01 baseline. Do not format unrelated historical debt.
 
-- [ ] **Step 5: Prove provider activity remains zero**
+- [ ] **Step 5: Prove provider activity is still zero**
 
-Report explicitly:
+Report exactly:
 
 ```text
 NVIDIA catalog calls: 0
@@ -871,38 +866,26 @@ runtime promotion: NO
 NVIDIA inference MCP registration: NO
 ```
 
-No test may require real `NVIDIA_API_KEY`.
+- [ ] **Step 6: Perform whole-branch review**
 
-- [ ] **Step 6: Final whole-branch review**
+Review `29daea6...HEAD` against the approved spec and verify exact-byte persistence, hash-bound approval, pre-start credential validation, start-before-executor ordering, no post-start local I/O before executor, one-start/one-executor maximum, ambiguous crash blocking, bounded secret-free terminal evidence, semantic/transport separation, and absence of `/v1/models`, retry, or fallback. Any material finding requires an exact plan amendment before repair.
 
-Review `29daea6...HEAD` against the approved spec. Confirm:
-- exact request bytes are persisted/reused;
-- approval binds canary ID + request hash;
-- credential/config validation precedes provider-start;
-- provider-start fsync precedes executor;
-- no filesystem/credential/catalog/routing action between provider-start and executor;
-- one start maximum;
-- one executor call maximum;
-- crash after start blocks retransmit;
-- terminal evidence bounded and secret-free;
-- transport success separated from semantic match;
-- no `/v1/models`, retry, fallback, or second attempt.
-
-Fix only substantiated findings, then rerun the affected focused tests plus full gates once after the final fix wave.
-
-- [ ] **Step 7: Commit final qualification-only repair if needed and push normally**
+- [ ] **Step 7: Push normally and verify remote identity**
 
 ```powershell
 git status --short --branch
 git push origin HEAD:refs/heads/feat/nvidia-provider-n02-lightning-canary
-git ls-remote origin refs/heads/feat/nvidia-provider-n02-lightning-canary
+$LOCAL = git rev-parse HEAD
+$REMOTE = (git ls-remote origin refs/heads/feat/nvidia-provider-n02-lightning-canary).Split("`t")[0]
+"LOCAL : $LOCAL"
+"REMOTE: $REMOTE"
 ```
 
-No force push.
+Require local and remote SHA equality. Never force-push.
 
 - [ ] **Step 8: Require fresh GitHub Actions on exact remote HEAD**
 
-All existing CI jobs must pass on the exact final remote SHA:
+All existing jobs must pass on the exact final SHA:
 
 ```text
 Python 3.12 on ubuntu-latest: compile/lint/test PASS
@@ -927,12 +910,12 @@ LIVE_PROVIDER_AUTHORIZATION: NOT_GRANTED
 - Creates local runtime evidence under the configured NVIDIA evidence root only.
 
 **Interfaces:**
-- Consumes the exact offline-qualified NVIDIA-02 branch and `scripts/nvidia_lightning_canary.py prepare/inspect`.
-- Produces the exact prepared identity that the user may later authorize.
+- Consumes the exact offline-qualified NVIDIA-02 branch and the `prepare`/`inspect` CLI.
+- Produces the exact prepared identity that may later be authorized.
 
-**Authorization boundary:** Task 9 is provider-free but mutates local runtime evidence. Execute it only after Byte verifies the exact offline-qualified branch/CI and the operator authorizes preparation. It does **not** authorize transmission.
+**Authorization boundary:** Task 9 mutates only local evidence and performs no provider request. Execute it only after Byte verifies the exact offline-qualified branch/CI and the operator approves preparation. It does not authorize transmission.
 
-- [ ] **Step 1: Verify exact qualified code and credential blindness**
+- [ ] **Step 1: Verify exact qualified code and remove any session key**
 
 ```powershell
 git branch --show-current
@@ -941,7 +924,7 @@ git status --short --branch
 Remove-Item Env:NVIDIA_API_KEY -ErrorAction SilentlyContinue
 ```
 
-Require exact final qualified SHA from Task 8 and a clean working tree.
+Require the exact final qualified SHA from Task 8 and a clean working tree.
 
 - [ ] **Step 2: Prepare one canary**
 
@@ -949,13 +932,7 @@ Require exact final qualified SHA from Task 8 and a clean working tree.
 python scripts/nvidia_lightning_canary.py prepare
 ```
 
-Expected fresh evidence identity:
-
-```text
-NVC-000001
-```
-
-If another NVC already exists in the actual evidence root, STOP and inspect; do not silently treat a later identity as the first live canary.
+In a fresh real evidence root require `canary_id` exactly `NVC-000001`. If the actual evidence root already contains any NVC identity, STOP and inspect it rather than silently treating a later identity as the first live canary.
 
 - [ ] **Step 3: Inspect read-only**
 
@@ -963,7 +940,7 @@ If another NVC already exists in the actual evidence root, STOP and inspect; do 
 python scripts/nvidia_lightning_canary.py inspect --canary-id NVC-000001
 ```
 
-Capture and report exactly:
+Capture exactly:
 
 ```text
 canary_id
@@ -988,7 +965,7 @@ provider_started_at = null
 has_terminal_event = false
 ```
 
-- [ ] **Step 4: Stop before credential setup or transmission**
+- [ ] **Step 4: Hard stop before credential setup/transmission**
 
 Do not set `NVIDIA_API_KEY`. Do not run `transmit`. Do not call `/v1/models`. Do not call any provider.
 
@@ -1004,81 +981,75 @@ NVC-000001: PREPARED
 LIVE_PROVIDER_AUTHORIZATION: REQUIRED
 ```
 
-The user must then explicitly approve the exact pair:
-
-```text
-canary_id = NVC-000001
-request_sha256 = <exact prepared hash>
-```
-
-Only after that separate approval may the operator configure the session-only API key and execute the single live transmit command.
+The user must separately approve the exact pair `canary_id=NVC-000001` and its exact `request_sha256` before live transmission can occur.
 
 ---
 
-## Live Transmission — Explicitly Outside This Implementation Authorization
+## Live Transmission — Outside This Implementation Authorization
 
-After Task 9, Byte will present the exact prepared identity to the user. The live request is a separate consequential action.
+After Task 9, Byte presents the exact prepared identity to the user. The live request is a separate consequential action.
 
-If and only if the user explicitly authorizes the exact `NVC-000001` + `request_sha256` pair, the operator may configure the key without echo:
+Only after explicit authorization of the exact `NVC-000001` + `request_sha256` pair may the operator set the session-only credential:
 
 ```powershell
 $env:NVIDIA_API_KEY = Read-Host "NVIDIA API key" -MaskInput
 ```
 
-and invoke exactly one command:
+and invoke one command:
 
 ```powershell
 python scripts/nvidia_lightning_canary.py transmit --canary-id NVC-000001 --expected-request-sha256 <EXACT_APPROVED_SHA256> --approve
 ```
 
-The live operation permits exactly one NVIDIA inference provider request and zero other provider requests. Any result or ambiguity stops the operation; no retry is authorized.
+That operation permits exactly one NVIDIA inference request and zero other provider requests. Any result or ambiguity stops the operation. No retry is authorized.
 
 ---
 
 ## Stop Conditions During Implementation
 
-Stop without live provider contact if any of the following becomes necessary:
+Stop without provider contact if implementation would require any of the following:
 
 1. modify OX, Wolfram, `server.py`, catalog, registry, or dependencies;
-2. change the NVIDIA-01 request/transport/chat contracts without a focused predecessor-defect RED;
-3. perform a live request to make tests pass;
+2. change NVIDIA-01 request/transport/chat contracts without an approved exact plan amendment;
+3. perform a live provider request to make tests pass;
 4. call `/v1/models`;
 5. add retry/replay/fallback behavior;
 6. persist or print the API key/Authorization header;
-7. reconstruct prompt/body after approval rather than using persisted exact bytes;
+7. reconstruct prompt/body after approval rather than use persisted exact bytes;
 8. perform filesystem/settings/catalog/routing work between provider-start and executor call;
 9. permit a second provider-start or second executor call for one canary;
-10. auto-recover a crash after provider-start by retransmitting;
-11. automatically repair contradictory evidence;
+10. retransmit after a crash with durable provider-start;
+11. auto-repair contradictory evidence;
 12. create an inference MCP tool or promote runtime;
 13. merge/rebase/force-push shared history.
 
-Preserve all completed reviewed commits and report the exact blocker and next safe action.
+Preserve completed reviewed commits and report the exact blocker and next safe action.
 
 ---
 
 ## Plan Execution Discipline
 
-Recommended execution is `superpowers:subagent-driven-development` with one implementation agent at a time.
+Recommended execution is `superpowers:subagent-driven-development` when a subagent-capable coding environment is available; otherwise execute inline task-by-task with the same TDD/review gates.
 
-- Tasks 1-3: standard-capability implementer/reviewer; evidence integrity deserves careful review but is bounded stdlib work.
-- Task 4: strongest available implementer and reviewer because provider-start adjacency and double-send prevention are the highest-risk part of NVIDIA-02.
-- Task 5: strong implementer/reviewer for outcome/crash semantics.
-- Task 6: lighter implementer, standard reviewer.
-- Task 7: independent security reviewer; production edits only when an invariant proves a defect.
-- Task 8: strongest available whole-branch reviewer.
-- Task 9: controller/operator only; no subagent/provider call needed.
+- Tasks 1-3: standard-capability implementation/review.
+- Task 4: strongest available implementation/review because provider-start adjacency and double-send prevention are the highest-risk part.
+- Task 5: strong implementation/review for outcome/crash semantics.
+- Task 6: lighter implementation, standard review.
+- Task 7: independent security review; no production mutation without a plan amendment.
+- Task 8: strongest available whole-branch review.
+- Task 9: controller/operator only; no provider call.
 
-Do not dispatch multiple implementation agents in parallel. Use the task's pre-implementation HEAD as the review BASE. After every completed task: review, commit, fast-forward push to `feat/nvidia-provider-n02-lightning-canary`, verify remote SHA, then continue. No force push.
+Do not run multiple implementation tasks concurrently. Use each task's pre-implementation HEAD as review BASE. After every completed task: review, commit, fast-forward push to `feat/nvidia-provider-n02-lightning-canary`, verify remote SHA, then continue. Never force-push.
 
 ## Self-Review Checklist
 
 Before execution begins, confirm:
 
-- every spec section 1-35 maps to Task 1-9 or Global Constraints;
-- no `TODO`, `TBD`, `implement later`, unspecified validation, or unnamed error handling remains;
-- all public function/type names used by later tasks are defined in earlier task interfaces;
-- Task 4 is the only place that introduces live-path authorization/provider-start orchestration;
+- every design requirement maps to Global Constraints or Tasks 1-9;
+- all advertised interfaces use exact names/types and are introduced before later tasks consume them;
+- Task 1 advertises only the contracts it fully implements;
+- Task 4 is the only task adding authorization/provider-start orchestration;
 - Task 5 terminalizes only known bounded outcomes and intentionally leaves unexpected post-start crashes ambiguous;
-- Task 9 stops before API-key setup and transmission;
-- the live command remains outside implementation authorization.
+- Task 7 has no generic production-repair authority;
+- Task 9 stops before API-key setup/transmission;
+- the live transmit command remains outside implementation authorization.
