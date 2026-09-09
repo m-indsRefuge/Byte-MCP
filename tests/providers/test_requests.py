@@ -67,11 +67,13 @@ def test_invalid_json_numbers_are_rejected(body: object) -> None:
         ("model_id", "llama-3.1"),
         ("target_origin", "http://api.example.com"),
         ("target_origin", "https://api.example.com/v1"),
+        ("target_origin", "https://api.example.com/"),
         ("target_origin", "https://api.example.com?x=1"),
         ("endpoint_path", "v1/chat"),
         ("endpoint_path", "/v1/chat?x=1"),
         ("endpoint_path", "/v1/chat\nmore"),
         ("endpoint_path", "/v1/chat more"),
+        ("endpoint_path", "//other.example/v1/chat"),
         ("method", "GET"),
     ],
 )
@@ -83,3 +85,8 @@ def test_invalid_request_metadata_is_rejected(field: str, value: object) -> None
 def test_prepared_body_size_is_bounded() -> None:
     with pytest.raises(ValueError):
         _prepare(body="x" * MAX_PREPARED_BODY_BYTES)
+
+
+def test_prepared_body_at_size_bound_is_accepted() -> None:
+    prepared = _prepare(body="x" * (MAX_PREPARED_BODY_BYTES - 2))
+    assert len(prepared.body_bytes) == MAX_PREPARED_BODY_BYTES

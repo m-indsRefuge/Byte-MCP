@@ -33,7 +33,7 @@ def _validate_origin(value: object) -> str:
     if (
         parsed.scheme != "https"
         or not parsed.netloc
-        or parsed.path not in ("", "/")
+        or parsed.path != ""
         or parsed.query
         or parsed.fragment
         or parsed.username is not None
@@ -41,13 +41,14 @@ def _validate_origin(value: object) -> str:
         or parsed.hostname is None
     ):
         raise ValueError("target_origin is invalid")
-    return value.rstrip("/")
+    return value
 
 
 def _validate_endpoint(value: object) -> str:
     if (
         not isinstance(value, str)
         or not value.startswith("/")
+        or value.startswith("//")
         or any(character in value for character in ("?", "#", "\r", "\n", " "))
     ):
         raise ValueError("endpoint_path is invalid")
