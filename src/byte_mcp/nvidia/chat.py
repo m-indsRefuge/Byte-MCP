@@ -358,6 +358,18 @@ def _not_sent_observation(
     )
 
 
+def _validate_prepared_nvidia_chat_request(
+    prepared_request: PreparedProviderRequest,
+) -> None:
+    if (
+        prepared_request.provider_id != NVIDIA_PROVIDER.provider_id
+        or prepared_request.method != "POST"
+        or prepared_request.target_origin != NVIDIA_CHAT_TARGET_ORIGIN
+        or prepared_request.endpoint_path != NVIDIA_CHAT_ENDPOINT_PATH
+    ):
+        raise ValueError("NVIDIA chat prepared request is invalid")
+
+
 async def execute_prepared_nvidia_chat(
     prepared_request: PreparedProviderRequest,
     transmission_context: ProviderTransmissionContext,
@@ -373,6 +385,7 @@ async def execute_prepared_nvidia_chat(
         raise ValueError("transmission_context is invalid")
     if not isinstance(settings, NvidiaHostedSettings):
         raise ValueError("settings is invalid")
+    _validate_prepared_nvidia_chat_request(prepared_request)
 
     if settings.api_key is None:
         raise NvidiaChatError(
