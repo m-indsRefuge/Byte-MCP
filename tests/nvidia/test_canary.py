@@ -4,9 +4,7 @@ import json
 from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
-from types import ModuleType
 
-import httpx
 import pytest
 
 from byte_mcp.nvidia.canary_evidence import NvidiaCanaryEvidenceStore
@@ -20,7 +18,7 @@ QUALIFIED_PREDECESSOR = "29daea6ef68ebb3d46031ce302b0108617bd1221"
 FIXED_NOW = datetime(2026, 9, 9, 18, 0, 0, tzinfo=UTC)
 
 
-def _canary_module() -> ModuleType:
+def _canary_module():
     return import_module("byte_mcp.nvidia.canary")
 
 
@@ -55,7 +53,7 @@ def test_prepare_lightning_canary_persists_exact_fixed_request_without_key(
 ) -> None:
     canary = _canary_module()
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    monkeypatch.setattr(httpx, "AsyncClient", _forbid_http_client)
+    monkeypatch.setattr(import_module("httpx"), "AsyncClient", _forbid_http_client)
     monkeypatch.setattr(
         NvidiaHostedSettings,
         "load",
@@ -98,7 +96,7 @@ def test_inspect_lightning_canary_is_read_only_and_credential_blind(
     before = _evidence_bytes(store.root)
 
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    monkeypatch.setattr(httpx, "AsyncClient", _forbid_http_client)
+    monkeypatch.setattr(import_module("httpx"), "AsyncClient", _forbid_http_client)
     monkeypatch.setattr(
         NvidiaHostedSettings,
         "load",
