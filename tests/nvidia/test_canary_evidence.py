@@ -15,7 +15,6 @@ from byte_mcp.nvidia.canary_evidence import (
 )
 from byte_mcp.nvidia.chat import prepare_nvidia_chat_request
 
-
 QUALIFIED_PREDECESSOR = "29daea6ef68ebb3d46031ce302b0108617bd1221"
 MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 PROMPT = "Reply with exactly: BYTE_NVIDIA_CANARY_OK"
