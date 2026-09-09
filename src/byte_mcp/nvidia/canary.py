@@ -9,6 +9,9 @@ from byte_mcp.providers import (
     ProviderAttemptOutcome,
     ProviderAuthorization,
     ProviderTransmissionContext,
+    ProviderTransportError,
+    ProviderTransportFailureKind,
+    ProviderTransportObservation,
 )
 from byte_mcp.providers.requests import validate_prepared_provider_request_integrity
 
@@ -20,6 +23,7 @@ from .chat import (
     execute_prepared_nvidia_chat,
     prepare_nvidia_chat_request,
 )
+from .errors import NvidiaChatError
 from .registry import NVIDIA_PROVIDER
 from .settings import NvidiaHostedSettings
 
@@ -74,6 +78,62 @@ def _utc_timestamp(now: Callable[[], datetime]) -> str:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("now must return a timezone-aware datetime")
     return value.astimezone(UTC).isoformat()
+
+
+def _terminal_event(
+    *,
+    canary_id: str,
+    request_sha256: str,
+    provider_id: str,
+    model_id: str,
+    provider_started_at: str,
+    attempt_outcome: ProviderAttemptOutcome,
+    observation: ProviderTransportObservation,
+    nvidia_failure_kind: str | None,
+    transport_failure_kind: ProviderTransportFailureKind | None,
+    finish_reason: str | None = None,
+    response_id: str | None = None,
+    usage: object | None = None,
+    semantic_probe_match: bool | None = None,
+) -> dict[str, object]:
+    if observation.provider_started_at != provider_started_at:
+        raise ValueError("provider transport observation start is inconsistent")
+    if (
+        transport_failure_kind is not None
+        and observation.transport_failure_kind is not None
+        and transport_failure_kind is not observation.transport_failure_kind
+    ):
+        raise ValueError("provider transport failure kind is inconsistent")
+
+    prompt_tokens = getattr(usage, "prompt_tokens", None) if usage is not None else None
+    completion_tokens = getattr(usage, "completion_tokens", None) if usage is not None else None
+    total_tokens = getattr(usage, "total_tokens", None) if usage is not None else None
+    return {
+        "event_type": "CANARY_TERMINAL",
+        "canary_id": canary_id,
+        "request_sha256": request_sha256,
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "provider_started_at": provider_started_at,
+        "provider_finished_at": observation.provider_finished_at,
+        "attempt_outcome": attempt_outcome.value,
+        "nvidia_failure_kind": nvidia_failure_kind,
+        "transport_failure_kind": (
+            transport_failure_kind.value if transport_failure_kind is not None else None
+        ),
+        "http_status_code": observation.http_status_code,
+        "response_headers_received": observation.response_headers_received,
+        "response_body_started": observation.response_body_started,
+        "decoded_body_bytes_received": observation.decoded_body_bytes_received,
+        "elapsed_ms": observation.elapsed_ms,
+        "finish_reason": finish_reason,
+        "response_id": response_id,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "semantic_probe_match": semantic_probe_match,
+        "recorded_at": observation.provider_finished_at,
+    }
 
 
 def prepare_lightning_canary(
@@ -206,13 +266,71 @@ async def transmit_lightning_canary(
             provider_started_at=provider_started_at,
             expected_request_sha256=request_sha256,
         )
-        result = await executor(prepared_request, context, settings)
+        try:
+            result = await executor(prepared_request, context, settings)
+        except NvidiaChatError as exc:
+            if exc.request_sha256 != request_sha256:
+                raise ValueError("NVIDIA chat error request identity is inconsistent") from None
+            observation = exc.transport_observation
+            store.append_terminal(
+                canary_id,
+                _terminal_event(
+                    canary_id=canary_id,
+                    request_sha256=request_sha256,
+                    provider_id=manifest.provider_id,
+                    model_id=manifest.model_id,
+                    provider_started_at=provider_started_at,
+                    attempt_outcome=exc.attempt_outcome,
+                    observation=observation,
+                    nvidia_failure_kind=exc.kind.value,
+                    transport_failure_kind=observation.transport_failure_kind,
+                ),
+            )
+            raise
+        except ProviderTransportError as exc:
+            observation = exc.transport_observation
+            store.append_terminal(
+                canary_id,
+                _terminal_event(
+                    canary_id=canary_id,
+                    request_sha256=request_sha256,
+                    provider_id=manifest.provider_id,
+                    model_id=manifest.model_id,
+                    provider_started_at=provider_started_at,
+                    attempt_outcome=exc.attempt_outcome,
+                    observation=observation,
+                    nvidia_failure_kind=None,
+                    transport_failure_kind=exc.transport_failure_kind,
+                ),
+            )
+            raise
+
+        semantic_probe_match = result.content == NVIDIA_LIGHTNING_CANARY_EXPECTED_TEXT
+        observation = result.transport_observation
+        store.append_terminal(
+            canary_id,
+            _terminal_event(
+                canary_id=canary_id,
+                request_sha256=request_sha256,
+                provider_id=manifest.provider_id,
+                model_id=manifest.model_id,
+                provider_started_at=provider_started_at,
+                attempt_outcome=ProviderAttemptOutcome.COMPLETED,
+                observation=observation,
+                nvidia_failure_kind=None,
+                transport_failure_kind=observation.transport_failure_kind,
+                finish_reason=result.finish_reason,
+                response_id=result.response_id,
+                usage=result.usage,
+                semantic_probe_match=semantic_probe_match,
+            ),
+        )
 
         return NvidiaCanaryTransmissionResult(
             canary_id=canary_id,
             request_sha256=request_sha256,
             attempt_outcome=ProviderAttemptOutcome.COMPLETED,
             model_id=result.model_id,
-            semantic_probe_match=result.content == NVIDIA_LIGHTNING_CANARY_EXPECTED_TEXT,
+            semantic_probe_match=semantic_probe_match,
             response_content=result.content,
         )
