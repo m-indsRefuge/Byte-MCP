@@ -16,7 +16,7 @@ import httpx
 from byte_mcp.errors import ByteMCPError
 
 from .outcomes import ProviderAttemptOutcome, ProviderTransportFailureKind
-from .requests import PreparedProviderRequest
+from .requests import PreparedProviderRequest, validate_prepared_provider_request_integrity
 
 MAX_RESPONSE_BODY_BYTES = 8_000_000
 MAX_TIMEOUT_SECONDS = 600.0
@@ -257,6 +257,7 @@ async def execute_once(
         raise ValueError("authorization is invalid")
     if not isinstance(timeout_policy, ProviderTimeoutPolicy):
         raise ValueError("timeout_policy is invalid")
+    validate_prepared_provider_request_integrity(prepared_request)
     if transmission_context.expected_request_sha256 != prepared_request.request_sha256:
         raise ValueError("expected request_sha256 does not match prepared request_sha256")
 
