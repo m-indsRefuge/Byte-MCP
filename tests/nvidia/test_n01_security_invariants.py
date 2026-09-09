@@ -85,7 +85,14 @@ def _import_targets(path: Path) -> tuple[str, ...]:
 
 def test_provider_neutral_modules_do_not_import_provider_adapters():
     provider_dir = Path(providers_package.__file__).resolve().parent
-    forbidden = ("byte_mcp.nvidia", "byte_mcp.ox", "byte_mcp.wolfram", "..nvidia", "..ox", "..wolfram")
+    forbidden = (
+        "byte_mcp.nvidia",
+        "byte_mcp.ox",
+        "byte_mcp.wolfram",
+        "..nvidia",
+        "..ox",
+        "..wolfram",
+    )
 
     violations: list[str] = []
     for path in sorted(provider_dir.glob("*.py")):
@@ -100,7 +107,10 @@ def test_nvidia_chat_does_not_import_ox_or_wolfram():
     import byte_mcp.nvidia.chat as chat_module
 
     targets = _import_targets(Path(chat_module.__file__).resolve())
-    assert not any("ox" in target.split(".") or "wolfram" in target.split(".") for target in targets)
+    assert not any(
+        "ox" in target.split(".") or "wolfram" in target.split(".")
+        for target in targets
+    )
 
 
 def test_server_has_no_nvidia_inference_registration():
