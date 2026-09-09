@@ -14,23 +14,62 @@ from datetime import datetime
 from pathlib import Path
 
 from byte_mcp.errors import ByteMCPError
-from byte_mcp.providers import PreparedProviderRequest
+from byte_mcp.providers import (
+    MAX_RESPONSE_BODY_BYTES,
+    PreparedProviderRequest,
+    ProviderAttemptOutcome,
+    ProviderTransportFailureKind,
+)
 from byte_mcp.providers.requests import validate_prepared_provider_request_integrity
+
+from .errors import NvidiaChatFailureKind
 
 NVIDIA_CANARY_SCHEMA = "byte-mcp-nvidia-canary-v1"
 NVIDIA_CANARY_ID_PATTERN = r"NVC-[0-9]{6}"
 _MAX_PREPARED_BODY_BYTES = 4_000_000
+_MAX_BOUNDED_INTEGER = 2_147_483_647
+_MAX_RESPONSE_ID_CHARS = 256
 _CANARY_ID = re.compile(rf"{NVIDIA_CANARY_ID_PATTERN}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _GIT_SHA1 = re.compile(r"[0-9a-f]{40}\Z")
+_FINISH_REASON = re.compile(r"[A-Za-z0-9._-]{0,64}\Z")
 
 _NVIDIA_PROVIDER_ID = "nvidia-api-catalog"
 _NVIDIA_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 _NVIDIA_METHOD = "POST"
 _NVIDIA_TARGET_ORIGIN = "https://integrate.api.nvidia.com"
 _NVIDIA_ENDPOINT_PATH = "/v1/chat/completions"
-_EVENT_KEYS = frozenset({"event_type", "canary_id", "request_sha256", "recorded_at"})
-_ALLOWED_TASK2_EVENTS = frozenset({"CANARY_PREPARED", "CANARY_AUTHORIZED", "PROVIDER_START"})
+_BASE_EVENT_KEYS = frozenset({"event_type", "canary_id", "request_sha256", "recorded_at"})
+_ALLOWED_BASE_EVENTS = frozenset({"CANARY_PREPARED", "CANARY_AUTHORIZED", "PROVIDER_START"})
+_TERMINAL_EVENT_KEYS = frozenset(
+    {
+        "event_type",
+        "canary_id",
+        "request_sha256",
+        "provider_id",
+        "model_id",
+        "provider_started_at",
+        "provider_finished_at",
+        "attempt_outcome",
+        "nvidia_failure_kind",
+        "transport_failure_kind",
+        "http_status_code",
+        "response_headers_received",
+        "response_body_started",
+        "decoded_body_bytes_received",
+        "elapsed_ms",
+        "finish_reason",
+        "response_id",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "semantic_probe_match",
+        "recorded_at",
+    }
+)
+_ATTEMPT_OUTCOMES = frozenset(outcome.value for outcome in ProviderAttemptOutcome)
+_NVIDIA_FAILURE_KINDS = frozenset(kind.value for kind in NvidiaChatFailureKind)
+_TRANSPORT_FAILURE_KINDS = frozenset(kind.value for kind in ProviderTransportFailureKind)
 
 
 def _require_aware_timestamp(value: object, field_name: str) -> str:
@@ -55,6 +94,34 @@ def _require_canary_id(value: object) -> str:
     if not isinstance(value, str) or _CANARY_ID.fullmatch(value) is None:
         raise NvidiaCanaryEvidenceError("canary identity is invalid")
     return value
+
+
+def _require_optional_bounded_string(
+    value: object,
+    *,
+    field_name: str,
+    max_chars: int,
+    pattern: re.Pattern[str] | None = None,
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str) or len(value) > max_chars:
+        raise NvidiaCanaryEvidenceError(f"terminal {field_name} is invalid")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise NvidiaCanaryEvidenceError(f"terminal {field_name} is invalid")
+    if pattern is not None and pattern.fullmatch(value) is None:
+        raise NvidiaCanaryEvidenceError(f"terminal {field_name} is invalid")
+
+
+def _require_optional_counter(value: object, field_name: str) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= _MAX_BOUNDED_INTEGER
+    ):
+        raise NvidiaCanaryEvidenceError(f"terminal {field_name} is invalid")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -207,6 +274,85 @@ class NvidiaCanaryEvidenceError(ByteMCPError):
 
 class NvidiaCanaryLockError(ByteMCPError):
     """Raised when exclusive NVIDIA canary ownership cannot be acquired safely."""
+
+
+def _validate_terminal_event(
+    event: Mapping[str, object],
+    *,
+    canary_id: str,
+    manifest: NvidiaCanaryManifest,
+    provider_started_at: str,
+) -> None:
+    if set(event) != _TERMINAL_EVENT_KEYS or event.get("event_type") != "CANARY_TERMINAL":
+        raise NvidiaCanaryEvidenceError("canary terminal event is malformed")
+    if event.get("canary_id") != canary_id:
+        raise NvidiaCanaryEvidenceError("terminal canary identity is invalid")
+    if event.get("request_sha256") != manifest.request_sha256:
+        raise NvidiaCanaryEvidenceError("terminal request identity is invalid")
+    if event.get("provider_id") != manifest.provider_id:
+        raise NvidiaCanaryEvidenceError("terminal provider identity is invalid")
+    if event.get("model_id") != manifest.model_id:
+        raise NvidiaCanaryEvidenceError("terminal model identity is invalid")
+    if event.get("provider_started_at") != provider_started_at:
+        raise NvidiaCanaryEvidenceError("terminal provider-start is inconsistent")
+    try:
+        _require_aware_timestamp(event.get("provider_started_at"), "provider_started_at")
+        _require_aware_timestamp(event.get("provider_finished_at"), "provider_finished_at")
+        _require_aware_timestamp(event.get("recorded_at"), "recorded_at")
+    except ValueError:
+        raise NvidiaCanaryEvidenceError("terminal timestamp is invalid") from None
+
+    if event.get("attempt_outcome") not in _ATTEMPT_OUTCOMES:
+        raise NvidiaCanaryEvidenceError("terminal attempt outcome is invalid")
+    nvidia_failure_kind = event.get("nvidia_failure_kind")
+    if nvidia_failure_kind is not None and nvidia_failure_kind not in _NVIDIA_FAILURE_KINDS:
+        raise NvidiaCanaryEvidenceError("terminal NVIDIA failure kind is invalid")
+    transport_failure_kind = event.get("transport_failure_kind")
+    if transport_failure_kind is not None and transport_failure_kind not in _TRANSPORT_FAILURE_KINDS:
+        raise NvidiaCanaryEvidenceError("terminal transport failure kind is invalid")
+
+    status_code = event.get("http_status_code")
+    if status_code is not None and (
+        isinstance(status_code, bool)
+        or not isinstance(status_code, int)
+        or not 100 <= status_code <= 599
+    ):
+        raise NvidiaCanaryEvidenceError("terminal HTTP status code is invalid")
+    for field_name in ("response_headers_received", "response_body_started"):
+        if not isinstance(event.get(field_name), bool):
+            raise NvidiaCanaryEvidenceError(f"terminal {field_name} is invalid")
+
+    decoded_body_bytes_received = event.get("decoded_body_bytes_received")
+    if (
+        isinstance(decoded_body_bytes_received, bool)
+        or not isinstance(decoded_body_bytes_received, int)
+        or not 0 <= decoded_body_bytes_received <= MAX_RESPONSE_BODY_BYTES
+    ):
+        raise NvidiaCanaryEvidenceError("terminal decoded body byte count is invalid")
+    elapsed_ms = event.get("elapsed_ms")
+    if (
+        isinstance(elapsed_ms, bool)
+        or not isinstance(elapsed_ms, int)
+        or not 0 <= elapsed_ms <= _MAX_BOUNDED_INTEGER
+    ):
+        raise NvidiaCanaryEvidenceError("terminal elapsed time is invalid")
+
+    _require_optional_bounded_string(
+        event.get("finish_reason"),
+        field_name="finish_reason",
+        max_chars=64,
+        pattern=_FINISH_REASON,
+    )
+    _require_optional_bounded_string(
+        event.get("response_id"),
+        field_name="response_id",
+        max_chars=_MAX_RESPONSE_ID_CHARS,
+    )
+    for field_name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        _require_optional_counter(event.get(field_name), field_name)
+    semantic_probe_match = event.get("semantic_probe_match")
+    if semantic_probe_match is not None and not isinstance(semantic_probe_match, bool):
+        raise NvidiaCanaryEvidenceError("terminal semantic probe result is invalid")
 
 
 class NvidiaCanaryEvidenceStore:
@@ -370,10 +516,16 @@ class NvidiaCanaryEvidenceStore:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 raise NvidiaCanaryEvidenceError("canary events are malformed") from None
-            if not isinstance(event, dict) or set(event) != _EVENT_KEYS:
+            if not isinstance(event, dict):
                 raise NvidiaCanaryEvidenceError("canary events are malformed")
             event_type = event.get("event_type")
-            if event_type not in _ALLOWED_TASK2_EVENTS:
+            if event_type == "CANARY_TERMINAL":
+                if set(event) != _TERMINAL_EVENT_KEYS:
+                    raise NvidiaCanaryEvidenceError("canary terminal event is malformed")
+            elif event_type in _ALLOWED_BASE_EVENTS:
+                if set(event) != _BASE_EVENT_KEYS:
+                    raise NvidiaCanaryEvidenceError("canary events are malformed")
+            else:
                 raise NvidiaCanaryEvidenceError("canary event type is invalid")
             if event.get("canary_id") != canary_id:
                 raise NvidiaCanaryEvidenceError("canary event identity is invalid")
@@ -392,7 +544,10 @@ class NvidiaCanaryEvidenceStore:
 
         authorized_at: str | None = None
         provider_started_at: str | None = None
+        terminal_event: dict[str, object] | None = None
         for index, event in enumerate(events[1:], start=1):
+            if terminal_event is not None:
+                raise NvidiaCanaryEvidenceError("event after canary terminal is invalid")
             event_type = event["event_type"]
             recorded_at = event["recorded_at"]
             if event_type == "CANARY_PREPARED":
@@ -409,6 +564,17 @@ class NvidiaCanaryEvidenceStore:
                     raise NvidiaCanaryEvidenceError("provider-start ordering is invalid")
                 provider_started_at = str(recorded_at)
                 continue
+            if event_type == "CANARY_TERMINAL":
+                if provider_started_at is None or index != 3:
+                    raise NvidiaCanaryEvidenceError("canary terminal ordering is invalid")
+                _validate_terminal_event(
+                    event,
+                    canary_id=canary_id,
+                    manifest=manifest,
+                    provider_started_at=provider_started_at,
+                )
+                terminal_event = event
+                continue
             raise NvidiaCanaryEvidenceError("canary lifecycle is malformed")
 
         return NvidiaCanarySnapshot(
@@ -417,7 +583,7 @@ class NvidiaCanaryEvidenceStore:
             events=tuple(events),
             authorized_at=authorized_at,
             provider_started_at=provider_started_at,
-            terminal_event=None,
+            terminal_event=terminal_event,
         )
 
     def append_authorized(
@@ -473,6 +639,23 @@ class NvidiaCanaryEvidenceStore:
                 "recorded_at": recorded_at,
             },
         )
+
+    def append_terminal(self, canary_id: str, event: Mapping[str, object]) -> None:
+        if not isinstance(event, Mapping):
+            raise NvidiaCanaryEvidenceError("canary terminal event is malformed")
+        snapshot = self.load(canary_id)
+        if snapshot.provider_started_at is None:
+            raise NvidiaCanaryEvidenceError("canary terminal requires provider-start")
+        if snapshot.terminal_event is not None:
+            raise NvidiaCanaryEvidenceError("canary terminal already exists")
+        terminal_event = dict(event)
+        _validate_terminal_event(
+            terminal_event,
+            canary_id=canary_id,
+            manifest=snapshot.manifest,
+            provider_started_at=snapshot.provider_started_at,
+        )
+        _append_event(self._canary_dir(canary_id) / "events.jsonl", terminal_event)
 
     @contextmanager
     def transmit_lock(self, canary_id: str) -> Iterator[None]:
