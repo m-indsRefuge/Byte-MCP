@@ -458,10 +458,7 @@ def test_execute_once_absolute_deadline_is_outcome_unknown_without_retry() -> No
 
     assert calls == 1
     assert captured.value.attempt_outcome is ProviderAttemptOutcome.OUTCOME_UNKNOWN
-    assert (
-        captured.value.transport_failure_kind
-        is ProviderTransportFailureKind.ABSOLUTE_DEADLINE
-    )
+    assert captured.value.transport_failure_kind is ProviderTransportFailureKind.ABSOLUTE_DEADLINE
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
 
@@ -480,8 +477,7 @@ def test_execute_once_response_body_limit_is_outcome_unknown_without_retry() -> 
     assert calls == 1
     assert captured.value.attempt_outcome is ProviderAttemptOutcome.OUTCOME_UNKNOWN
     assert (
-        captured.value.transport_failure_kind
-        is ProviderTransportFailureKind.HTTP_TRANSPORT_ERROR
+        captured.value.transport_failure_kind is ProviderTransportFailureKind.HTTP_TRANSPORT_ERROR
     )
     assert captured.value.transport_observation.response_headers_received is True
     assert captured.value.transport_observation.http_status_code == 200

@@ -161,6 +161,7 @@ class ProviderTransmissionContext:
     provider_started_at: str
     expected_request_sha256: str
 
+
 @dataclass(frozen=True, slots=True)
 class ProviderTimeoutPolicy:
     connect_seconds: float
@@ -168,6 +169,7 @@ class ProviderTimeoutPolicy:
     read_seconds: float
     pool_seconds: float
     absolute_deadline_seconds: float
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderTransportObservation:
@@ -188,12 +190,14 @@ class ProviderTransportObservation:
     trust_env_enabled: bool
     proxy_environment_present: bool
 
+
 @dataclass(frozen=True, slots=True, repr=False)
 class ProviderTransportResponse:
     outcome: ProviderAttemptOutcome
     status_code: int
     body: bytes
     observation: ProviderTransportObservation
+
 
 class ProviderTransportError(ByteMCPError):
     attempt_outcome: ProviderAttemptOutcome

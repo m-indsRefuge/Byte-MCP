@@ -148,8 +148,7 @@ def prepare_nvidia_chat_request(
     body = {
         "max_tokens": max_tokens,
         "messages": [
-            {"content": message.content, "role": message.role}
-            for message in normalized_messages
+            {"content": message.content, "role": message.role} for message in normalized_messages
         ],
         "model": model_id,
         "n": 1,

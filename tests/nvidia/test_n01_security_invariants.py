@@ -108,8 +108,7 @@ def test_nvidia_chat_does_not_import_ox_or_wolfram():
 
     targets = _import_targets(Path(chat_module.__file__).resolve())
     assert not any(
-        "ox" in target.split(".") or "wolfram" in target.split(".")
-        for target in targets
+        "ox" in target.split(".") or "wolfram" in target.split(".") for target in targets
     )
 
 
@@ -262,11 +261,7 @@ def test_ngc_key_alone_never_satisfies_hosted_credential(monkeypatch):
 def test_invalid_nvidia_configuration_does_not_break_core_ox_or_wolfram_imports():
     env = os.environ.copy()
     env["BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS"] = "9999"
-    command = (
-        "import byte_mcp.service; "
-        "import byte_mcp.ox.runtime; "
-        "import byte_mcp.wolfram.runtime"
-    )
+    command = "import byte_mcp.service; import byte_mcp.ox.runtime; import byte_mcp.wolfram.runtime"
     completed = subprocess.run(
         [sys.executable, "-c", command],
         env=env,

@@ -193,9 +193,7 @@ def test_parse_allows_optional_id_finish_reason_and_usage() -> None:
         json.dumps(
             {
                 "model": MODEL_ID,
-                "choices": [
-                    {"index": 1, "message": {"role": "assistant", "content": "a"}}
-                ],
+                "choices": [{"index": 1, "message": {"role": "assistant", "content": "a"}}],
             }
         ).encode(),
         json.dumps(
@@ -207,9 +205,7 @@ def test_parse_allows_optional_id_finish_reason_and_usage() -> None:
         json.dumps(
             {
                 "model": MODEL_ID,
-                "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": 1}}
-                ],
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": 1}}],
             }
         ).encode(),
     ],
