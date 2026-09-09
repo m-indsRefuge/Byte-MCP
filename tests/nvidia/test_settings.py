@@ -1,6 +1,10 @@
 import pytest
 
-from byte_mcp.nvidia.settings import NVIDIA_HOSTED_BASE_URL, NvidiaHostedSettings
+from byte_mcp.nvidia.settings import (
+    NVIDIA_CHAT_TIMEOUT_POLICY,
+    NVIDIA_HOSTED_BASE_URL,
+    NvidiaHostedSettings,
+)
 
 
 def test_missing_hosted_key_is_allowed(monkeypatch):
@@ -51,3 +55,66 @@ def test_catalog_timeout_is_bounded(monkeypatch, value):
 def test_catalog_timeout_default(monkeypatch):
     monkeypatch.delenv("BYTE_MCP_NVIDIA_CATALOG_TIMEOUT_SECONDS", raising=False)
     assert NvidiaHostedSettings.load().catalog_timeout_seconds == 10
+
+
+def test_default_chat_timeout_policy_is_frozen():
+    assert NVIDIA_CHAT_TIMEOUT_POLICY.connect_seconds == 10
+    assert NVIDIA_CHAT_TIMEOUT_POLICY.write_seconds == 30
+    assert NVIDIA_CHAT_TIMEOUT_POLICY.read_seconds == 300
+    assert NVIDIA_CHAT_TIMEOUT_POLICY.pool_seconds == 10
+    assert NVIDIA_CHAT_TIMEOUT_POLICY.absolute_deadline_seconds == 300
+
+
+def test_chat_timeout_defaults(monkeypatch):
+    for name in (
+        "BYTE_MCP_NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS",
+        "BYTE_MCP_NVIDIA_CHAT_WRITE_TIMEOUT_SECONDS",
+        "BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS",
+        "BYTE_MCP_NVIDIA_CHAT_POOL_TIMEOUT_SECONDS",
+        "BYTE_MCP_NVIDIA_CHAT_ABSOLUTE_DEADLINE_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = NvidiaHostedSettings.load()
+    assert settings.chat_connect_timeout_seconds == 10
+    assert settings.chat_write_timeout_seconds == 30
+    assert settings.chat_read_timeout_seconds == 300
+    assert settings.chat_pool_timeout_seconds == 10
+    assert settings.chat_absolute_deadline_seconds == 300
+
+
+@pytest.mark.parametrize(
+    ("name", "invalid"),
+    [
+        ("BYTE_MCP_NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "0"),
+        ("BYTE_MCP_NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "61"),
+        ("BYTE_MCP_NVIDIA_CHAT_WRITE_TIMEOUT_SECONDS", "0"),
+        ("BYTE_MCP_NVIDIA_CHAT_WRITE_TIMEOUT_SECONDS", "121"),
+        ("BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS", "0"),
+        ("BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS", "601"),
+        ("BYTE_MCP_NVIDIA_CHAT_POOL_TIMEOUT_SECONDS", "0"),
+        ("BYTE_MCP_NVIDIA_CHAT_POOL_TIMEOUT_SECONDS", "61"),
+        ("BYTE_MCP_NVIDIA_CHAT_ABSOLUTE_DEADLINE_SECONDS", "0"),
+        ("BYTE_MCP_NVIDIA_CHAT_ABSOLUTE_DEADLINE_SECONDS", "601"),
+        ("BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS", "not-an-int"),
+    ],
+)
+def test_chat_timeout_environment_is_bounded(monkeypatch, name, invalid):
+    monkeypatch.setenv(name, invalid)
+    with pytest.raises(ValueError):
+        NvidiaHostedSettings.load()
+
+
+def test_chat_timeout_environment_values_are_loaded(monkeypatch):
+    monkeypatch.setenv("BYTE_MCP_NVIDIA_CHAT_CONNECT_TIMEOUT_SECONDS", "11")
+    monkeypatch.setenv("BYTE_MCP_NVIDIA_CHAT_WRITE_TIMEOUT_SECONDS", "31")
+    monkeypatch.setenv("BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS", "301")
+    monkeypatch.setenv("BYTE_MCP_NVIDIA_CHAT_POOL_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("BYTE_MCP_NVIDIA_CHAT_ABSOLUTE_DEADLINE_SECONDS", "302")
+
+    settings = NvidiaHostedSettings.load()
+    assert settings.chat_connect_timeout_seconds == 11
+    assert settings.chat_write_timeout_seconds == 31
+    assert settings.chat_read_timeout_seconds == 301
+    assert settings.chat_pool_timeout_seconds == 12
+    assert settings.chat_absolute_deadline_seconds == 302
