@@ -7,17 +7,24 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+
+import httpx
 
 from byte_mcp.providers import (
     PreparedProviderRequest,
     ProviderAttemptOutcome,
+    ProviderAuthorization,
+    ProviderTransmissionContext,
     ProviderTransportObservation,
     ProviderTransportResponse,
+    execute_once,
     prepare_provider_request,
 )
 
 from .errors import NvidiaChatError, NvidiaChatFailureKind
 from .registry import NVIDIA_PROVIDER
+from .settings import NvidiaHostedSettings
 
 NVIDIA_CHAT_TARGET_ORIGIN = "https://integrate.api.nvidia.com"
 NVIDIA_CHAT_ENDPOINT_PATH = "/v1/chat/completions"
@@ -325,3 +332,63 @@ def parse_nvidia_chat_response(
         payload_sha256=prepared_request.payload_sha256,
         transport_observation=transport_response.observation,
     )
+
+
+def _not_sent_observation(
+    transmission_context: ProviderTransmissionContext,
+) -> ProviderTransportObservation:
+    finished_at = datetime.now(UTC).isoformat()
+    return ProviderTransportObservation(
+        response_headers_received=False,
+        response_headers_at=None,
+        response_headers_elapsed_ms=None,
+        http_status_code=None,
+        response_body_started=False,
+        first_body_at=None,
+        first_body_elapsed_ms=None,
+        last_body_at=None,
+        last_body_elapsed_ms=None,
+        decoded_body_bytes_received=0,
+        provider_started_at=transmission_context.provider_started_at,
+        provider_finished_at=finished_at,
+        elapsed_ms=0,
+        transport_failure_kind=None,
+        trust_env_enabled=True,
+        proxy_environment_present=False,
+    )
+
+
+async def execute_prepared_nvidia_chat(
+    prepared_request: PreparedProviderRequest,
+    transmission_context: ProviderTransmissionContext,
+    settings: NvidiaHostedSettings,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> NvidiaChatResult:
+    """Execute one already-prepared NVIDIA hosted chat request with zero retry."""
+
+    if not isinstance(prepared_request, PreparedProviderRequest):
+        raise ValueError("prepared_request is invalid")
+    if not isinstance(transmission_context, ProviderTransmissionContext):
+        raise ValueError("transmission_context is invalid")
+    if not isinstance(settings, NvidiaHostedSettings):
+        raise ValueError("settings is invalid")
+
+    if settings.api_key is None:
+        raise NvidiaChatError(
+            kind=NvidiaChatFailureKind.CONFIGURATION,
+            attempt_outcome=ProviderAttemptOutcome.NOT_SENT,
+            transport_observation=_not_sent_observation(transmission_context),
+            request_sha256=prepared_request.request_sha256,
+        )
+
+    transport_response = await execute_once(
+        prepared_request,
+        transmission_context,
+        ProviderAuthorization(f"Bearer {settings.api_key}"),
+        settings.chat_timeout_policy,
+        transport=transport,
+    )
+    if transport_response.outcome is ProviderAttemptOutcome.REJECTED:
+        raise classify_nvidia_chat_rejection(prepared_request, transport_response)
+    return parse_nvidia_chat_response(prepared_request, transport_response)

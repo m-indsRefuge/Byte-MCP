@@ -8,6 +8,7 @@ from .chat import (
     NvidiaChatResult,
     NvidiaChatUsage,
     classify_nvidia_chat_rejection,
+    execute_prepared_nvidia_chat,
     parse_nvidia_chat_response,
     prepare_nvidia_chat_request,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "NvidiaHostedSettings",
     "NvidiaQualificationCandidate",
     "classify_nvidia_chat_rejection",
+    "execute_prepared_nvidia_chat",
     "initial_model_registry",
     "initial_qualification_candidates",
     "parse_catalog_payload",
