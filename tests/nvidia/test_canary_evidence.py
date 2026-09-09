@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from byte_mcp.nvidia.canary_evidence import (
     NVIDIA_CANARY_SCHEMA,
     NvidiaCanaryEvidenceStore,
@@ -35,38 +34,55 @@ def _manifest(**overrides: object) -> NvidiaCanaryManifest:
 def test_store_uses_explicit_evidence_root(tmp_path: Path) -> None:
     root = tmp_path / "evidence"
     store = NvidiaCanaryEvidenceStore.from_environment(
-        {"BYTE_MCP_NVIDIA_EVIDENCE_DIR": str(root)}
+        {"BYTE_MCP_NVIDIA_EVIDENCE_DIR": str(root)},
+        platform_name="win32",
+        home=tmp_path / "home",
     )
-    assert store.root == root
+    assert store.root == root.resolve(strict=False)
 
 
-def test_store_uses_windows_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import byte_mcp.nvidia.canary_evidence as evidence_module
-
-    monkeypatch.setattr(evidence_module.sys, "platform", "win32")
+def test_store_uses_windows_default(tmp_path: Path) -> None:
     local_app_data = tmp_path / "LocalAppData"
     store = NvidiaCanaryEvidenceStore.from_environment(
-        {"LOCALAPPDATA": str(local_app_data)}
+        {"LOCALAPPDATA": str(local_app_data)},
+        platform_name="win32",
+        home=tmp_path / "home",
     )
-    assert store.root == local_app_data / "Byte-MCP" / "nvidia"
+    assert store.root == (local_app_data / "Byte-MCP" / "nvidia").resolve(strict=False)
 
 
-def test_store_uses_xdg_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import byte_mcp.nvidia.canary_evidence as evidence_module
+def test_store_uses_windows_home_fallback(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = NvidiaCanaryEvidenceStore.from_environment(
+        {},
+        platform_name="win32",
+        home=home,
+    )
+    assert store.root == (home / "AppData" / "Local" / "Byte-MCP" / "nvidia").resolve(
+        strict=False
+    )
 
-    monkeypatch.setattr(evidence_module.sys, "platform", "linux")
+
+def test_store_uses_xdg_default(tmp_path: Path) -> None:
     xdg_root = tmp_path / "xdg"
-    store = NvidiaCanaryEvidenceStore.from_environment({"XDG_DATA_HOME": str(xdg_root)})
-    assert store.root == xdg_root / "byte-mcp" / "nvidia"
+    store = NvidiaCanaryEvidenceStore.from_environment(
+        {"XDG_DATA_HOME": str(xdg_root)},
+        platform_name="linux",
+        home=tmp_path / "home",
+    )
+    assert store.root == (xdg_root / "byte-mcp" / "nvidia").resolve(strict=False)
 
 
-def test_store_uses_home_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import byte_mcp.nvidia.canary_evidence as evidence_module
-
-    monkeypatch.setattr(evidence_module.sys, "platform", "linux")
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
-    store = NvidiaCanaryEvidenceStore.from_environment({})
-    assert store.root == tmp_path / "home" / ".local" / "share" / "byte-mcp" / "nvidia"
+def test_store_uses_home_fallback(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    store = NvidiaCanaryEvidenceStore.from_environment(
+        {},
+        platform_name="linux",
+        home=home,
+    )
+    assert store.root == (home / ".local" / "share" / "byte-mcp" / "nvidia").resolve(
+        strict=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -77,6 +93,7 @@ def test_store_uses_home_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
         ("payload_sha256", "A" * 64),
         ("request_sha256", "b" * 63),
         ("body_bytes", -1),
+        ("body_bytes", 4_000_001),
         ("prepared_at", "2026-09-09T12:00:00"),
         ("qualified_predecessor_sha", "c" * 63),
     ],
