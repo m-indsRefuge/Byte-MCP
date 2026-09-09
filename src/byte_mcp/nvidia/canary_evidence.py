@@ -14,10 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 from byte_mcp.errors import ByteMCPError
-from byte_mcp.providers import (
-    PreparedProviderRequest,
-    validate_prepared_provider_request_integrity,
-)
+from byte_mcp.providers import PreparedProviderRequest
+from byte_mcp.providers.requests import validate_prepared_provider_request_integrity
 
 NVIDIA_CANARY_SCHEMA = "byte-mcp-nvidia-canary-v1"
 NVIDIA_CANARY_ID_PATTERN = r"NVC-[0-9]{6}"
