@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from byte_mcp.nvidia.chat import prepare_nvidia_chat_request
 from byte_mcp.nvidia.canary_evidence import (
     NVIDIA_CANARY_SCHEMA,
     NvidiaCanaryEvidenceError,
@@ -13,7 +14,6 @@ from byte_mcp.nvidia.canary_evidence import (
     NvidiaCanaryManifest,
     NvidiaCanarySnapshot,
 )
-from byte_mcp.nvidia.chat import prepare_nvidia_chat_request
 
 
 QUALIFIED_PREDECESSOR = "29daea6ef68ebb3d46031ce302b0108617bd1221"
@@ -322,7 +322,6 @@ def test_prepare_and_transmit_locks_reject_contention(tmp_path: Path) -> None:
         )
     lock_path.unlink()
 
-    with store.transmit_lock(manifest.canary_id):
-        with pytest.raises(NvidiaCanaryLockError):
-            with store.transmit_lock(manifest.canary_id):
-                raise AssertionError("unreachable")
+    with store.transmit_lock(manifest.canary_id), pytest.raises(NvidiaCanaryLockError):
+        with store.transmit_lock(manifest.canary_id):
+            raise AssertionError("unreachable")
