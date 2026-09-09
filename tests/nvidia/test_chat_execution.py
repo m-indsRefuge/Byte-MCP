@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx
@@ -158,6 +159,28 @@ async def test_complete_rejections_are_classified_once_without_secret_or_body_pr
     assert provider_prose not in repr(caught.value)
     assert _KEY not in str(caught.value)
     assert _KEY not in repr(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_alternate_target_fails_locally_before_bearer_key_can_be_sent():
+    prepared = _prepared()
+    alternate = replace(prepared, target_origin="https://example.invalid")
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=_success_body(), request=request)
+
+    with pytest.raises(ValueError, match="NVIDIA chat prepared request"):
+        await execute_prepared_nvidia_chat(
+            alternate,
+            _context(alternate),
+            NvidiaHostedSettings(api_key=_KEY),
+            transport=httpx.MockTransport(handler),
+        )
+
+    assert calls == 0
 
 
 @pytest.mark.asyncio
