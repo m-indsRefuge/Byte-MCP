@@ -1,12 +1,6 @@
 """NVIDIA API Catalog integration primitives."""
 
 from .catalog import NvidiaCatalogClient, NvidiaCatalogSnapshot, parse_catalog_payload
-from .errors import (
-    NvidiaCatalogError,
-    NvidiaCatalogFailureKind,
-    NvidiaChatError,
-    NvidiaChatFailureKind,
-)
 from .chat import (
     NVIDIA_CHAT_ENDPOINT_PATH,
     NVIDIA_CHAT_TARGET_ORIGIN,
@@ -16,6 +10,12 @@ from .chat import (
     classify_nvidia_chat_rejection,
     parse_nvidia_chat_response,
     prepare_nvidia_chat_request,
+)
+from .errors import (
+    NvidiaCatalogError,
+    NvidiaCatalogFailureKind,
+    NvidiaChatError,
+    NvidiaChatFailureKind,
 )
 from .registry import (
     NVIDIA_PROVIDER,
