@@ -18,6 +18,7 @@ from .transport import (
     ProviderTransportError,
     ProviderTransportObservation,
     ProviderTransportResponse,
+    execute_once,
 )
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "MAX_RESPONSE_BODY_BYTES",
     "MAX_TIMEOUT_SECONDS",
     "PreparedProviderRequest",
+    "execute_once",
     "prepare_provider_request",
     "transition_model_profile",
     "validate_model_id",

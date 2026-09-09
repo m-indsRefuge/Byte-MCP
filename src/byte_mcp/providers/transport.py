@@ -1,17 +1,22 @@
-"""Provider-neutral transport contracts and metadata tracking."""
+"""Provider-neutral exactly-once HTTP transport and bounded metadata tracking."""
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from time import monotonic_ns
+
+import httpx
 
 from byte_mcp.errors import ByteMCPError
 
 from .outcomes import ProviderAttemptOutcome, ProviderTransportFailureKind
+from .requests import PreparedProviderRequest
 
 MAX_RESPONSE_BODY_BYTES = 8_000_000
 MAX_TIMEOUT_SECONDS = 600.0
@@ -27,6 +32,7 @@ _PROXY_ENV_KEYS = frozenset(
         "all_proxy",
     }
 )
+_TRUST_ENV = True
 
 
 def _require_aware_timestamp(value: str, field_name: str) -> None:
@@ -38,6 +44,14 @@ def _require_aware_timestamp(value: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must be timezone-aware ISO-8601") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware ISO-8601")
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _elapsed_ms(started_monotonic_ns: int) -> int:
+    return max(0, (monotonic_ns() - started_monotonic_ns) // 1_000_000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +170,10 @@ class ProviderTransportError(ByteMCPError):
         )
 
 
+class _ResponseBodyLimitExceeded(Exception):
+    pass
+
+
 class _TransportTracker:
     """Accumulate only bounded transport metadata for one provider call."""
 
@@ -219,3 +237,157 @@ class _TransportTracker:
             trust_env_enabled=self._trust_env_enabled,
             proxy_environment_present=self._proxy_environment_present,
         )
+
+
+async def execute_once(
+    prepared_request: PreparedProviderRequest,
+    transmission_context: ProviderTransmissionContext,
+    authorization: ProviderAuthorization,
+    timeout_policy: ProviderTimeoutPolicy,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> ProviderTransportResponse:
+    """Execute one prepared HTTP request with zero retry or fallback behavior."""
+
+    if not isinstance(prepared_request, PreparedProviderRequest):
+        raise ValueError("prepared_request is invalid")
+    if not isinstance(transmission_context, ProviderTransmissionContext):
+        raise ValueError("transmission_context is invalid")
+    if not isinstance(authorization, ProviderAuthorization):
+        raise ValueError("authorization is invalid")
+    if not isinstance(timeout_policy, ProviderTimeoutPolicy):
+        raise ValueError("timeout_policy is invalid")
+    if transmission_context.expected_request_sha256 != prepared_request.request_sha256:
+        raise ValueError("expected request_sha256 does not match prepared request_sha256")
+
+    headers = {
+        "Authorization": authorization.authorization_header_value,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    tracker = _TransportTracker(transmission_context, trust_env_enabled=_TRUST_ENV)
+    started_monotonic_ns = monotonic_ns()
+    failure: tuple[ProviderAttemptOutcome, ProviderTransportFailureKind] | None = None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(
+                connect=timeout_policy.connect_seconds,
+                read=timeout_policy.read_seconds,
+                write=timeout_policy.write_seconds,
+                pool=timeout_policy.pool_seconds,
+            ),
+            follow_redirects=False,
+            trust_env=_TRUST_ENV,
+        ) as client:
+            async with asyncio.timeout(timeout_policy.absolute_deadline_seconds):
+                body = bytearray()
+                async with client.stream(
+                    prepared_request.method,
+                    prepared_request.target_origin + prepared_request.endpoint_path,
+                    headers=headers,
+                    content=prepared_request.body_bytes,
+                ) as response:
+                    tracker.record_response_headers(
+                        response_headers_at=_utc_now(),
+                        elapsed_ms=_elapsed_ms(started_monotonic_ns),
+                        status_code=response.status_code,
+                    )
+                    async for chunk in response.aiter_bytes():
+                        if not chunk:
+                            continue
+                        tracker.record_body_chunk(
+                            observed_at=_utc_now(),
+                            elapsed_ms=_elapsed_ms(started_monotonic_ns),
+                            size=len(chunk),
+                        )
+                        if len(body) + len(chunk) > MAX_RESPONSE_BODY_BYTES:
+                            raise _ResponseBodyLimitExceeded
+                        body.extend(chunk)
+
+                observation = tracker.finish(
+                    provider_finished_at=_utc_now(),
+                    elapsed_ms=_elapsed_ms(started_monotonic_ns),
+                )
+                outcome = (
+                    ProviderAttemptOutcome.COMPLETED
+                    if 200 <= response.status_code < 300
+                    else ProviderAttemptOutcome.REJECTED
+                )
+                return ProviderTransportResponse(
+                    outcome=outcome,
+                    status_code=response.status_code,
+                    body=bytes(body),
+                    observation=observation,
+                )
+    except TimeoutError:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.ABSOLUTE_DEADLINE,
+        )
+    except httpx.ConnectTimeout:
+        failure = (
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.CONNECT_TIMEOUT,
+        )
+    except httpx.ConnectError:
+        failure = (
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.CONNECT_ERROR,
+        )
+    except httpx.PoolTimeout:
+        failure = (
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.POOL_TIMEOUT,
+        )
+    except httpx.ReadTimeout:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.READ_TIMEOUT,
+        )
+    except httpx.ReadError:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.READ_ERROR,
+        )
+    except httpx.WriteTimeout:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.WRITE_TIMEOUT,
+        )
+    except httpx.WriteError:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.WRITE_ERROR,
+        )
+    except httpx.RemoteProtocolError:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.REMOTE_PROTOCOL_ERROR,
+        )
+    except _ResponseBodyLimitExceeded:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.HTTP_TRANSPORT_ERROR,
+        )
+    except httpx.HTTPError:
+        failure = (
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.HTTP_TRANSPORT_ERROR,
+        )
+
+    if failure is None:
+        raise RuntimeError("unreachable provider transport state")
+
+    attempt_outcome, transport_failure_kind = failure
+    observation = tracker.finish(
+        provider_finished_at=_utc_now(),
+        elapsed_ms=_elapsed_ms(started_monotonic_ns),
+        transport_failure_kind=transport_failure_kind,
+    )
+    raise ProviderTransportError(
+        attempt_outcome=attempt_outcome,
+        transport_failure_kind=transport_failure_kind,
+        transport_observation=observation,
+    )
