@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
-from importlib import import_module
-from pathlib import Path
-
 import pytest
 
 
@@ -12,19 +7,27 @@ EXPECTED_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 EXPECTED_PROMPT = "Reply with exactly: BYTE_NVIDIA_CANARY_OK"
 EXPECTED_TEXT = "BYTE_NVIDIA_CANARY_OK"
 QUALIFIED_PREDECESSOR = "29daea6ef68ebb3d46031ce302b0108617bd1221"
-FIXED_NOW = datetime(2026, 9, 9, 18, 0, 0, tzinfo=UTC)
+FIXED_NOW_TEXT = "2026-09-09T18:00:00+00:00"
+
+
+def _module(name: str):
+    return __import__(name, fromlist=["*"])
 
 
 def _canary_module():
-    return import_module("byte_mcp.nvidia.canary")
+    return _module("byte_mcp.nvidia.canary")
 
 
 def _evidence_store_class():
-    return import_module("byte_mcp.nvidia.canary_evidence").NvidiaCanaryEvidenceStore
+    return _module("byte_mcp.nvidia.canary_evidence").NvidiaCanaryEvidenceStore
 
 
 def _settings_class():
-    return import_module("byte_mcp.nvidia.settings").NvidiaHostedSettings
+    return _module("byte_mcp.nvidia.settings").NvidiaHostedSettings
+
+
+def _fixed_now():
+    return _module("datetime").datetime.fromisoformat(FIXED_NOW_TEXT)
 
 
 def _forbid_http_client(*args: object, **kwargs: object) -> None:
@@ -35,7 +38,7 @@ def _forbid_settings_load(*args: object, **kwargs: object):
     raise AssertionError("Task 3 must not load NVIDIA hosted settings")
 
 
-def _evidence_bytes(root: Path) -> dict[str, bytes]:
+def _evidence_bytes(root) -> dict[str, bytes]:
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
@@ -53,20 +56,20 @@ def test_task3_api_exports_exact_frozen_constants() -> None:
 
 
 def test_prepare_lightning_canary_persists_exact_fixed_request_without_key(
-    tmp_path: Path,
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = _canary_module()
     store_class = _evidence_store_class()
     settings_class = _settings_class()
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    monkeypatch.setattr(import_module("httpx"), "AsyncClient", _forbid_http_client)
+    monkeypatch.setattr(_module("httpx"), "AsyncClient", _forbid_http_client)
     monkeypatch.setattr(settings_class, "load", classmethod(_forbid_settings_load))
     store = store_class(tmp_path / "evidence")
 
-    receipt = canary.prepare_lightning_canary(store, now=lambda: FIXED_NOW)
+    receipt = canary.prepare_lightning_canary(store, now=_fixed_now)
     snapshot = store.load(receipt.canary_id)
-    body = json.loads(snapshot.request_body)
+    body = _module("json").loads(snapshot.request_body)
 
     assert body == {
         "max_tokens": 64,
@@ -85,23 +88,23 @@ def test_prepare_lightning_canary_persists_exact_fixed_request_without_key(
     assert receipt.payload_sha256 == snapshot.manifest.payload_sha256
     assert receipt.request_sha256 == snapshot.manifest.request_sha256
     assert receipt.body_bytes == len(snapshot.request_body)
-    assert receipt.prepared_at == FIXED_NOW.isoformat()
+    assert receipt.prepared_at == FIXED_NOW_TEXT
     assert receipt.evidence_root == str(store.root)
 
 
 def test_inspect_lightning_canary_is_read_only_and_credential_blind(
-    tmp_path: Path,
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canary = _canary_module()
     store_class = _evidence_store_class()
     settings_class = _settings_class()
     store = store_class(tmp_path / "evidence")
-    receipt = canary.prepare_lightning_canary(store, now=lambda: FIXED_NOW)
+    receipt = canary.prepare_lightning_canary(store, now=_fixed_now)
     before = _evidence_bytes(store.root)
 
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
-    monkeypatch.setattr(import_module("httpx"), "AsyncClient", _forbid_http_client)
+    monkeypatch.setattr(_module("httpx"), "AsyncClient", _forbid_http_client)
     monkeypatch.setattr(settings_class, "load", classmethod(_forbid_settings_load))
 
     inspection = canary.inspect_lightning_canary(store, receipt.canary_id)
@@ -113,7 +116,7 @@ def test_inspect_lightning_canary_is_read_only_and_credential_blind(
     assert inspection.payload_sha256 == receipt.payload_sha256
     assert inspection.request_sha256 == receipt.request_sha256
     assert inspection.body_bytes == receipt.body_bytes
-    assert inspection.prepared_at == FIXED_NOW.isoformat()
+    assert inspection.prepared_at == FIXED_NOW_TEXT
     assert inspection.probe_text == EXPECTED_TEXT
     assert inspection.provider_started_at is None
     assert inspection.has_terminal_event is False
@@ -121,7 +124,7 @@ def test_inspect_lightning_canary_is_read_only_and_credential_blind(
 
 
 def test_task3_api_is_reexported_from_nvidia_package() -> None:
-    package = import_module("byte_mcp.nvidia")
+    package = _module("byte_mcp.nvidia")
 
     assert package.NVIDIA_LIGHTNING_CANARY_MODEL_ID == EXPECTED_MODEL_ID
     assert package.NVIDIA_LIGHTNING_CANARY_PROMPT == EXPECTED_PROMPT
