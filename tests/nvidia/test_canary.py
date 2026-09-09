@@ -1,6 +1,5 @@
 import pytest
 
-
 EXPECTED_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 EXPECTED_PROMPT = "Reply with exactly: BYTE_NVIDIA_CANARY_OK"
 EXPECTED_TEXT = "BYTE_NVIDIA_CANARY_OK"
