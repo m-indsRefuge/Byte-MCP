@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -62,8 +63,19 @@ def _success_body() -> bytes:
     ).encode("utf-8")
 
 
-@pytest.mark.asyncio
-async def test_missing_key_fails_configuration_without_network_call():
+def _execute(prepared, settings, *, context=None, transport=None):
+    transmission_context = _context(prepared) if context is None else context
+    return asyncio.run(
+        execute_prepared_nvidia_chat(
+            prepared,
+            transmission_context,
+            settings,
+            transport=transport,
+        )
+    )
+
+
+def test_missing_key_fails_configuration_without_network_call():
     prepared = _prepared()
     calls = 0
 
@@ -73,9 +85,8 @@ async def test_missing_key_fails_configuration_without_network_call():
         return httpx.Response(200, content=_success_body(), request=request)
 
     with pytest.raises(NvidiaChatError) as caught:
-        await execute_prepared_nvidia_chat(
+        _execute(
             prepared,
-            _context(prepared),
             NvidiaHostedSettings(api_key=None),
             transport=httpx.MockTransport(handler),
         )
@@ -85,8 +96,7 @@ async def test_missing_key_fails_configuration_without_network_call():
     assert caught.value.attempt_outcome is ProviderAttemptOutcome.NOT_SENT
 
 
-@pytest.mark.asyncio
-async def test_success_transmits_exact_prepared_bytes_once_with_bearer_key():
+def test_success_transmits_exact_prepared_bytes_once_with_bearer_key():
     prepared = _prepared()
     calls: list[httpx.Request] = []
 
@@ -100,9 +110,8 @@ async def test_success_transmits_exact_prepared_bytes_once_with_bearer_key():
         assert request.headers["Accept"] == "application/json"
         return httpx.Response(200, content=_success_body(), request=request)
 
-    result = await execute_prepared_nvidia_chat(
+    result = _execute(
         prepared,
-        _context(prepared),
         NvidiaHostedSettings(api_key=_KEY),
         transport=httpx.MockTransport(handler),
     )
@@ -116,7 +125,6 @@ async def test_success_transmits_exact_prepared_bytes_once_with_bearer_key():
         assert _KEY not in rendered
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status_code", "expected_kind"),
     [
@@ -131,7 +139,7 @@ async def test_success_transmits_exact_prepared_bytes_once_with_bearer_key():
         (503, NvidiaChatFailureKind.PROVIDER_UNAVAILABLE),
     ],
 )
-async def test_complete_rejections_are_classified_once_without_secret_or_body_prose(
+def test_complete_rejections_are_classified_once_without_secret_or_body_prose(
     status_code,
     expected_kind,
 ):
@@ -145,9 +153,8 @@ async def test_complete_rejections_are_classified_once_without_secret_or_body_pr
         return httpx.Response(status_code, text=provider_prose, request=request)
 
     with pytest.raises(NvidiaChatError) as caught:
-        await execute_prepared_nvidia_chat(
+        _execute(
             prepared,
-            _context(prepared),
             NvidiaHostedSettings(api_key=_KEY),
             transport=httpx.MockTransport(handler),
         )
@@ -161,8 +168,7 @@ async def test_complete_rejections_are_classified_once_without_secret_or_body_pr
     assert _KEY not in repr(caught.value)
 
 
-@pytest.mark.asyncio
-async def test_alternate_target_fails_locally_before_bearer_key_can_be_sent():
+def test_alternate_target_fails_locally_before_bearer_key_can_be_sent():
     prepared = _prepared()
     alternate = replace(prepared, target_origin="https://example.invalid")
     calls = 0
@@ -173,18 +179,17 @@ async def test_alternate_target_fails_locally_before_bearer_key_can_be_sent():
         return httpx.Response(200, content=_success_body(), request=request)
 
     with pytest.raises(ValueError, match="NVIDIA chat prepared request"):
-        await execute_prepared_nvidia_chat(
+        _execute(
             alternate,
-            _context(alternate),
             NvidiaHostedSettings(api_key=_KEY),
+            context=_context(alternate),
             transport=httpx.MockTransport(handler),
         )
 
     assert calls == 0
 
 
-@pytest.mark.asyncio
-async def test_request_hash_mismatch_fails_locally_with_zero_calls():
+def test_request_hash_mismatch_fails_locally_with_zero_calls():
     prepared = _prepared()
     calls = 0
 
@@ -194,18 +199,17 @@ async def test_request_hash_mismatch_fails_locally_with_zero_calls():
         return httpx.Response(200, content=_success_body(), request=request)
 
     with pytest.raises(ValueError, match="request_sha256"):
-        await execute_prepared_nvidia_chat(
+        _execute(
             prepared,
-            _context(prepared, expected_request_sha256="0" * 64),
             NvidiaHostedSettings(api_key=_KEY),
+            context=_context(prepared, expected_request_sha256="0" * 64),
             transport=httpx.MockTransport(handler),
         )
 
     assert calls == 0
 
 
-@pytest.mark.asyncio
-async def test_provider_transport_error_propagates_without_reclassification_or_retry():
+def test_provider_transport_error_propagates_without_reclassification_or_retry():
     prepared = _prepared()
     calls = 0
 
@@ -215,9 +219,8 @@ async def test_provider_transport_error_propagates_without_reclassification_or_r
         raise httpx.ReadError("SENTINEL raw transport detail", request=request)
 
     with pytest.raises(ProviderTransportError) as caught:
-        await execute_prepared_nvidia_chat(
+        _execute(
             prepared,
-            _context(prepared),
             NvidiaHostedSettings(api_key=_KEY),
             transport=httpx.MockTransport(handler),
         )
