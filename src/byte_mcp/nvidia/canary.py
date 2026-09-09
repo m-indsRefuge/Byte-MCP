@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from byte_mcp.providers import (
     PreparedProviderRequest,
     ProviderAttemptOutcome,
+    ProviderAuthorization,
     ProviderTransmissionContext,
 )
 from byte_mcp.providers.requests import validate_prepared_provider_request_integrity
@@ -164,6 +165,7 @@ async def transmit_lightning_canary(
             raise ValueError("settings loader returned invalid NVIDIA hosted settings")
         if settings.api_key is None:
             raise ValueError("NVIDIA API key is not configured")
+        ProviderAuthorization(f"Bearer {settings.api_key}")
 
         prepared_request = PreparedProviderRequest(
             provider_id=manifest.provider_id,
