@@ -308,7 +308,10 @@ def _validate_terminal_event(
     if nvidia_failure_kind is not None and nvidia_failure_kind not in _NVIDIA_FAILURE_KINDS:
         raise NvidiaCanaryEvidenceError("terminal NVIDIA failure kind is invalid")
     transport_failure_kind = event.get("transport_failure_kind")
-    if transport_failure_kind is not None and transport_failure_kind not in _TRANSPORT_FAILURE_KINDS:
+    if (
+        transport_failure_kind is not None
+        and transport_failure_kind not in _TRANSPORT_FAILURE_KINDS
+    ):
         raise NvidiaCanaryEvidenceError("terminal transport failure kind is invalid")
 
     status_code = event.get("http_status_code")
