@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import sys
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from byte_mcp.errors import ByteMCPError
+from byte_mcp.providers import (
+    PreparedProviderRequest,
+    validate_prepared_provider_request_integrity,
+)
 
 NVIDIA_CANARY_SCHEMA = "byte-mcp-nvidia-canary-v1"
 NVIDIA_CANARY_ID_PATTERN = r"NVC-[0-9]{6}"
@@ -24,6 +31,8 @@ _NVIDIA_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
 _NVIDIA_METHOD = "POST"
 _NVIDIA_TARGET_ORIGIN = "https://integrate.api.nvidia.com"
 _NVIDIA_ENDPOINT_PATH = "/v1/chat/completions"
+_EVENT_KEYS = frozenset({"event_type", "canary_id", "request_sha256", "recorded_at"})
+_ALLOWED_TASK2_EVENTS = frozenset({"CANARY_PREPARED", "CANARY_AUTHORIZED", "PROVIDER_START"})
 
 
 def _require_aware_timestamp(value: object, field_name: str) -> str:
@@ -42,6 +51,78 @@ def _require_digest(value: object, field_name: str, pattern: re.Pattern[str]) ->
     if not isinstance(value, str) or pattern.fullmatch(value) is None:
         raise ValueError(f"{field_name} is invalid")
     return value
+
+
+def _require_canary_id(value: object) -> str:
+    if not isinstance(value, str) or _CANARY_ID.fullmatch(value) is None:
+        raise NvidiaCanaryEvidenceError("canary identity is invalid")
+    return value
+
+
+def _canonical_json(value: object) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError):
+        raise NvidiaCanaryEvidenceError("canary evidence is not canonical JSON") from None
+
+
+def _write_immutable(path: Path, payload: bytes) -> None:
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise NvidiaCanaryEvidenceError("immutable canary evidence already exists") from None
+    except OSError:
+        raise NvidiaCanaryEvidenceError("unable to create immutable canary evidence") from None
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        raise NvidiaCanaryEvidenceError("unable to persist immutable canary evidence") from None
+
+
+def _append_event(path: Path, event: Mapping[str, object]) -> None:
+    payload = _canonical_json(dict(event)) + b"\n"
+    try:
+        with path.open("ab") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        raise NvidiaCanaryEvidenceError("unable to append canary lifecycle evidence") from None
+
+
+@contextmanager
+def _exclusive_lock(path: Path) -> Iterator[None]:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise NvidiaCanaryLockError("canary lock is already held") from None
+    except OSError:
+        raise NvidiaCanaryLockError("unable to acquire canary lock") from None
+    try:
+        try:
+            os.write(descriptor, b"locked\n")
+            os.fsync(descriptor)
+        except OSError:
+            raise NvidiaCanaryLockError("unable to persist canary lock") from None
+        yield
+    finally:
+        try:
+            os.close(descriptor)
+        finally:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +214,7 @@ class NvidiaCanaryLockError(ByteMCPError):
 
 
 class NvidiaCanaryEvidenceStore:
-    """Resolve the local NVIDIA canary evidence root without touching credentials."""
+    """Persist and validate local NVIDIA canary lifecycle evidence."""
 
     def __init__(self, root: Path) -> None:
         if not isinstance(root, Path):
@@ -164,3 +245,237 @@ class NvidiaCanaryEvidenceStore:
         xdg_data_home = environment.get("XDG_DATA_HOME", "").strip()
         base = Path(xdg_data_home) if xdg_data_home else home_path / ".local" / "share"
         return cls(base / "byte-mcp" / "nvidia")
+
+    def _canary_dir(self, canary_id: str) -> Path:
+        return self.root / "canaries" / _require_canary_id(canary_id)
+
+    def prepare(
+        self,
+        prepared_request: PreparedProviderRequest,
+        *,
+        probe_expected_text: str,
+        qualified_predecessor_sha: str,
+        prepared_at: str,
+    ) -> NvidiaCanaryManifest:
+        try:
+            validate_prepared_provider_request_integrity(prepared_request)
+            _require_aware_timestamp(prepared_at, "prepared_at")
+            _require_digest(qualified_predecessor_sha, "qualified_predecessor_sha", _GIT_SHA1)
+            if not isinstance(probe_expected_text, str) or not probe_expected_text:
+                raise ValueError("probe_expected_text is invalid")
+        except (TypeError, ValueError):
+            raise NvidiaCanaryEvidenceError("prepared canary identity is invalid") from None
+
+        if (
+            prepared_request.provider_id != _NVIDIA_PROVIDER_ID
+            or prepared_request.model_id != _NVIDIA_MODEL_ID
+            or prepared_request.method != _NVIDIA_METHOD
+            or prepared_request.target_origin != _NVIDIA_TARGET_ORIGIN
+            or prepared_request.endpoint_path != _NVIDIA_ENDPOINT_PATH
+        ):
+            raise NvidiaCanaryEvidenceError("prepared canary target is invalid")
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        canaries_root = self.root / "canaries"
+        canaries_root.mkdir(parents=True, exist_ok=True)
+
+        with _exclusive_lock(self.root / ".prepare.lock"):
+            canary_dir: Path | None = None
+            canary_id = ""
+            for number in range(1, 1_000_000):
+                candidate = f"NVC-{number:06d}"
+                candidate_dir = canaries_root / candidate
+                try:
+                    candidate_dir.mkdir()
+                except FileExistsError:
+                    continue
+                except OSError:
+                    raise NvidiaCanaryEvidenceError("unable to allocate canary identity") from None
+                canary_id = candidate
+                canary_dir = candidate_dir
+                break
+            if canary_dir is None:
+                raise NvidiaCanaryEvidenceError("no canary identity is available")
+
+            manifest = NvidiaCanaryManifest(
+                schema=NVIDIA_CANARY_SCHEMA,
+                canary_id=canary_id,
+                provider_id=prepared_request.provider_id,
+                model_id=prepared_request.model_id,
+                method=prepared_request.method,
+                target_origin=prepared_request.target_origin,
+                endpoint_path=prepared_request.endpoint_path,
+                payload_sha256=prepared_request.payload_sha256,
+                request_sha256=prepared_request.request_sha256,
+                body_bytes=len(prepared_request.body_bytes),
+                prepared_at=prepared_at,
+                probe_expected_text=probe_expected_text,
+                qualified_predecessor_sha=qualified_predecessor_sha,
+            )
+            _write_immutable(canary_dir / "request-body.bin", prepared_request.body_bytes)
+            _write_immutable(canary_dir / "manifest.json", _canonical_json(asdict(manifest)))
+            _append_event(
+                canary_dir / "events.jsonl",
+                {
+                    "event_type": "CANARY_PREPARED",
+                    "canary_id": canary_id,
+                    "request_sha256": manifest.request_sha256,
+                    "recorded_at": prepared_at,
+                },
+            )
+            return manifest
+
+    def load(self, canary_id: str) -> NvidiaCanarySnapshot:
+        canary_dir = self._canary_dir(canary_id)
+        try:
+            manifest_payload = json.loads((canary_dir / "manifest.json").read_text(encoding="utf-8"))
+            request_body = (canary_dir / "request-body.bin").read_bytes()
+            event_lines = (canary_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            raise NvidiaCanaryEvidenceError("unable to read canary evidence") from None
+
+        if not isinstance(manifest_payload, dict):
+            raise NvidiaCanaryEvidenceError("canary manifest is malformed")
+        try:
+            manifest = NvidiaCanaryManifest(**manifest_payload)
+        except (TypeError, ValueError):
+            raise NvidiaCanaryEvidenceError("canary manifest is malformed") from None
+        if manifest.canary_id != canary_id or len(request_body) != manifest.body_bytes:
+            raise NvidiaCanaryEvidenceError("canary request identity is inconsistent")
+        if hashlib.sha256(request_body).hexdigest() != manifest.payload_sha256:
+            raise NvidiaCanaryEvidenceError("canary request body integrity failed")
+
+        prepared = PreparedProviderRequest(
+            provider_id=manifest.provider_id,
+            method=manifest.method,
+            target_origin=manifest.target_origin,
+            endpoint_path=manifest.endpoint_path,
+            model_id=manifest.model_id,
+            body_bytes=request_body,
+            payload_sha256=manifest.payload_sha256,
+            request_sha256=manifest.request_sha256,
+        )
+        try:
+            validate_prepared_provider_request_integrity(prepared)
+        except ValueError:
+            raise NvidiaCanaryEvidenceError("canary request identity integrity failed") from None
+
+        events: list[dict[str, object]] = []
+        for line in event_lines:
+            if not line:
+                raise NvidiaCanaryEvidenceError("canary events are malformed")
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                raise NvidiaCanaryEvidenceError("canary events are malformed") from None
+            if not isinstance(event, dict) or set(event) != _EVENT_KEYS:
+                raise NvidiaCanaryEvidenceError("canary events are malformed")
+            event_type = event.get("event_type")
+            if event_type not in _ALLOWED_TASK2_EVENTS:
+                raise NvidiaCanaryEvidenceError("canary event type is invalid")
+            if event.get("canary_id") != canary_id:
+                raise NvidiaCanaryEvidenceError("canary event identity is invalid")
+            if event.get("request_sha256") != manifest.request_sha256:
+                raise NvidiaCanaryEvidenceError("canary event request identity is invalid")
+            try:
+                _require_aware_timestamp(event.get("recorded_at"), "recorded_at")
+            except ValueError:
+                raise NvidiaCanaryEvidenceError("canary event timestamp is invalid") from None
+            events.append(event)
+
+        if not events or events[0].get("event_type") != "CANARY_PREPARED":
+            raise NvidiaCanaryEvidenceError("canary lifecycle is malformed")
+        if events[0].get("recorded_at") != manifest.prepared_at:
+            raise NvidiaCanaryEvidenceError("canary prepared timestamp is inconsistent")
+
+        authorized_at: str | None = None
+        provider_started_at: str | None = None
+        for index, event in enumerate(events[1:], start=1):
+            event_type = event["event_type"]
+            recorded_at = event["recorded_at"]
+            if event_type == "CANARY_PREPARED":
+                raise NvidiaCanaryEvidenceError("duplicate canary preparation event")
+            if event_type == "CANARY_AUTHORIZED":
+                if authorized_at is not None or provider_started_at is not None or index != 1:
+                    raise NvidiaCanaryEvidenceError("canary authorization ordering is invalid")
+                authorized_at = str(recorded_at)
+                continue
+            if event_type == "PROVIDER_START":
+                if authorized_at is None or provider_started_at is not None:
+                    raise NvidiaCanaryEvidenceError("provider-start ordering is invalid")
+                if index != 2:
+                    raise NvidiaCanaryEvidenceError("provider-start ordering is invalid")
+                provider_started_at = str(recorded_at)
+                continue
+            raise NvidiaCanaryEvidenceError("canary lifecycle is malformed")
+
+        return NvidiaCanarySnapshot(
+            manifest=manifest,
+            request_body=request_body,
+            events=tuple(events),
+            authorized_at=authorized_at,
+            provider_started_at=provider_started_at,
+            terminal_event=None,
+        )
+
+    def append_authorized(
+        self,
+        canary_id: str,
+        *,
+        request_sha256: str,
+        recorded_at: str,
+    ) -> None:
+        snapshot = self.load(canary_id)
+        try:
+            _require_aware_timestamp(recorded_at, "recorded_at")
+        except ValueError:
+            raise NvidiaCanaryEvidenceError("authorization timestamp is invalid") from None
+        if request_sha256 != snapshot.manifest.request_sha256:
+            raise NvidiaCanaryEvidenceError("authorization request identity is invalid")
+        if snapshot.authorized_at is not None or snapshot.provider_started_at is not None:
+            raise NvidiaCanaryEvidenceError("canary authorization already exists")
+        _append_event(
+            self._canary_dir(canary_id) / "events.jsonl",
+            {
+                "event_type": "CANARY_AUTHORIZED",
+                "canary_id": canary_id,
+                "request_sha256": request_sha256,
+                "recorded_at": recorded_at,
+            },
+        )
+
+    def append_provider_start(
+        self,
+        canary_id: str,
+        *,
+        request_sha256: str,
+        recorded_at: str,
+    ) -> None:
+        snapshot = self.load(canary_id)
+        try:
+            _require_aware_timestamp(recorded_at, "recorded_at")
+        except ValueError:
+            raise NvidiaCanaryEvidenceError("provider-start timestamp is invalid") from None
+        if request_sha256 != snapshot.manifest.request_sha256:
+            raise NvidiaCanaryEvidenceError("provider-start request identity is invalid")
+        if snapshot.authorized_at is None:
+            raise NvidiaCanaryEvidenceError("canary is not authorized")
+        if snapshot.provider_started_at is not None:
+            raise NvidiaCanaryEvidenceError("provider-start already exists")
+        _append_event(
+            self._canary_dir(canary_id) / "events.jsonl",
+            {
+                "event_type": "PROVIDER_START",
+                "canary_id": canary_id,
+                "request_sha256": request_sha256,
+                "recorded_at": recorded_at,
+            },
+        )
+
+    @contextmanager
+    def transmit_lock(self, canary_id: str) -> Iterator[None]:
+        canary_dir = self._canary_dir(canary_id)
+        if not canary_dir.is_dir():
+            raise NvidiaCanaryEvidenceError("canary evidence does not exist")
+        with _exclusive_lock(canary_dir / ".transmit.lock"):
+            yield
