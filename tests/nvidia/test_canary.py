@@ -507,19 +507,21 @@ def test_transmit_lock_contention_makes_zero_settings_or_executor_calls(tmp_path
         calls["executor"] += 1
         return _successful_executor_result()
 
-    with store.transmit_lock(receipt.canary_id):
-        with pytest.raises(_evidence_module().NvidiaCanaryLockError):
-            _module("asyncio").run(
-                canary.transmit_lightning_canary(
-                    store,
-                    canary_id=receipt.canary_id,
-                    expected_request_sha256=receipt.request_sha256,
-                    approve=True,
-                    settings_loader=settings_loader,
-                    executor=executor,
-                    now=_clock(AUTH_NOW_TEXT, START_NOW_TEXT),
-                )
+    with (
+        store.transmit_lock(receipt.canary_id),
+        pytest.raises(_evidence_module().NvidiaCanaryLockError),
+    ):
+        _module("asyncio").run(
+            canary.transmit_lightning_canary(
+                store,
+                canary_id=receipt.canary_id,
+                expected_request_sha256=receipt.request_sha256,
+                approve=True,
+                settings_loader=settings_loader,
+                executor=executor,
+                now=_clock(AUTH_NOW_TEXT, START_NOW_TEXT),
             )
+        )
 
     assert calls == {"settings": 0, "executor": 0}
 
