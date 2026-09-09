@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from byte_mcp.nvidia.canary_evidence import (
     NVIDIA_CANARY_SCHEMA,
     NvidiaCanaryEvidenceStore,
