@@ -8,6 +8,7 @@ from .models import (
 )
 from .outcomes import ProviderAttemptOutcome, ProviderTransportFailureKind
 from .registry import ModelRegistry, transition_model_profile
+from .requests import MAX_PREPARED_BODY_BYTES, PreparedProviderRequest, prepare_provider_request
 
 __all__ = [
     "ModelCapabilityProfile",
@@ -16,6 +17,9 @@ __all__ = [
     "ProviderAttemptOutcome",
     "ProviderIdentity",
     "ProviderTransportFailureKind",
+    "MAX_PREPARED_BODY_BYTES",
+    "PreparedProviderRequest",
+    "prepare_provider_request",
     "transition_model_profile",
     "validate_model_id",
 ]
