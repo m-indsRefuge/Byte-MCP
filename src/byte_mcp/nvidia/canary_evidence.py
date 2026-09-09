@@ -327,9 +327,14 @@ class NvidiaCanaryEvidenceStore:
             manifest_text = (canary_dir / "manifest.json").read_text(encoding="utf-8")
             manifest_payload = json.loads(manifest_text)
             request_body = (canary_dir / "request-body.bin").read_bytes()
-            event_lines = (canary_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            event_bytes = (canary_dir / "events.jsonl").read_bytes()
+            event_text = event_bytes.decode("utf-8")
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             raise NvidiaCanaryEvidenceError("unable to read canary evidence") from None
+
+        if not event_bytes.endswith(b"\n"):
+            raise NvidiaCanaryEvidenceError("canary events are malformed")
+        event_lines = event_text.splitlines()
 
         if not isinstance(manifest_payload, dict):
             raise NvidiaCanaryEvidenceError("canary manifest is malformed")
