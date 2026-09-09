@@ -103,7 +103,9 @@ class NvidiaCanarySnapshot:
             raise ValueError("manifest is invalid")
         if not isinstance(self.request_body, bytes):
             raise ValueError("request_body is invalid")
-        if not isinstance(self.events, tuple) or any(not isinstance(event, dict) for event in self.events):
+        if not isinstance(self.events, tuple) or any(
+            not isinstance(event, dict) for event in self.events
+        ):
             raise ValueError("events are invalid")
         if self.authorized_at is not None:
             _require_aware_timestamp(self.authorized_at, "authorized_at")
