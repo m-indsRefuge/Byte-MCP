@@ -1,0 +1,145 @@
+name: NVIDIA-02 Task 8 Offline Qualification
+
+on:
+  push:
+    branches:
+      - tmp/nvidia-n02-task8-qualification
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact governed candidate
+        uses: actions/checkout@v4
+        with:
+          ref: d547d7de98e14d0911ee3cf976228cfd60b7d9cd
+          fetch-depth: 0
+      - name: Verify exact identity and scope
+        shell: python
+        run: |
+          import subprocess
+          expected_head = "d547d7de98e14d0911ee3cf976228cfd60b7d9cd"
+          baseline = "29daea6ef68ebb3d46031ce302b0108617bd1221"
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          merge_base = subprocess.check_output(["git", "merge-base", baseline, "HEAD"], text=True).strip()
+          changed = set(subprocess.check_output(["git", "diff", "--name-only", baseline + "..HEAD"], text=True).splitlines())
+          allowed = {
+              "docs/superpowers/specs/2026-09-09-nvidia-provider-n02-lightning-canary-design.md",
+              "docs/superpowers/plans/2026-09-09-nvidia-provider-n02-lightning-canary-implementation-plan.md",
+              "docs/superpowers/plans/2026-09-10-nvidia-provider-n02-task7-invariant-amendment.md",
+              "scripts/nvidia_lightning_canary.py",
+              "src/byte_mcp/nvidia/__init__.py",
+              "src/byte_mcp/nvidia/settings.py",
+              "src/byte_mcp/nvidia/canary_evidence.py",
+              "src/byte_mcp/nvidia/canary.py",
+              "tests/nvidia/test_settings.py",
+              "tests/nvidia/test_canary_evidence.py",
+              "tests/nvidia/test_canary.py",
+              "tests/nvidia/test_canary_cli.py",
+              "tests/nvidia/test_n02_security_invariants.py",
+              "tests/nvidia/test_task4_astra_regressions.py",
+          }
+          forbidden_prefixes = ("src/byte_mcp/ox/", "src/byte_mcp/wolfram/", "src/byte_mcp/providers/")
+          forbidden_exact = {"src/byte_mcp/server.py", "src/byte_mcp/nvidia/catalog.py", "src/byte_mcp/nvidia/registry.py", "src/byte_mcp/nvidia/chat.py", "pyproject.toml"}
+          print("HEAD=" + head)
+          print("MERGE_BASE=" + merge_base)
+          print("CHANGED_COUNT=" + str(len(changed)))
+          if head != expected_head:
+              raise SystemExit("wrong governed head")
+          if merge_base != baseline:
+              raise SystemExit("wrong NVIDIA-01 merge base")
+          unexpected = sorted(changed - allowed)
+          if unexpected:
+              raise SystemExit("unexpected scope: " + ", ".join(unexpected))
+          frozen = sorted(path for path in changed if path in forbidden_exact or path.startswith(forbidden_prefixes))
+          if frozen:
+              raise SystemExit("frozen path changed: " + ", ".join(frozen))
+          print("SCOPE=PASS")
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Focused compile
+        run: python -m compileall -q src/byte_mcp scripts/nvidia_lightning_canary.py
+      - name: Focused pytest
+        run: python -m pytest tests/nvidia/test_settings.py tests/nvidia/test_canary_evidence.py tests/nvidia/test_canary.py tests/nvidia/test_canary_cli.py tests/nvidia/test_n02_security_invariants.py -q
+      - name: Scoped Ruff check
+        run: python -m ruff check src/byte_mcp/nvidia scripts/nvidia_lightning_canary.py tests/nvidia
+      - name: Scoped Ruff format
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/nvidia/__init__.py
+          src/byte_mcp/nvidia/settings.py
+          src/byte_mcp/nvidia/canary_evidence.py
+          src/byte_mcp/nvidia/canary.py
+          scripts/nvidia_lightning_canary.py
+          tests/nvidia/test_settings.py
+          tests/nvidia/test_canary_evidence.py
+          tests/nvidia/test_canary.py
+          tests/nvidia/test_canary_cli.py
+          tests/nvidia/test_n02_security_invariants.py
+      - name: Full pytest
+        run: python -m pytest -q
+      - name: Full Ruff check
+        run: python -m ruff check .
+      - name: Compare repo-wide format debt to NVIDIA-01
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python -m ruff format --check . > "$RUNNER_TEMP/current-format.txt" 2>&1
+          current_rc=$?
+          set -e
+          if [ "$current_rc" -ne 1 ]; then
+            cat "$RUNNER_TEMP/current-format.txt"
+            echo "Expected current repo-wide format check to exit 1 due historical debt, got $current_rc" >&2
+            exit 1
+          fi
+          git worktree add --detach "$RUNNER_TEMP/nvidia01" 29daea6ef68ebb3d46031ce302b0108617bd1221
+          set +e
+          (cd "$RUNNER_TEMP/nvidia01" && python -m ruff format --check .) > "$RUNNER_TEMP/baseline-format.txt" 2>&1
+          baseline_rc=$?
+          set -e
+          if [ "$baseline_rc" -ne 1 ]; then
+            cat "$RUNNER_TEMP/baseline-format.txt"
+            echo "Expected NVIDIA-01 repo-wide format check to exit 1, got $baseline_rc" >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+          temp = Path(os.environ["RUNNER_TEMP"])
+          current = (temp / "current-format.txt").read_text()
+          baseline = (temp / "baseline-format.txt").read_text()
+          def debt(text):
+              match = re.search(r"(\d+) files? would be reformatted", text)
+              if not match:
+                  raise SystemExit("could not parse format debt: " + text[-1000:])
+              return int(match.group(1))
+          c = debt(current)
+          b = debt(baseline)
+          print(f"CURRENT_FORMAT_DEBT={c}")
+          print(f"NVIDIA01_FORMAT_DEBT={b}")
+          if b != 46:
+              raise SystemExit(f"NVIDIA-01 frozen debt changed unexpectedly: {b}")
+          if c != b:
+              raise SystemExit(f"NVIDIA-02 introduced format debt: current={c}, baseline={b}")
+          print("FORMAT_BASELINE=PASS")
+          PY
+      - name: Whole-branch diff check
+        run: git diff --check 29daea6ef68ebb3d46031ce302b0108617bd1221..HEAD
+      - name: Provider boundary assertion
+        shell: python
+        run: |
+          import os
+          if os.environ.get("NVIDIA_API_KEY"):
+              raise SystemExit("NVIDIA_API_KEY unexpectedly configured in qualification environment")
+          print("NVIDIA_API_KEY=UNSET")
+          print("LIVE_PROVIDER_CALLS=0_BY_WORKFLOW_CONSTRUCTION")
