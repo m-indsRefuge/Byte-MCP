@@ -138,9 +138,7 @@ def test_server_has_no_nvidia_canary_or_inference_registration() -> None:
 
 def test_transmit_has_no_catalog_or_registry_calls() -> None:
     function = _function_node(_CANARY_PATH, "transmit_lightning_canary")
-    calls = {
-        _call_name(node).lower() for node in ast.walk(function) if isinstance(node, ast.Call)
-    }
+    calls = {_call_name(node).lower() for node in ast.walk(function) if isinstance(node, ast.Call)}
     assert not any("catalog" in name or "registry" in name for name in calls)
 
 
@@ -247,9 +245,7 @@ def test_prepare_and_inspect_never_call_settings_loader(
 def test_executor_receives_exact_persisted_request_body(tmp_path: Path) -> None:
     store = NvidiaCanaryEvidenceStore(tmp_path / "evidence")
     receipt = _prepare(store)
-    persisted = (
-        store.root / "canaries" / receipt.canary_id / "request-body.bin"
-    ).read_bytes()
+    persisted = (store.root / "canaries" / receipt.canary_id / "request-body.bin").read_bytes()
     settings = NvidiaHostedSettings(api_key="N02-EXACT-BYTES-SENTINEL")
     calls = 0
 
