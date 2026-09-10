@@ -56,7 +56,8 @@ def test_registry_accepts_utf8_bom_and_rejects_non_git_or_relative_paths(tmp_pat
     registry_path = tmp_path / "repositories.json"
     write_registry(registry_path, repository_path)
     registry_path.write_bytes(b"\xef\xbb\xbf" + registry_path.read_bytes())
-    assert module.NvidiaReviewRepositoryRegistry.load(registry_path).get("fixture").path == repository_path
+    loaded = module.NvidiaReviewRepositoryRegistry.load(registry_path).get("fixture")
+    assert loaded.path == repository_path
 
     for invalid_path in (Path("relative-repository"), tmp_path / "missing"):
         write_registry(registry_path, invalid_path)
