@@ -16,6 +16,9 @@ def test_main_initializes_core_then_ox_before_binding_server(monkeypatch: Any) -
     def fail_if_wolfram_loaded() -> None:
         raise AssertionError("Wolfram runtime must remain lazy during core startup")
 
+    def fail_if_nvidia_loaded() -> None:
+        raise AssertionError("NVIDIA review runtime must remain lazy during core startup")
+
     def fake_run(*, transport: str) -> None:
         assert transport == server.SETTINGS.transport
         events.append("run")
@@ -23,6 +26,7 @@ def test_main_initializes_core_then_ox_before_binding_server(monkeypatch: Any) -
     monkeypatch.setattr(server, "service", fake_service)
     monkeypatch.setattr(server, "ox_runtime", fake_ox_runtime, raising=False)
     monkeypatch.setattr(server, "wolfram_runtime", fail_if_wolfram_loaded, raising=False)
+    monkeypatch.setattr(server, "nvidia_review_runtime", fail_if_nvidia_loaded, raising=False)
     monkeypatch.setattr(server.mcp, "run", fake_run)
 
     server.main()
@@ -44,6 +48,9 @@ def test_main_still_binds_when_optional_ox_settings_are_invalid(monkeypatch: Any
     def fail_if_wolfram_loaded() -> None:
         raise AssertionError("Wolfram runtime must remain lazy during core startup")
 
+    def fail_if_nvidia_loaded() -> None:
+        raise AssertionError("NVIDIA review runtime must remain lazy during core startup")
+
     def fake_run(*, transport: str) -> None:
         assert transport == server.SETTINGS.transport
         events.append("run")
@@ -52,6 +59,7 @@ def test_main_still_binds_when_optional_ox_settings_are_invalid(monkeypatch: Any
     monkeypatch.setattr(server, "service", fake_service)
     monkeypatch.setattr(server.OXSettings, "load", invalid_ox_settings)
     monkeypatch.setattr(server, "wolfram_runtime", fail_if_wolfram_loaded, raising=False)
+    monkeypatch.setattr(server, "nvidia_review_runtime", fail_if_nvidia_loaded, raising=False)
     monkeypatch.setattr(server.mcp, "run", fake_run)
 
     server.main()
