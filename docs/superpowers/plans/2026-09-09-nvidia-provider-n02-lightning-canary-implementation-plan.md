@@ -76,6 +76,7 @@
 NVIDIA_CANARY_SCHEMA = "byte-mcp-nvidia-canary-v1"
 NVIDIA_CANARY_ID_PATTERN = re.compile(r"NVC-[0-9]{6}\\Z")
 
+
 @dataclass(frozen=True, slots=True)
 class NvidiaCanaryManifest:
     schema: str
@@ -92,6 +93,7 @@ class NvidiaCanaryManifest:
     probe_expected_text: str
     qualified_predecessor_sha: str
 
+
 @dataclass(frozen=True, slots=True, repr=False)
 class NvidiaCanarySnapshot:
     manifest: NvidiaCanaryManifest
@@ -101,9 +103,11 @@ class NvidiaCanarySnapshot:
     provider_started_at: str | None
     terminal_event: dict[str, object] | None
 
+
 class NvidiaCanaryEvidenceError(ByteMCPError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
+
 
 class NvidiaCanaryLockError(ByteMCPError):
     def __init__(self, message: str) -> None:
@@ -206,7 +210,9 @@ Evidence layout:
 Canonical JSON:
 
 ```python
-json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+json.dumps(
+    value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+).encode("utf-8")
 ```
 
 Immutable-write primitive:
@@ -314,6 +320,7 @@ class NvidiaCanaryPrepareReceipt:
     body_bytes: int
     prepared_at: str
     evidence_root: str
+
 
 @dataclass(frozen=True, slots=True)
 class NvidiaCanaryInspection:
