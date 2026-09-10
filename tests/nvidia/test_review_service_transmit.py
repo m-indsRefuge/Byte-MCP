@@ -415,16 +415,15 @@ def test_existing_transmit_lock_blocks_before_settings_or_executor(tmp_path: Pat
         calls["executor"] += 1
         raise AssertionError("executor must not run")
 
-    with store.transmit_lock(prepared["review_id"]):
-        with pytest.raises(NvidiaReviewLockError):
-            asyncio.run(
-                service.transmit_review(
-                    prepared["review_id"],
-                    expected_request_sha256=prepared["request_sha256"],
-                    approve=True,
-                    settings_loader=loader,
-                    executor=executor,
-                    now=clock(1, 2),
-                )
+    with store.transmit_lock(prepared["review_id"]), pytest.raises(NvidiaReviewLockError):
+        asyncio.run(
+            service.transmit_review(
+                prepared["review_id"],
+                expected_request_sha256=prepared["request_sha256"],
+                approve=True,
+                settings_loader=loader,
+                executor=executor,
+                now=clock(1, 2),
             )
+        )
     assert calls == {"settings": 0, "executor": 0}
