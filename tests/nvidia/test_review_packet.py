@@ -10,7 +10,7 @@ from byte_mcp.nvidia.review_registry import (
     NvidiaReviewGitRepository,
     NvidiaReviewRepositoryRegistry,
 )
-from tests.ox.helpers import create_repository
+from tests.ox.helpers import commit_files, create_repository
 
 BASE_TS = datetime(2026, 9, 10, 12, 0, tzinfo=UTC).isoformat()
 
@@ -177,19 +177,41 @@ def test_packet_rejects_incomplete_or_unsafe_verification(tmp_path: Path) -> Non
         )
 
 
-def test_packet_rejects_non_utf8_or_oversized_changed_target_text(tmp_path: Path) -> None:
+def test_packet_rejects_non_utf8_changed_target_text(tmp_path: Path) -> None:
     module = review_packet_module()
-    repository, subsystem, base, target = review_fixture(tmp_path)
-    target_commit = repository.resolve_commit(target)
-    entry = repository._entries_by_path(target_commit)["src/gamma.py"]
-    repository.repo.object_store[entry.sha].data = b"\xff\xfe"
+    repository, subsystem, _, target = review_fixture(tmp_path)
+    non_utf8_target = commit_files(
+        repository.definition.path,
+        {"src/gamma.py": b"\xff\xfe"},
+        b"non-utf8 target",
+    )
 
     with pytest.raises(ValueError, match="UTF-8"):
         module.prepare_review_packet(
             repository,
             subsystem,
-            base,
             target,
+            non_utf8_target,
+            "Review",
+            verification(),
+        )
+
+
+def test_packet_rejects_oversized_changed_target_text(tmp_path: Path) -> None:
+    module = review_packet_module()
+    repository, subsystem, _, target = review_fixture(tmp_path)
+    oversized_target = commit_files(
+        repository.definition.path,
+        {"src/gamma.py": b"x" * 524_289},
+        b"oversized target",
+    )
+
+    with pytest.raises(ValueError, match="changed target file exceeds maximum size"):
+        module.prepare_review_packet(
+            repository,
+            subsystem,
+            target,
+            oversized_target,
             "Review",
             verification(),
         )
