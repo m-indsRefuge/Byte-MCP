@@ -15,13 +15,13 @@ jobs:
       - name: Checkout exact governed candidate
         uses: actions/checkout@v4
         with:
-          ref: be43e03235a171a0808e693d478eb5aebf9434af
+          ref: de38dbce83a38f44aa36a4cfb4c9275a37fbd7f3
           fetch-depth: 0
       - name: Verify exact identity and scope
         shell: python
         run: |
           import subprocess
-          expected_head = "be43e03235a171a0808e693d478eb5aebf9434af"
+          expected_head = "de38dbce83a38f44aa36a4cfb4c9275a37fbd7f3"
           baseline = "29daea6ef68ebb3d46031ce302b0108617bd1221"
           head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           merge_base = subprocess.check_output(["git", "merge-base", baseline, "HEAD"], text=True).strip()
