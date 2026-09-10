@@ -138,7 +138,9 @@ def test_server_has_no_nvidia_canary_or_inference_registration() -> None:
 
 def test_transmit_has_no_catalog_or_registry_calls() -> None:
     function = _function_node(_CANARY_PATH, "transmit_lightning_canary")
-    calls = {_call_name(node).lower() for node in ast.walk(function) if isinstance(node, ast.Call)}
+    calls = {
+        _call_name(node).lower() for node in ast.walk(function) if isinstance(node, ast.Call)
+    }
     assert not any("catalog" in name or "registry" in name for name in calls)
 
 
@@ -458,13 +460,20 @@ def test_nvidia_api_key_is_accessed_only_by_settings_load_for_transmit() -> None
             occurrences[path.name] = count
     assert occurrences == {"settings.py": 1}
 
-    settings_tree = ast.parse(_SETTINGS_PATH.read_text(encoding="utf-8"), filename=str(_SETTINGS_PATH))
+    settings_tree = ast.parse(
+        _SETTINGS_PATH.read_text(encoding="utf-8"),
+        filename=str(_SETTINGS_PATH),
+    )
     load_node = _function_node(_SETTINGS_PATH, "load")
     module_key_literals = [
-        node for node in ast.walk(settings_tree) if isinstance(node, ast.Constant) and node.value == key_literal
+        node
+        for node in ast.walk(settings_tree)
+        if isinstance(node, ast.Constant) and node.value == key_literal
     ]
     load_key_literals = [
-        node for node in ast.walk(load_node) if isinstance(node, ast.Constant) and node.value == key_literal
+        node
+        for node in ast.walk(load_node)
+        if isinstance(node, ast.Constant) and node.value == key_literal
     ]
     assert len(module_key_literals) == 1
     assert len(load_key_literals) == 1
