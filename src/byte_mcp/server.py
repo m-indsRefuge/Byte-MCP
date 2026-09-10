@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from .errors import OXProtocolError
-from .nvidia.review_runtime import NvidiaReviewRuntime
 from .ox.runtime import OXRuntime
 from .ox.settings import OXSettings
 from .service import FileService
@@ -58,7 +58,7 @@ mcp = FastMCP(
 
 _service: FileService | None = None
 _ox_runtime_instance: OXRuntime | None = None
-_nvidia_review_runtime_instance: NvidiaReviewRuntime | None = None
+_nvidia_review_runtime_instance: Any | None = None
 _wolfram_runtime_instance: WolframRuntime | None = None
 
 
@@ -82,11 +82,12 @@ def ox_runtime() -> OXRuntime:
     return _ox_runtime_instance
 
 
-def nvidia_review_runtime() -> NvidiaReviewRuntime:
+def nvidia_review_runtime() -> Any:
     """Initialize NVIDIA review lazily so local config cannot block core startup."""
     global _nvidia_review_runtime_instance
     if _nvidia_review_runtime_instance is None:
-        _nvidia_review_runtime_instance = NvidiaReviewRuntime.load(SETTINGS.repo_root)
+        runtime_module = import_module("byte_mcp.nvidia.review_runtime")
+        _nvidia_review_runtime_instance = runtime_module.NvidiaReviewRuntime.load(SETTINGS.repo_root)
     return _nvidia_review_runtime_instance
 
 
