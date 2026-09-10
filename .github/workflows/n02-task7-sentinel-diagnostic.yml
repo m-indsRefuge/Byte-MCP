@@ -1,0 +1,33 @@
+name: NVIDIA-02 Task 7 Sentinel Diagnostic
+
+on:
+  push:
+    branches:
+      - tmp/nvidia-n02-task7-security
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: List literal hosted-key prefix occurrences
+        shell: python
+        run: |
+          from pathlib import Path
+          sentinel = "nv" + "api-"
+          roots = [Path("src/byte_mcp/nvidia"), Path("tests/nvidia")]
+          paths = [Path("scripts/nvidia_lightning_canary.py")]
+          for root in roots:
+              paths.extend(path for path in root.rglob("*") if path.is_file())
+          matches = []
+          for path in sorted(paths):
+              text = path.read_text(encoding="utf-8")
+              for number, line in enumerate(text.splitlines(), start=1):
+                  if sentinel in line:
+                      matches.append(f"{path}:{number}")
+          print("MATCH_COUNT=" + str(len(matches)))
+          for match in matches:
+              print(match)
