@@ -11,6 +11,7 @@ EXPECTED_MODELS = {
     "deepseek-ai/deepseek-v4-pro-0813",
     "moonshotai/kimi-k3",
 }
+LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
 def test_nvidia_provider_identity_distinguishes_gateway_from_model_publisher():
@@ -19,20 +20,26 @@ def test_nvidia_provider_identity_distinguishes_gateway_from_model_publisher():
     assert NVIDIA_PROVIDER.endpoint_family == "openai-chat"
 
 
-def test_initial_candidates_are_only_discovered_candidates():
+def test_lightning_is_qualified_but_other_candidates_remain_discovered():
     candidates = initial_qualification_candidates()
-    assert {candidate.profile.model_id for candidate in candidates} == EXPECTED_MODELS
+    by_id = {candidate.profile.model_id: candidate for candidate in candidates}
+
+    assert set(by_id) == EXPECTED_MODELS
+    assert by_id[LIGHTNING].profile.qualification_state is ModelLifecycleState.QUALIFIED
     assert all(
         candidate.profile.qualification_state is ModelLifecycleState.DISCOVERED
-        for candidate in candidates
+        for model_id, candidate in by_id.items()
+        if model_id != LIGHTNING
     )
     assert all(candidate.profile.provider_id == "nvidia-api-catalog" for candidate in candidates)
 
 
-def test_initial_registry_contains_no_qualified_or_enabled_model():
+def test_initial_registry_contains_one_qualified_and_no_enabled_model():
     registry = initial_model_registry()
     assert {profile.model_id for profile in registry.all()} == EXPECTED_MODELS
-    assert registry.by_state(ModelLifecycleState.QUALIFIED) == ()
+    assert tuple(profile.model_id for profile in registry.by_state(ModelLifecycleState.QUALIFIED)) == (
+        LIGHTNING,
+    )
     assert registry.by_state(ModelLifecycleState.ENABLED) == ()
 
 
