@@ -97,15 +97,17 @@ class NvidiaReviewRepositoryRegistry:
         try:
             Repo(repository_path)
         except (NotGitRepository, OSError, ValueError) as error:
-            raise ValueError("repository path must be an absolute existing Git repository") from error
+            message = "repository path must be an absolute existing Git repository"
+            raise ValueError(message) from error
 
         configured_subsystems = configuration.get("subsystems")
         if not isinstance(configured_subsystems, dict) or not configured_subsystems:
             raise ValueError(f"repository {alias!r} must define subsystems")
         subsystems = {
-            _validate_identifier(subsystem_id, "subsystem ID"): NvidiaReviewRepositoryRegistry._subsystem(
-                subsystem_id, definition
-            )
+            _validate_identifier(
+                subsystem_id,
+                "subsystem ID",
+            ): NvidiaReviewRepositoryRegistry._subsystem(subsystem_id, definition)
             for subsystem_id, definition in configured_subsystems.items()
         }
         return NvidiaReviewRepositoryDefinition(
