@@ -5,7 +5,6 @@ import inspect
 import pytest
 
 from byte_mcp import server
-from byte_mcp.nvidia.review_service import NvidiaReviewService
 
 
 PREPARE_FIELDS = {
@@ -21,6 +20,11 @@ APPROVAL_FIELDS = {"review_id", "expected_request_sha256", "approve"}
 
 def review_runtime_module():
     return importlib.import_module("byte_mcp.nvidia.review_runtime")
+
+
+def review_service_class():
+    module = importlib.import_module("byte_mcp.nvidia.review_service")
+    return module.NvidiaReviewService
 
 
 def test_nvidia_review_tool_signature_has_only_frozen_modes() -> None:
@@ -168,11 +172,12 @@ def test_nvidia_review_runtime_load_fail_isolates_local_configuration(
     tmp_path,
 ) -> None:
     runtime_module = review_runtime_module()
+    service_class = review_service_class()
 
     def fail_initialize(cls, repo_root, *, evidence_store=None):
         raise ValueError("synthetic local review configuration failure")
 
-    monkeypatch.setattr(NvidiaReviewService, "initialize", classmethod(fail_initialize))
+    monkeypatch.setattr(service_class, "initialize", classmethod(fail_initialize))
     runtime = runtime_module.NvidiaReviewRuntime.load(tmp_path)
     assert runtime.service is None
     assert runtime.error_type == "ValueError"
@@ -182,9 +187,10 @@ def test_nvidia_review_runtime_load_fail_isolates_local_configuration(
 
 def test_nvidia_review_runtime_load_wraps_available_service(monkeypatch, tmp_path) -> None:
     runtime_module = review_runtime_module()
+    service_class = review_service_class()
     fake_service = object()
     monkeypatch.setattr(
-        NvidiaReviewService,
+        service_class,
         "initialize",
         classmethod(lambda cls, repo_root, *, evidence_store=None: fake_service),
     )
