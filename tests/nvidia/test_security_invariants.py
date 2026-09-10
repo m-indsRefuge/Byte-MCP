@@ -9,6 +9,7 @@ from byte_mcp.nvidia.settings import NvidiaHostedSettings
 from byte_mcp.providers.models import ModelLifecycleState
 
 KEY = "NVIDIA-SECURITY-SENTINEL"
+LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
 def test_invalid_nvidia_environment_does_not_break_existing_provider_modules(monkeypatch):
@@ -46,9 +47,10 @@ def test_catalog_snapshot_contains_no_request_or_header_metadata():
     assert "Authorization" not in rendered
 
 
-def test_discovery_roster_has_no_qualified_or_enabled_state():
+def test_registry_has_only_live_proven_lightning_qualified_and_none_enabled():
     registry = initial_model_registry()
-    assert registry.by_state(ModelLifecycleState.QUALIFIED) == ()
+    qualified = registry.by_state(ModelLifecycleState.QUALIFIED)
+    assert tuple(profile.model_id for profile in qualified) == (LIGHTNING,)
     assert registry.by_state(ModelLifecycleState.ENABLED) == ()
 
 
