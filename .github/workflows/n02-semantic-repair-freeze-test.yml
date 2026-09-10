@@ -1,0 +1,43 @@
+name: NVIDIA-02 Semantic Repair Freeze Test
+
+on:
+  push:
+    branches:
+      - tmp/nvidia-n02-semantic-repair-test-freeze
+
+permissions:
+  contents: write
+
+jobs:
+  freeze-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp/nvidia-n02-semantic-repair-test-freeze
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Update only stale fixed-canary expectation
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("tests/nvidia/test_canary.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    assert body == {\n        "max_tokens": 64,\n        "messages": [{"content": EXPECTED_PROMPT, "role": "user"}],\n'''
+          new = '''    assert body == {\n        "chat_template_kwargs": {"enable_thinking": False},\n        "max_tokens": 64,\n        "messages": [{"content": EXPECTED_PROMPT, "role": "user"}],\n'''
+          if text.count(old) != 1:
+              raise SystemExit("stale canary expectation not found exactly once")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+      - name: Verify exact changed path
+        run: |
+          test "$(git diff --name-only)" = "tests/nvidia/test_canary.py"
+          git diff --check
+      - name: Commit test freeze
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/nvidia/test_canary.py
+          git commit -m "test: freeze thinking-off NVIDIA canary body"
+          git push origin HEAD:tmp/nvidia-n02-semantic-repair-test-freeze
