@@ -219,6 +219,7 @@ def test_prepare_lightning_canary_persists_exact_fixed_request_without_key(
     body = _module("json").loads(snapshot.request_body)
 
     assert body == {
+        "chat_template_kwargs": {"enable_thinking": False},
         "max_tokens": 64,
         "messages": [{"content": EXPECTED_PROMPT, "role": "user"}],
         "model": EXPECTED_MODEL_ID,
