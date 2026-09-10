@@ -87,7 +87,8 @@ def test_review_settings_resolve_explicit_and_default_registry_paths(
     monkeypatch.delenv("BYTE_MCP_NVIDIA_REVIEW_REPOSITORIES_FILE")
     monkeypatch.setenv("BYTE_MCP_NVIDIA_EVIDENCE_DIR", str(tmp_path / "evidence"))
     default = module.NvidiaReviewSettings.load(tmp_path)
-    assert default.repositories_file == (tmp_path / "evidence" / "review-repositories.json").resolve()
+    expected = (tmp_path / "evidence" / "review-repositories.json").resolve()
+    assert default.repositories_file == expected
 
 
 def test_prepare_review_persists_one_exact_provider_free_identity(
