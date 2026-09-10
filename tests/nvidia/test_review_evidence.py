@@ -1,7 +1,6 @@
 import importlib
 import importlib.util
 import json
-from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -336,11 +335,12 @@ def test_transmit_lock_excludes_concurrent_owner(tmp_path: Path) -> None:
     store = module.NvidiaReviewEvidenceStore(tmp_path / "evidence")
     manifest = store.prepare(packet, request, prepared_at=stamp())
 
-    with ExitStack() as stack:
-        stack.enter_context(store.transmit_lock(manifest.review_id))
-        with pytest.raises(module.NvidiaReviewLockError):
-            with store.transmit_lock(manifest.review_id):
-                pass
+    with (
+        store.transmit_lock(manifest.review_id),
+        pytest.raises(module.NvidiaReviewLockError),
+        store.transmit_lock(manifest.review_id),
+    ):
+        pass
 
 
 def test_environment_root_policy_matches_nvidia_root_convention(tmp_path: Path) -> None:
