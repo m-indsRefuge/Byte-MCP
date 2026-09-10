@@ -87,7 +87,9 @@ def nvidia_review_runtime() -> Any:
     global _nvidia_review_runtime_instance
     if _nvidia_review_runtime_instance is None:
         runtime_module = import_module("byte_mcp.nvidia.review_runtime")
-        _nvidia_review_runtime_instance = runtime_module.NvidiaReviewRuntime.load(SETTINGS.repo_root)
+        _nvidia_review_runtime_instance = runtime_module.NvidiaReviewRuntime.load(
+            SETTINGS.repo_root
+        )
     return _nvidia_review_runtime_instance
 
 
