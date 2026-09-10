@@ -1,10 +1,11 @@
 import asyncio
+import importlib
 import inspect
-from types import SimpleNamespace
 
 import pytest
 
 from byte_mcp import server
+from byte_mcp.nvidia.review_service import NvidiaReviewService
 
 
 PREPARE_FIELDS = {
@@ -16,6 +17,10 @@ PREPARE_FIELDS = {
     "verification",
 }
 APPROVAL_FIELDS = {"review_id", "expected_request_sha256", "approve"}
+
+
+def review_runtime_module():
+    return importlib.import_module("byte_mcp.nvidia.review_runtime")
 
 
 def test_nvidia_review_tool_signature_has_only_frozen_modes() -> None:
@@ -158,15 +163,17 @@ def test_nvidia_get_review_is_read_only_and_rejects_unknown_view(monkeypatch) ->
     assert calls == [("NVR-000001", "summary")]
 
 
-def test_nvidia_review_runtime_load_fail_isolates_local_configuration(monkeypatch, tmp_path) -> None:
-    from byte_mcp.nvidia.review_runtime import NvidiaReviewRuntime
-    from byte_mcp.nvidia.review_service import NvidiaReviewService
+def test_nvidia_review_runtime_load_fail_isolates_local_configuration(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_module = review_runtime_module()
 
     def fail_initialize(cls, repo_root, *, evidence_store=None):
         raise ValueError("synthetic local review configuration failure")
 
     monkeypatch.setattr(NvidiaReviewService, "initialize", classmethod(fail_initialize))
-    runtime = NvidiaReviewRuntime.load(tmp_path)
+    runtime = runtime_module.NvidiaReviewRuntime.load(tmp_path)
     assert runtime.service is None
     assert runtime.error_type == "ValueError"
     with pytest.raises(ValueError, match="NVIDIA review runtime is unavailable"):
@@ -174,16 +181,14 @@ def test_nvidia_review_runtime_load_fail_isolates_local_configuration(monkeypatc
 
 
 def test_nvidia_review_runtime_load_wraps_available_service(monkeypatch, tmp_path) -> None:
-    from byte_mcp.nvidia.review_runtime import NvidiaReviewRuntime
-    from byte_mcp.nvidia.review_service import NvidiaReviewService
-
-    fake_service = SimpleNamespace(name="review-service")
+    runtime_module = review_runtime_module()
+    fake_service = object()
     monkeypatch.setattr(
         NvidiaReviewService,
         "initialize",
         classmethod(lambda cls, repo_root, *, evidence_store=None: fake_service),
     )
-    runtime = NvidiaReviewRuntime.load(tmp_path)
+    runtime = runtime_module.NvidiaReviewRuntime.load(tmp_path)
     assert runtime.service is fake_service
     assert runtime.error_type is None
     assert runtime.require_service() is fake_service
