@@ -1,0 +1,25 @@
+name: NVIDIA-02 Task 8 Astra Format Diagnostic
+
+on:
+  push:
+    branches:
+      - tmp/nvidia-n02-task8-qualification
+
+permissions:
+  contents: read
+
+jobs:
+  format-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: be43e03235a171a0808e693d478eb5aebf9434af
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff==0.16.6
+      - name: Format only Astra regression file and print exact diff
+        run: |
+          python -m ruff format tests/nvidia/test_task4_astra_regressions.py
+          git diff -- tests/nvidia/test_task4_astra_regressions.py
