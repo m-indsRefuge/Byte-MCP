@@ -231,7 +231,11 @@ def prepare_review_packet(
         raise ValueError("repository is invalid")
     if not isinstance(subsystem, NvidiaReviewSubsystemDefinition):
         raise ValueError("subsystem is invalid")
-    if not isinstance(objective, str) or not objective or len(objective.encode("utf-8")) > _MAX_OBJECTIVE_BYTES:
+    if (
+        not isinstance(objective, str)
+        or not objective
+        or len(objective.encode("utf-8")) > _MAX_OBJECTIVE_BYTES
+    ):
         raise ValueError("objective is invalid")
 
     base = repository.resolve_commit(base_commit)
