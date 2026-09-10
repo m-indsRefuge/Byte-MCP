@@ -183,8 +183,6 @@ def test_tracked_nvidia_files_contain_no_nvapi_sentinel() -> None:
             "src/byte_mcp/nvidia",
             "tests/nvidia",
             "scripts/nvidia_lightning_canary.py",
-            "docs/superpowers/specs/2026-09-09-nvidia-provider-n02-lightning-canary-design.md",
-            "docs/superpowers/plans/2026-09-09-nvidia-provider-n02-lightning-canary-implementation-plan.md",
         ],
         cwd=_REPO_ROOT,
         capture_output=True,
