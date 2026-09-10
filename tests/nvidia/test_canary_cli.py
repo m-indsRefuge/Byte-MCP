@@ -4,10 +4,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
-
-from byte_mcp.providers import ProviderAttemptOutcome
-from byte_mcp.nvidia.settings import NvidiaHostedSettings
 import scripts.nvidia_lightning_canary as cli
+
+from byte_mcp.nvidia.settings import NvidiaHostedSettings
+from byte_mcp.providers import ProviderAttemptOutcome
 
 CANARY_ID = "NVC-000001"
 REQUEST_SHA256 = "b" * 64
