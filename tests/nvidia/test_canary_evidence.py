@@ -135,9 +135,7 @@ def test_store_uses_windows_home_fallback(tmp_path: Path) -> None:
         platform_name="win32",
         home=home,
     )
-    assert store.root == (home / "AppData" / "Local" / "Byte-MCP" / "nvidia").resolve(
-        strict=False
-    )
+    assert store.root == (home / "AppData" / "Local" / "Byte-MCP" / "nvidia").resolve(strict=False)
 
 
 def test_store_uses_xdg_default(tmp_path: Path) -> None:
@@ -157,9 +155,7 @@ def test_store_uses_home_fallback(tmp_path: Path) -> None:
         platform_name="linux",
         home=home,
     )
-    assert store.root == (home / ".local" / "share" / "byte-mcp" / "nvidia").resolve(
-        strict=False
-    )
+    assert store.root == (home / ".local" / "share" / "byte-mcp" / "nvidia").resolve(strict=False)
 
 
 @pytest.mark.parametrize(

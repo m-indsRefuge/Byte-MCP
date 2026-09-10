@@ -781,9 +781,9 @@ def test_transmit_success_persists_fixed_terminal_event(
     assert terminal["recorded_at"] == FINISH_NOW_TEXT
     assert result.semantic_probe_match is expected_match
 
-    raw_events = (
-        store.root / "canaries" / receipt.canary_id / "events.jsonl"
-    ).read_text(encoding="utf-8")
+    raw_events = (store.root / "canaries" / receipt.canary_id / "events.jsonl").read_text(
+        encoding="utf-8"
+    )
     assert content not in raw_events
     assert secret not in raw_events
     assert "Authorization" not in raw_events
@@ -1011,8 +1011,8 @@ def test_unexpected_post_start_exception_leaves_ambiguous_start_and_blocks_retra
             )
         )
 
-    raw_events = (
-        store.root / "canaries" / receipt.canary_id / "events.jsonl"
-    ).read_text(encoding="utf-8")
+    raw_events = (store.root / "canaries" / receipt.canary_id / "events.jsonl").read_text(
+        encoding="utf-8"
+    )
     assert calls == {"settings": 0, "executor": 0}
     assert "raw-provider-detail-must-not-be-persisted" not in raw_events
