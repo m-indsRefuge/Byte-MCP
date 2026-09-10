@@ -12,6 +12,7 @@ from byte_mcp.providers import (
     ProviderTransportError,
     ProviderTransportFailureKind,
     ProviderTransportObservation,
+    prepare_provider_request,
 )
 from byte_mcp.providers.requests import validate_prepared_provider_request_integrity
 
@@ -21,7 +22,6 @@ from .chat import (
     NVIDIA_CHAT_TARGET_ORIGIN,
     NvidiaChatResult,
     execute_prepared_nvidia_chat,
-    prepare_nvidia_chat_request,
 )
 from .errors import NvidiaChatError
 from .registry import NVIDIA_PROVIDER
@@ -141,17 +141,27 @@ def prepare_lightning_canary(
     *,
     now: Callable[[], datetime] = _utc_now,
 ) -> NvidiaCanaryPrepareReceipt:
-    prepared = prepare_nvidia_chat_request(
+    prepared = prepare_provider_request(
+        provider_id=NVIDIA_PROVIDER.provider_id,
+        method="POST",
+        target_origin=NVIDIA_CHAT_TARGET_ORIGIN,
+        endpoint_path=NVIDIA_CHAT_ENDPOINT_PATH,
         model_id=NVIDIA_LIGHTNING_CANARY_MODEL_ID,
-        messages=[
-            {
-                "role": "user",
-                "content": NVIDIA_LIGHTNING_CANARY_PROMPT,
-            }
-        ],
-        temperature=1.0,
-        top_p=0.95,
-        max_tokens=64,
+        body={
+            "chat_template_kwargs": {"enable_thinking": False},
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "content": NVIDIA_LIGHTNING_CANARY_PROMPT,
+                    "role": "user",
+                }
+            ],
+            "model": NVIDIA_LIGHTNING_CANARY_MODEL_ID,
+            "n": 1,
+            "stream": False,
+            "temperature": 1.0,
+            "top_p": 0.95,
+        },
     )
     prepared_at = now().isoformat()
     manifest = store.prepare(
