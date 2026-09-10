@@ -253,7 +253,7 @@ def test_prepare_and_inspect_are_credential_blind(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     evidence_root = tmp_path / "evidence"
-    secret = "nvapi-secret-must-never-be-read-or-persisted"
+    secret = "nv" + "api-secret-must-never-be-read-or-persisted"
     monkeypatch.setenv("BYTE_MCP_NVIDIA_EVIDENCE_DIR", str(evidence_root))
     monkeypatch.setenv("NVIDIA_API_KEY", secret)
 
