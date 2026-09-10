@@ -6,14 +6,16 @@ _EXPECTED_TOOLS = {
     "search",
     "fetch",
     "ox_review",
+    "nvidia_review",
     "ox_continue",
     "ox_revalidate",
     "ox_get_review",
+    "nvidia_get_review",
     "wolfram_query",
 }
 
 
-def test_combined_byte_mcp_surface_registers_core_ox_and_wolfram_tools() -> None:
+def test_combined_byte_mcp_surface_registers_core_ox_nvidia_and_wolfram_tools() -> None:
     registered = set(server.mcp._tool_manager._tools)
 
     assert registered == _EXPECTED_TOOLS
