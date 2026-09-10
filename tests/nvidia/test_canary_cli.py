@@ -4,8 +4,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
-import scripts.nvidia_lightning_canary as cli
 
+import scripts.nvidia_lightning_canary as cli
 from byte_mcp.nvidia.settings import NvidiaHostedSettings
 from byte_mcp.providers import ProviderAttemptOutcome
 

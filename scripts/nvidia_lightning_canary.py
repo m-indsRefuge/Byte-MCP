@@ -10,6 +10,9 @@ import sys
 from collections.abc import Sequence
 
 from byte_mcp.nvidia.canary import (
+    NvidiaCanaryInspection,
+    NvidiaCanaryPrepareReceipt,
+    NvidiaCanaryTransmissionResult,
     inspect_lightning_canary,
     prepare_lightning_canary,
     transmit_lightning_canary,
@@ -39,42 +42,41 @@ def _emit(payload: dict[str, object], *, error: bool = False) -> None:
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")), file=stream)
 
 
-def _prepare_payload(receipt: object) -> dict[str, object]:
+def _prepare_payload(receipt: NvidiaCanaryPrepareReceipt) -> dict[str, object]:
     return {
-        "canary_id": getattr(receipt, "canary_id"),
-        "provider_id": getattr(receipt, "provider_id"),
-        "model_id": getattr(receipt, "model_id"),
-        "payload_sha256": getattr(receipt, "payload_sha256"),
-        "request_sha256": getattr(receipt, "request_sha256"),
-        "body_bytes": getattr(receipt, "body_bytes"),
-        "prepared_at": getattr(receipt, "prepared_at"),
-        "evidence_root": getattr(receipt, "evidence_root"),
+        "canary_id": receipt.canary_id,
+        "provider_id": receipt.provider_id,
+        "model_id": receipt.model_id,
+        "payload_sha256": receipt.payload_sha256,
+        "request_sha256": receipt.request_sha256,
+        "body_bytes": receipt.body_bytes,
+        "prepared_at": receipt.prepared_at,
+        "evidence_root": receipt.evidence_root,
     }
 
 
-def _inspection_payload(inspection: object) -> dict[str, object]:
+def _inspection_payload(inspection: NvidiaCanaryInspection) -> dict[str, object]:
     return {
-        "canary_id": getattr(inspection, "canary_id"),
-        "provider_id": getattr(inspection, "provider_id"),
-        "model_id": getattr(inspection, "model_id"),
-        "payload_sha256": getattr(inspection, "payload_sha256"),
-        "request_sha256": getattr(inspection, "request_sha256"),
-        "body_bytes": getattr(inspection, "body_bytes"),
-        "prepared_at": getattr(inspection, "prepared_at"),
-        "probe_text": getattr(inspection, "probe_text"),
-        "provider_started_at": getattr(inspection, "provider_started_at"),
-        "has_terminal_event": getattr(inspection, "has_terminal_event"),
+        "canary_id": inspection.canary_id,
+        "provider_id": inspection.provider_id,
+        "model_id": inspection.model_id,
+        "payload_sha256": inspection.payload_sha256,
+        "request_sha256": inspection.request_sha256,
+        "body_bytes": inspection.body_bytes,
+        "prepared_at": inspection.prepared_at,
+        "probe_text": inspection.probe_text,
+        "provider_started_at": inspection.provider_started_at,
+        "has_terminal_event": inspection.has_terminal_event,
     }
 
 
-def _transmission_payload(result: object) -> dict[str, object]:
-    outcome = getattr(result, "attempt_outcome")
+def _transmission_payload(result: NvidiaCanaryTransmissionResult) -> dict[str, object]:
     return {
-        "canary_id": getattr(result, "canary_id"),
-        "request_sha256": getattr(result, "request_sha256"),
-        "attempt_outcome": getattr(outcome, "value", outcome),
-        "model_id": getattr(result, "model_id"),
-        "semantic_probe_match": getattr(result, "semantic_probe_match"),
+        "canary_id": result.canary_id,
+        "request_sha256": result.request_sha256,
+        "attempt_outcome": result.attempt_outcome.value,
+        "model_id": result.model_id,
+        "semantic_probe_match": result.semantic_probe_match,
     }
 
 
