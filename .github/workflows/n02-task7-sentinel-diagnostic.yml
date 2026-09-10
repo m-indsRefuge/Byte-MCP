@@ -1,4 +1,4 @@
-name: NVIDIA-02 Task 7 Sentinel Diagnostic
+name: NVIDIA-02 Task 7 Frozen Gates
 
 on:
   push:
@@ -9,11 +9,25 @@ permissions:
   contents: read
 
 jobs:
-  diagnostic:
+  task7:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: List literal hosted-key prefix occurrences
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Task 7 scoped regression
+        run: python -m pytest tests/nvidia/test_n02_security_invariants.py tests/nvidia/test_canary.py tests/nvidia/test_canary_evidence.py tests/nvidia/test_canary_cli.py -q
+      - name: Task 7 scoped Ruff check
+        run: python -m ruff check src/byte_mcp/nvidia scripts/nvidia_lightning_canary.py tests/nvidia
+      - name: Task 7 frozen format check
+        run: python -m ruff format --check src/byte_mcp/nvidia/canary.py src/byte_mcp/nvidia/canary_evidence.py scripts/nvidia_lightning_canary.py tests/nvidia/test_canary.py tests/nvidia/test_canary_evidence.py tests/nvidia/test_canary_cli.py tests/nvidia/test_n02_security_invariants.py
+      - name: Task 7 hosted-key sentinel check
         shell: python
         run: |
           from pathlib import Path
@@ -24,10 +38,8 @@ jobs:
               paths.extend(path for path in root.rglob("*") if path.is_file())
           matches = []
           for path in sorted(paths):
-              text = path.read_text(encoding="utf-8")
-              for number, line in enumerate(text.splitlines(), start=1):
-                  if sentinel in line:
-                      matches.append(f"{path}:{number}")
+              if sentinel in path.read_text(encoding="utf-8"):
+                  matches.append(str(path))
           print("MATCH_COUNT=" + str(len(matches)))
-          for match in matches:
-              print(match)
+          if matches:
+              raise SystemExit("literal hosted-key prefix found: " + ", ".join(matches))
