@@ -34,6 +34,7 @@ from .registry import (
     initial_model_registry,
     initial_qualification_candidates,
 )
+from .review_runtime import NvidiaReviewRuntime
 from .settings import NVIDIA_HOSTED_BASE_URL, NvidiaHostedSettings
 
 __all__ = [
@@ -58,6 +59,7 @@ __all__ = [
     "NvidiaChatUsage",
     "NvidiaHostedSettings",
     "NvidiaQualificationCandidate",
+    "NvidiaReviewRuntime",
     "classify_nvidia_chat_rejection",
     "execute_prepared_nvidia_chat",
     "initial_model_registry",
