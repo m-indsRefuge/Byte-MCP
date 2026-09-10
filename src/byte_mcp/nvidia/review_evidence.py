@@ -29,7 +29,6 @@ from .review_packet import PreparedNvidiaReviewPacket
 from .review_protocol import (
     NVIDIA_REVIEW_MODEL_ID,
     NVIDIA_REVIEW_PROTOCOL_VERSION,
-    NvidiaReviewFinding,
     NvidiaReviewResult,
     NvidiaReviewResultError,
     parse_nvidia_review_result,
@@ -557,7 +556,10 @@ class NvidiaReviewEvidenceStore:
             event_text = event_bytes.decode("utf-8")
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise NvidiaReviewEvidenceError("review evidence is malformed") from None
-        if not isinstance(manifest_payload, dict) or _canonical_json(manifest_payload) != manifest_bytes:
+        if (
+            not isinstance(manifest_payload, dict)
+            or _canonical_json(manifest_payload) != manifest_bytes
+        ):
             raise NvidiaReviewEvidenceError("review manifest is malformed")
         try:
             manifest = NvidiaReviewEvidenceManifest(**manifest_payload)
@@ -565,7 +567,10 @@ class NvidiaReviewEvidenceStore:
             raise NvidiaReviewEvidenceError("review manifest is malformed") from None
         if manifest.review_id != review_id:
             raise NvidiaReviewEvidenceError("review manifest identity is inconsistent")
-        if len(packet_bytes) != manifest.packet_bytes or _sha256(packet_bytes) != manifest.packet_sha256:
+        if (
+            len(packet_bytes) != manifest.packet_bytes
+            or _sha256(packet_bytes) != manifest.packet_sha256
+        ):
             raise NvidiaReviewEvidenceError("review packet integrity failed")
         if (
             len(request_body) != manifest.request_body_bytes
@@ -706,7 +711,11 @@ class NvidiaReviewEvidenceStore:
 
         if result is not None and provider_started_at is None:
             raise NvidiaReviewEvidenceError("review result exists before provider-start")
-        if terminal_event is not None and terminal_event.get("review_result_status") != "VALID" and result:
+        if (
+            terminal_event is not None
+            and terminal_event.get("review_result_status") != "VALID"
+            and result is not None
+        ):
             raise NvidiaReviewEvidenceError("review result is inconsistent with terminal state")
 
         return NvidiaReviewSnapshot(
