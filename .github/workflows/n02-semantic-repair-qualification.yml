@@ -1,0 +1,93 @@
+name: NVIDIA-02 Semantic Repair Qualification
+
+on:
+  push:
+    branches:
+      - tmp/nvidia-n02-semantic-repair-qualification
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8ce92056cdfe8412cd9856eca32fb2ddacf52147
+          fetch-depth: 0
+      - name: Verify exact repair identity and scope
+        shell: python
+        run: |
+          import os
+          import subprocess
+
+          expected = "8ce92056cdfe8412cd9856eca32fb2ddacf52147"
+          baseline = "de38dbce83a38f44aa36a4cfb4c9275a37fbd7f3"
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          changed = set(
+              subprocess.check_output(
+                  ["git", "diff", "--name-only", baseline + "..HEAD"], text=True
+              ).splitlines()
+          )
+          allowed = {
+              "src/byte_mcp/nvidia/canary.py",
+              "tests/nvidia/test_canary.py",
+              "tests/nvidia/test_n02_semantic_canary_repair.py",
+              "docs/superpowers/plans/2026-09-10-nvidia-provider-n02-semantic-canary-repair.md",
+          }
+          print("HEAD=" + head)
+          print("CHANGED=" + ",".join(sorted(changed)))
+          if head != expected:
+              raise SystemExit("wrong repair head")
+          if changed != allowed:
+              raise SystemExit("repair scope mismatch")
+          if os.environ.get("NVIDIA_API_KEY"):
+              raise SystemExit("NVIDIA_API_KEY unexpectedly configured")
+          print("SCOPE=PASS")
+          print("NVIDIA_API_KEY=UNSET")
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pip check
+      - name: Compile repair scope
+        run: python -m compileall -q src/byte_mcp/nvidia tests/nvidia
+      - name: Focused repair and invariant tests
+        run: >-
+          python -m pytest
+          tests/nvidia/test_n02_semantic_canary_repair.py
+          tests/nvidia/test_canary.py
+          tests/nvidia/test_chat_request.py
+          tests/nvidia/test_n02_security_invariants.py -q
+      - name: Ruff lint repair scope
+        run: >-
+          python -m ruff check
+          src/byte_mcp/nvidia/canary.py
+          tests/nvidia/test_canary.py
+          tests/nvidia/test_n02_semantic_canary_repair.py
+      - name: Ruff format repair scope
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/nvidia/canary.py
+          tests/nvidia/test_canary.py
+          tests/nvidia/test_n02_semantic_canary_repair.py
+          docs/superpowers/plans/2026-09-10-nvidia-provider-n02-semantic-canary-repair.md
+      - name: Prove N01 generic chat builder unchanged
+        run: |
+          git diff --exit-code de38dbce83a38f44aa36a4cfb4c9275a37fbd7f3..HEAD -- src/byte_mcp/nvidia/chat.py tests/nvidia/test_chat_request.py
+      - name: Full test suite
+        run: python -m pytest -q
+      - name: Full Ruff lint
+        run: python -m ruff check .
+      - name: Diff hygiene
+        run: git diff --check de38dbce83a38f44aa36a4cfb4c9275a37fbd7f3..HEAD
+      - name: Provider boundary
+        shell: python
+        run: |
+          import os
+          if os.environ.get("NVIDIA_API_KEY"):
+              raise SystemExit("NVIDIA_API_KEY unexpectedly configured")
+          print("LIVE_PROVIDER_CALLS=0_BY_WORKFLOW_CONSTRUCTION")
