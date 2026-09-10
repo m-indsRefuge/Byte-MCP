@@ -3,7 +3,6 @@ import importlib
 import inspect
 
 import pytest
-
 from byte_mcp import server
 
 
