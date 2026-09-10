@@ -26,7 +26,12 @@ class NvidiaQualificationCandidate:
     intended_role: str
 
 
-def _candidate(model_id: str, publisher: str, intended_role: str) -> NvidiaQualificationCandidate:
+def _candidate(
+    model_id: str,
+    publisher: str,
+    intended_role: str,
+    qualification_state: ModelLifecycleState = ModelLifecycleState.DISCOVERED,
+) -> NvidiaQualificationCandidate:
     return NvidiaQualificationCandidate(
         profile=ModelCapabilityProfile(
             model_id=model_id,
@@ -41,7 +46,7 @@ def _candidate(model_id: str, publisher: str, intended_role: str) -> NvidiaQuali
             supports_reasoning=None,
             reasoning_dialect=None,
             hosted_status="candidate",
-            qualification_state=ModelLifecycleState.DISCOVERED,
+            qualification_state=qualification_state,
             observed_at=_INITIAL_OBSERVED_AT,
         ),
         intended_role=intended_role,
@@ -49,7 +54,12 @@ def _candidate(model_id: str, publisher: str, intended_role: str) -> NvidiaQuali
 
 
 _INITIAL_CANDIDATES = (
-    _candidate("nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia", "routine-review"),
+    _candidate(
+        "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "nvidia",
+        "routine-review",
+        ModelLifecycleState.QUALIFIED,
+    ),
     _candidate("nvidia/nemotron-3-ultra-550b-a55b", "nvidia", "deep-review"),
     _candidate(
         "deepseek-ai/deepseek-v4-pro-0813",
