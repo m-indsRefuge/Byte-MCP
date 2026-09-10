@@ -67,10 +67,11 @@ def test_new_provider_modules_do_not_import_ox_or_wolfram_packages():
         assert "byte_mcp.wolfram" not in source
 
 
-def test_server_has_no_nvidia_inference_registration():
+def test_server_registers_only_governed_nvidia_review_tools():
     from byte_mcp import server
 
-    assert not any("nvidia" in name for name in server.mcp._tool_manager._tools)
+    nvidia_tools = {name for name in server.mcp._tool_manager._tools if "nvidia" in name}
+    assert nvidia_tools == {"nvidia_review", "nvidia_get_review"}
 
 
 def test_provider_neutral_modules_do_not_import_nvidia():
