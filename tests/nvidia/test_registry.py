@@ -37,9 +37,8 @@ def test_lightning_is_qualified_but_other_candidates_remain_discovered():
 def test_initial_registry_contains_one_qualified_and_no_enabled_model():
     registry = initial_model_registry()
     assert {profile.model_id for profile in registry.all()} == EXPECTED_MODELS
-    assert tuple(profile.model_id for profile in registry.by_state(ModelLifecycleState.QUALIFIED)) == (
-        LIGHTNING,
-    )
+    qualified = registry.by_state(ModelLifecycleState.QUALIFIED)
+    assert tuple(profile.model_id for profile in qualified) == (LIGHTNING,)
     assert registry.by_state(ModelLifecycleState.ENABLED) == ()
 
 
