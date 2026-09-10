@@ -3,8 +3,8 @@ import importlib
 import inspect
 
 import pytest
-from byte_mcp import server
 
+from byte_mcp import server
 
 PREPARE_FIELDS = {
     "repository",
