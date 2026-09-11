@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -141,6 +142,97 @@ def wolfram_query(
         source_finding_id,
         assumption,
     )
+
+
+
+
+NVIDIA_EXTERNAL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+
+_nvidia_review_runtime_instance: Any | None = None
+
+
+def nvidia_review_runtime() -> Any:
+    """Initialize NVIDIA review lazily so local config cannot block core startup."""
+    global _nvidia_review_runtime_instance
+    if _nvidia_review_runtime_instance is None:
+        runtime_module = import_module("byte_mcp.nvidia.review_runtime")
+        _nvidia_review_runtime_instance = runtime_module.NvidiaReviewRuntime.load(
+            SETTINGS.repo_root
+        )
+    return _nvidia_review_runtime_instance
+
+
+def _nvidia_review_service():
+    return nvidia_review_runtime().require_service()
+
+
+def _invalid_nvidia_review_mode() -> None:
+    raise ValueError("invalid NVIDIA review mode")
+
+
+@mcp.tool(annotations=NVIDIA_EXTERNAL)
+async def nvidia_review(
+    repository: str | None = None,
+    subsystem: str | None = None,
+    target_commit: str | None = None,
+    base_commit: str | None = None,
+    objective: str | None = None,
+    verification: list[dict[str, Any]] | None = None,
+    review_id: str | None = None,
+    expected_request_sha256: str | None = None,
+    approve: bool = False,
+) -> dict[str, object]:
+    """Prepare or explicitly approve one immutable NVIDIA routine code review."""
+    scoped_values = (
+        repository,
+        subsystem,
+        target_commit,
+        base_commit,
+        objective,
+        verification,
+    )
+    if review_id is None:
+        if approve or expected_request_sha256 is not None:
+            _invalid_nvidia_review_mode()
+        if any(value is None for value in scoped_values):
+            _invalid_nvidia_review_mode()
+        return _nvidia_review_service().prepare_review(
+            repository=repository,
+            subsystem=subsystem,
+            target_commit=target_commit,
+            base_commit=base_commit,
+            objective=objective,
+            verification=verification,
+        )
+
+    if (
+        any(value is not None for value in scoped_values)
+        or expected_request_sha256 is None
+        or not approve
+    ):
+        _invalid_nvidia_review_mode()
+    return await _nvidia_review_service().transmit_review(
+        review_id,
+        expected_request_sha256=expected_request_sha256,
+        approve=True,
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+def nvidia_get_review(
+    review_id: str,
+    view: str = "summary",
+) -> dict[str, object]:
+    """Read bounded local NVIDIA review evidence without contacting the provider."""
+    if view not in {"summary", "findings", "attempt", "manifest"}:
+        raise ValueError("invalid NVIDIA review view")
+    return _nvidia_review_service().get_review(review_id, view=view)
 
 
 def main() -> None:

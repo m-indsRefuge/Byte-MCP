@@ -1,0 +1,23 @@
+"""Provider-neutral attempt outcomes and transport-failure categories."""
+
+from enum import StrEnum
+
+
+class ProviderAttemptOutcome(StrEnum):
+    NOT_SENT = "NOT_SENT"
+    REJECTED = "REJECTED"
+    COMPLETED = "COMPLETED"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+
+
+class ProviderTransportFailureKind(StrEnum):
+    ABSOLUTE_DEADLINE = "ABSOLUTE_DEADLINE"
+    READ_TIMEOUT = "READ_TIMEOUT"
+    READ_ERROR = "READ_ERROR"
+    WRITE_TIMEOUT = "WRITE_TIMEOUT"
+    WRITE_ERROR = "WRITE_ERROR"
+    REMOTE_PROTOCOL_ERROR = "REMOTE_PROTOCOL_ERROR"
+    HTTP_TRANSPORT_ERROR = "HTTP_TRANSPORT_ERROR"
+    CONNECT_TIMEOUT = "CONNECT_TIMEOUT"
+    CONNECT_ERROR = "CONNECT_ERROR"
+    POOL_TIMEOUT = "POOL_TIMEOUT"
