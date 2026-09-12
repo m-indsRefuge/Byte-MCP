@@ -1,8 +1,10 @@
 # FINAL OX V2 — Clean-room architecture specification
 
-**Status:** Final revised design for Byte–Nolan implementation authorization.
+**Status:** Final Milestone-A design, amended after Wave-1 architecture review.
 
-This specification incorporates the supplied repository reconciliation against commit `94ff28810a06b7af2207196ac98c1152cc65b4b1`. It does not claim an independent inspection of that commit. No code or new capabilities are introduced.
+This specification incorporates the supplied repository reconciliation against commit `94ff28810a06b7af2207196ac98c1152cc65b4b1`. It does not claim an independent inspection of that commit. No code or new capabilities are introduced by this document amendment.
+
+The approved 2026-09-12 amendment closes A1–A7 from the Wave-1 review: exact credential exclusion before claim, finish-reason epistemics, process-local `TRANSMITTING`, definitive connect-failure treatment, explicit SEND/GET output semantics, versioned attempt-keyed parse receipts, and SQLite/schema/audit/ref-validation pins. It also records two conscious Milestone-A deferrals: no `REQUEST_STARTED`/`ABORTED_BEFORE_SEND` fact, and no heartbeat probe unless a failed strict lifetime qualification triggers a separately reviewed diagnostic.
 
 ## 1. Executive summary
 
@@ -45,7 +47,8 @@ V2 must preserve a clear connection between:
 2. The exact identity Nolan authorized.
 3. The immutable request supplied to transport.
 4. The response evidence that became durable.
-5. The final outcome, including uncertainty.
+5. The interpretation evidence produced from that durable response.
+6. The final outcome, including uncertainty.
 
 Correctness means preventing local duplicate dispatch, preserving evidence, and avoiding unsupported success claims. It does not mean guaranteeing completion after interruption.
 
@@ -63,9 +66,10 @@ V2 initially excludes:
 - Working-tree or uncommitted-content review.
 - Automatic scope expansion or truncation.
 - Automatic verification of the reviewer’s conclusions.
-- Remote failure attribution.
+- Remote failure attribution beyond locally observable transport phase.
 - Protection against an authorization-violating assistant, compromised service account, or malicious administrator.
 - Migration or runtime reinterpretation of V1 evidence.
+- Automatic restart finalization from a durable parse receipt.
 
 Another paid review requires a fresh prepared review and explicit conversational authorization. It does not reopen the original send opportunity.
 
@@ -81,11 +85,13 @@ Another paid review requires a fresh prepared review and explicit conversational
 
 **Persist before interpreting.** Received bytes become durable before response parsing or review extraction.
 
-**Separate receipt from outcome.** A complete HTTP response does not necessarily establish a successful review or a particular upstream billing outcome.
+**Version interpretation.** Parser conclusions are immutable, attempt-keyed, and versioned separately from the database schema. A corrected parser may add a new receipt without rewriting an earlier receipt or the canonical response bytes.
+
+**Separate receipt from outcome.** A complete HTTP response or durable parse receipt does not necessarily establish a successful review, a committed final outcome, or a particular upstream billing outcome.
 
 **Use ordinary local transactions.** SQLite supplies atomic attempt creation and durable evidence ordering.
 
-**Add no recovery framework.** Unfinished evidence remains unresolved after restart.
+**Add no recovery framework.** Unfinished evidence remains unresolved after restart. Durable parse evidence may support a future separately authorized explicit finalization capability, but V2 Milestone A performs no startup sweep or automatic finalization.
 
 ## 5. Proposed module/package structure
 
@@ -97,7 +103,7 @@ src/byte_mcp/
         prepare.py          # Scope validation and immutable request assembly
         store.py            # SQLite transactions and retrieval
         send.py             # One request and incremental response receipt
-        response.py         # Pure response validation and projection
+        response.py         # Pure response validation and parse-receipt projection
 
 tests/ox_v2/
 ```
@@ -183,7 +189,9 @@ Byte may invoke this tool only after Nolan explicitly approves that exact prepar
 
 The tool verifies stored identity and consumes the review’s single send opportunity. It does not receive or require an independently verified host approval receipt.
 
-A repeated call returns existing attempt evidence. It never starts or resumes networking.
+On the original invocation, a `COMPLETED` SEND returns the complete review content derived from the sealed canonical response. That content-delivery result is bounded by the durable response limit, not by the 8 KiB operational-status limit. Non-completed SEND results remain bounded operational/status results.
+
+A repeated call returns existing attempt evidence and never starts or resumes networking. Milestone A does not require replay to reproduce the complete review content after the original invocation has ended.
 
 ### `ox_v2_get`
 
@@ -193,9 +201,11 @@ Input:
 review_id
 ```
 
-Returns bounded identity, state, receipt facts, safe diagnostics, and references to restricted evidence.
+Returns bounded identity, state, receipt facts, parse-receipt facts, safe diagnostics, and references to restricted evidence.
 
-It performs no provider requests, writes, recovery, or reconciliation. Request and response bodies are not embedded in ordinary status results.
+It performs no provider requests, writes, recovery, reconciliation, automatic parsing, or automatic finalization. Request and response bodies are not embedded in ordinary status results.
+
+`docs/OX-V2.md` must document a restricted local inspection query/procedure for operators who need the canonical stored response evidence. A richer GET content-preview surface is explicitly outside Milestone A.
 
 ### Initial bounds
 
@@ -210,10 +220,10 @@ These are proposed local product bounds, not asserted provider limits:
 | Stored response body            | 16 MiB              |
 | Response chunk                  | 64 KiB              |
 | SSE event                       | 1 MiB               |
-| Public status result            | 8 KiB               |
+| Public status/diagnostic result | 8 KiB               |
 | Overall network deadline        | 900 seconds         |
 
-Reject oversized preparation without silently omitting content. Fix the output-token limit in the selected model profile before qualification.
+The 8 KiB limit does not apply to the complete review content returned by a successful original SEND invocation. Reject oversized preparation without silently omitting content. Fix the output-token limit in the selected model profile before qualification.
 
 ## 7. State machine
 
@@ -235,7 +245,7 @@ Attempt with final outcome    → that final outcome
 Attempt without final outcome → OUTCOME_UNKNOWN
 ```
 
-`TRANSMITTING` is an optional current-process observation. It does not prove that the provider received the request.
+`TRANSMITTING` is not stored as workflow state. It is an optional process-local/public observation while the current live invocation owns a successfully claimed attempt. Live ownership takes presentation precedence over the durable `OUTCOME_UNKNOWN` projection. The ownership registry must be released in `finally`; once ownership disappears, presentation immediately falls back to the durable projection. `TRANSMITTING` does not prove that the provider received the request.
 
 Legal execution:
 
@@ -249,7 +259,7 @@ Invalid identity or preflight rejection leaves the review `PREPARED`; no attempt
 
 An unfinished attempt may receive its first final result from the original live invocation. A persisted final outcome—including `OUTCOME_UNKNOWN`—is immutable.
 
-After restart, unfinished attempts remain unknown. V2 neither resumes them nor writes a reconstructed final outcome.
+After restart, unfinished attempts remain unknown. V2 neither resumes them nor writes a reconstructed final outcome, even when a complete response and parse receipt exist.
 
 Illegal transitions include:
 
@@ -272,7 +282,7 @@ Illegal transitions include:
 
 PREPARE performs zero provider requests and requires no provider credential.
 
-Use Git without external diff tools, text conversion, hooks, network fetching, submodule fetching, or shell interpolation. Missing local objects cause rejection.
+Use Git without external diff tools, text conversion, hooks, network fetching, submodule fetching, or shell interpolation. Missing local objects cause rejection. Unsafe ref input includes `:`, `..`, `@{`, backslash, control characters, empty path components, leading/trailing slash, and trailing dot.
 
 Initially reject unsupported binary artifacts, submodules, and symlink artifacts in the selected review rather than following or silently omitting them. Rename handling must account for both paths at subsystem boundaries.
 
@@ -320,7 +330,7 @@ Byte must:
 
 No approval daemon, signing keys, local approval service, PowerShell ceremony, or separate persistent approval workflow is introduced.
 
-The attempt record binds the identity submitted under this trust model. It is not independent proof of Nolan’s conversational act.
+The attempt record stores `authorization_mode` and `authorization_asserted_at`. Initial `authorization_mode` is the closed value `EXPLICIT_CONVERSATION`; `authorization_asserted_at` records when Byte-MCP was invoked under that asserted mode. These fields prove only that the invocation asserted this authorization mode. They are not independent proof that Byte-MCP witnessed or cryptographically verified Nolan’s conversational act.
 
 A future native host confirmation facility may strengthen this boundary without changing the V2 state machine.
 
@@ -330,14 +340,17 @@ A future native host confirmation facility may strengthen this boundary without 
 2. The server validates the input identity.
 3. Load and hash-check stored manifest and body.
 4. Confirm current policy still permits the repository and fixed endpoint.
-5. Confirm supported transport settings and credential availability without networking.
-6. Construct the request using verified stored body bytes.
-7. Commit the review’s unique attempt, binding the submitted identity.
-8. Only if that commit returns definite success, invoke transport once.
-9. Commit received bytes incrementally.
-10. Commit response closure evidence.
-11. Parse durable evidence.
-12. Commit the final outcome before reporting it.
+5. Load the approved local credential and confirm supported transport settings and credential availability without networking.
+6. Encode the exact credential as the bytes that would be used for the authorization header and fail closed if that exact credential occurs in either the frozen request body or frozen manifest. Do not add derivative/pattern secret guessing at this gate. A match leaves the review `PREPARED` and unconsumed.
+7. Construct the request using verified stored body bytes.
+8. Commit the review’s unique attempt, binding the submitted identity plus authorization assertion fields.
+9. Only if that commit returns definite success, register live process ownership and invoke transport once.
+10. Commit received bytes incrementally, including `received_at` per chunk.
+11. Commit response closure evidence.
+12. Parse durable evidence.
+13. Commit an immutable versioned parse receipt.
+14. Commit the final outcome before reporting it.
+15. Release live process ownership in `finally`.
 
 A policy change may deny sending. It must not rewrite the approved request.
 
@@ -382,6 +395,8 @@ After that commit, durable evidence must conservatively allow:
 This includes the crash gap between commit and networking. There is no local atomic transaction spanning storage and remote HTTP receipt.
 
 A durable record does not prove that every body byte left the process. It binds the exact bytes supplied to the sole transport invocation.
+
+Milestone A deliberately does not add `REQUEST_STARTED` or `ABORTED_BEFORE_SEND`. A process death after claim and before a connect result remains consumed and projects conservatively as unresolved. Observable definitive connect-phase failures are classified more precisely under Section 12 without reopening the send opportunity.
 
 ### Required local restrictions
 
@@ -455,6 +470,8 @@ The qualification must:
 
 **If it fails:** stop for architecture review. Record the measured host constraint. That review must specify only the minimum execution-ownership primitive required by the measurement.
 
+The strict qualification is deliberately silent. Do not add heartbeat traffic to the initial probe. If the strict probe fails, a heartbeat/keepalive experiment may be proposed only as a separately reviewed diagnostic during the resulting architecture review; it does not retroactively turn the strict failure into a PASS.
+
 Do not restore V1 background jobs automatically. This specification does not design the fallback mechanism.
 
 ### Streaming receipt
@@ -462,7 +479,7 @@ Do not restore V1 background jobs automatically. This specification does not des
 For each bounded raw body chunk:
 
 1. Receive bytes.
-2. Commit those bytes.
+2. Commit those bytes with a contiguous sequence number and `received_at` timestamp.
 3. Continue reading.
 
 Do not parse SSE, decode JSON, assemble review text, or log content before the chunk is committed.
@@ -472,9 +489,10 @@ Request identity encoding. Preserve body bytes after HTTP framing removal and be
 At clean HTTP completion:
 
 1. Commit a receipt seal containing durable body length, digest, numeric status, and `http_complete=true`.
-2. Parse the stored body.
-3. Validate protocol completion.
-4. Commit the outcome.
+2. Parse the stored body using an explicit parser version.
+3. Commit the attempt-keyed parse receipt for that parser version.
+4. Project protocol validity from the canonical raw evidence plus that receipt.
+5. Commit the final outcome.
 
 Successful review completion requires:
 
@@ -482,8 +500,10 @@ Successful review completion requires:
 - Valid supported SSE framing and JSON events.
 - The protocol’s terminal marker.
 - A supported successful finish reason.
-- No error event, output truncation, or unsupported tool-call completion.
+- No error event, output truncation, or recognized unsupported tool-call/refusal completion.
 - A structurally valid review result.
+
+Recognized complete unsuccessful outcomes such as `length`, `content_filter`, `tool_calls`, or refusal are definitive and lead to `FAILED`. An unrecognized finish reason or otherwise complete-but-unsupported feature is not treated as bad news merely because the current parser does not understand it; it produces an `UNSUPPORTED_FEATURE` parse result and `OUTCOME_UNKNOWN`. Malformed/truncated syntax or missing required completion semantics produces an indeterminate parse result and `OUTCOME_UNKNOWN`.
 
 A terminal marker alone does not excuse subsequent receipt failure. Clean EOF alone does not excuse a missing terminal marker.
 
@@ -508,25 +528,49 @@ The database and journals are restricted evidence.
 
 ### Tables
 
-| TableContents     |                                                                                                   |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| `prepared_review` | Immutable manifest, exact body, digests, creation time                                            |
-| `attempt`         | Unique review key, submitted prepared digest, claim time, optional receipt seal and final outcome |
-| `response_chunk`  | Review key, contiguous sequence number, raw bytes                                                 |
+| TableContents     |                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| `prepared_review` | Immutable manifest, exact body, digests, creation time                                                         |
+| `attempt`         | Unique review key, submitted prepared digest, claim time, authorization assertion, receipt seal, final outcome |
+| `response_chunk`  | Review key, contiguous sequence number, raw bytes, `received_at`                                               |
+| `parse_receipt`   | Review key + parser version, immutable closed parser result and versioned receipt bytes                         |
 
 `review_id` is also the attempt identifier. One attempt per review requires no additional public attempt ID.
 
-Use SQLite transactions with synchronous durability enabled on a qualified local filesystem. A simple rollback-journal configuration is sufficient initially.
+`parse_receipt` has primary key `(review_id, parser_version)`. A parser version may be written at most once for an attempt; later corrected parser versions may add new rows without mutating earlier receipts. The result vocabulary is closed and contains exactly:
+
+```
+VALID
+INVALID
+UNSUPPORTED_FEATURE
+INDETERMINATE
+```
+
+`VALID` means the parser understood a complete supported successful review. `INVALID` means the parser understood complete evidence that definitively does not represent a successful supported review. `UNSUPPORTED_FEATURE` means complete evidence uses semantics the current parser version does not recognize or support and therefore cannot be safely classified as success or definitive failure. `INDETERMINATE` means available durable evidence lacks trustworthy completion/interpretability. Receipt bytes are restricted, bounded, versioned structured evidence; they contain no arbitrary exception or diagnostic free text.
+
+Schema versioning and parser versioning are separate namespaces. `PRAGMA user_version` versions only the SQLite schema. Parser versions exist only in `parse_receipt` identities and receipt contents.
+
+Every database connection must set and read back the required SQLite configuration before use:
+
+```
+PRAGMA foreign_keys=ON
+PRAGMA journal_mode=DELETE
+PRAGMA synchronous=FULL
+PRAGMA busy_timeout=<finite approved milliseconds>
+```
+
+Initialization also sets the approved `PRAGMA user_version`. Readback mismatch disables use of that connection. Readers rely on the finite SQLite `busy_timeout` to tolerate a rollback-journal writer; expiry produces a bounded storage-busy failure rather than an unbounded application retry. The supported evidence root must be on a qualified local filesystem.
 
 Enforce:
 
 - Prepared rows are immutable.
 - Attempts cannot be deleted.
-- Claim identity cannot change.
+- Claim identity and authorization assertion fields cannot change.
 - Response chunks are append-only.
+- Parse receipts are write-once per `(review_id, parser_version)`; multiple parser versions are permitted.
 - Receipt and final-outcome fields are written once.
 - No chunk append after sealing.
-- No successful outcome without a verified complete receipt.
+- No successful outcome without a verified complete receipt and `VALID` parse receipt for the parser version used by the original invocation.
 
 Use constraints and narrow triggers where necessary.
 
@@ -535,7 +579,9 @@ Use constraints and narrow triggers where necessary.
 ```
 Prepared evidence committed
     ↓
-Unique attempt and submitted identity committed
+Unique attempt, submitted identity, and authorization assertion committed
+    ↓
+Process-local ownership registered
     ↓
 Single transport invocation
     ↓
@@ -545,17 +591,22 @@ Receipt seal committed
     ↓
 Durable response parsed
     ↓
+Versioned parse receipt committed
+    ↓
 Final outcome committed
+    ↓
+Process-local ownership released in finally
 ```
 
-No separate summary/index artifact is required. GET uses primary-key retrieval.
+No separate summary/index artifact is required. GET uses primary-key retrieval plus bounded receipt lookup.
 
 ### Ambiguous failure
 
 1. Preserve the committed response prefix.
-2. If storage remains available, commit an incomplete receipt seal and `OUTCOME_UNKNOWN`.
-3. Never erase partial evidence.
-4. Never retry.
+2. If storage remains available, commit an incomplete receipt seal and `OUTCOME_UNKNOWN` where the original invocation can do so safely.
+3. Preserve any parse receipt already committed.
+4. Never erase partial evidence.
+5. Never retry.
 
 If storage fails, the existing attempt still blocks further sending. GET reports unresolved outcome.
 
@@ -565,26 +616,29 @@ Bytes received but not committed are not claimed as durable.
 
 Hashes detect mismatches; they do not protect against a privileged actor rewriting content and hashes.
 
-Unsupported storage, corruption, or evidence rollback disables sending. Runtime must not create a replacement writable database automatically as a repair action.
+Unsupported storage, corruption, evidence rollback, or required-PRAGMA mismatch disables sending. Runtime must not create a replacement writable database automatically as a repair action.
 
 ## 12. Failure taxonomy
 
 | SituationOutcomeReceipt knowledge                                    |                              |                              |
 | -------------------------------------------------------------------- | ---------------------------- | ---------------------------- |
-| Invalid scope, identity, policy, or missing credential before claim  | Tool error; no attempt       | Not sent                     |
+| Invalid scope, identity, policy, credential leak, or missing credential before claim | Tool error; no attempt | Not sent |
 | No conversational authorization                                      | Byte must not invoke SEND    | No authorized dispatch       |
 | Definite local failure after claim, before transport invocation      | `FAILED`                     | Not sent                     |
-| Uncertain exception after transport invocation                       | `OUTCOME_UNKNOWN`            | May have been received       |
+| Definitive connect-phase failure before any request-body write began | `FAILED`                     | Known not sent by Byte-MCP   |
+| Write failure or uncertainty after request-body transmission may have begun | `OUTCOME_UNKNOWN`       | May have been received       |
+| Read failure after request initiation                                | `OUTCOME_UNKNOWN`            | May have been received       |
 | Complete non-success HTTP response                                   | `FAILED`                     | Complete response received   |
 | Complete valid explicit stream error                                 | `FAILED`                     | Explicit unsuccessful result |
 | Missing terminator, truncated body, disconnect                       | `OUTCOME_UNKNOWN`            | Incomplete evidence          |
-| Complete response proving truncation, refusal, or unsupported result | `FAILED`                     | Complete but unusable result |
+| Complete recognized truncation, refusal, content filter, or unsupported tool-call result | `FAILED`          | Complete but unusable result |
+| Complete response with unrecognized finish reason/feature            | `OUTCOME_UNKNOWN`            | Complete; parser unsupported |
 | Malformed success body without trustworthy completion semantics      | `OUTCOME_UNKNOWN`            | Review outcome unproven      |
 | Complete valid review                                                | `COMPLETED`                  | Complete successful result   |
 | Storage failure after transport begins                               | Unknown or unfinalized claim | Evidence incomplete          |
 | Unexpected internal exception after transport begins                 | `OUTCOME_UNKNOWN`            | Conservative uncertainty     |
 
-A complete HTTP rejection does not establish whether an upstream charge occurred.
+A connect failure is definitive only when the transport layer classifies it in the connect phase (for example DNS/TCP/TLS establishment/connect timeout) and no request-body write began. If phase knowledge is ambiguous, classify conservatively as `OUTCOME_UNKNOWN`. A complete HTTP rejection does not establish whether an upstream charge occurred.
 
 Use fixed categories such as:
 
@@ -593,8 +647,10 @@ IDENTITY_MISMATCH
 SCOPE_INVALID
 POLICY_DENIED
 CREDENTIAL_UNAVAILABLE
+CREDENTIAL_IN_PAYLOAD
 EVIDENCE_INTEGRITY
 STORAGE_FAILURE
+STORAGE_BUSY
 LOCAL_PRE_DISPATCH
 CONNECT_FAILURE
 WRITE_FAILURE
@@ -605,30 +661,32 @@ CANCELLED
 HTTP_NON_SUCCESS
 STREAM_INCOMPLETE
 RESPONSE_INVALID
+RESPONSE_UNSUPPORTED
 RESPONSE_UNSUCCESSFUL
 RESPONSE_LIMIT
 INTERNAL_FAILURE
 ```
 
-Exception types may select categories. Exception messages are never persisted, and exception type alone does not prove whether transmission occurred.
+Exception types and observed transport phase may select categories. Exception messages are never persisted, and exception type alone does not prove whether transmission occurred.
 
 ## 13. Crash/restart semantics
 
 | Crash pointDurable evidenceRestart behavior  |                                 |                                                          |
 | -------------------------------------------- | ------------------------------- | -------------------------------------------------------- |
 | Before attempt commit                        | Prepared review only            | Prepared; any later SEND requires explicit authorization |
-| After claim, before connection               | Attempt without final result    | Unknown; never send                                      |
+| After claim, before connection               | Attempt without final result    | Unknown; consumed; never send                            |
 | After request may have left process          | Attempt, possibly chunks        | Unknown; never send                                      |
 | After headers                                | Attempt, possibly status/chunks | Unknown; never send                                      |
 | After partial body                           | Committed prefix                | Unknown; preserve prefix                                 |
 | After full body, before seal                 | Bytes may appear complete       | Unknown; no automatic inference                          |
 | After complete durable receipt, before parse | Sealed complete response        | Unknown final outcome; expose receipt facts              |
-| After parse, before final commit             | Sealed response                 | Unknown; interpretation was not durable                  |
-| After final commit, before MCP reply         | Final evidence                  | Replay returns existing result                           |
+| After parse, before parse-receipt commit      | Sealed response                 | Unknown; interpretation was not durable                  |
+| After parse-receipt commit, before final outcome commit | Sealed response + versioned interpretation | Interpretation remains durable; final outcome remains unknown; no automatic finalization |
+| After final commit, before MCP reply         | Final evidence                  | Replay returns existing final evidence                   |
 
-There is no startup sweep, state repair, automatic parse recovery, attempt release, or restart reconciliation.
+There is no startup sweep, state repair, automatic parse recovery, attempt release, restart reconciliation, or automatic finalization from a parse receipt.
 
-A complete sealed response without a final outcome remains available for restricted offline inspection. V2 does not automatically finalize it after restart.
+A complete sealed response or parse receipt without a final outcome remains available for restricted offline inspection. A future explicitly authorized capability may act on that durable evidence, but Milestone A does not.
 
 ## 14. Security and privacy constraints
 
@@ -636,20 +694,23 @@ A complete sealed response without a final outcome remains available for restric
 
 Nolan’s conversational approval is trusted. Byte is responsible for honoring it.
 
-The two SEND arguments establish identity, not independently verified human consent. V2 does not claim otherwise.
+The two SEND arguments establish identity, not independently verified human consent. `authorization_mode` and `authorization_asserted_at` record Byte-MCP’s authorization assertion, not host-attested proof. V2 does not claim otherwise.
 
 ### Credentials
 
 - Use the existing operator-approved local credential source.
 - Load credentials only for SEND.
+- Before claim, scan the frozen request body and manifest for an exact match of the credential value that would be used for the authorization header.
+- Any exact match fails closed before claim; the prepared review remains unconsumed.
+- Do not add heuristic derivative/pattern secret matching to this credential gate.
 - Place the credential only in the authorization header.
-- Never put credentials in request JSON, manifests, attempt records, logs, or diagnostics.
+- Never put credentials in request JSON, manifests, attempt records, logs, diagnostics, or parse receipts.
 - Do not fetch credentials through a network operation.
 - Disable HTTP debug logging, request dumps, and content tracing.
 
 ### Evidence boundary
 
-Restricted evidence contains the approved repository content and raw provider response. Ordinary operational metadata does not.
+Restricted evidence contains the approved repository content, raw provider response, and bounded parse-receipt bytes. Ordinary operational metadata does not.
 
 Provider bodies can contain sensitive information. Preserve raw bodies only inside restricted evidence; never copy excerpts into diagnostics.
 
@@ -661,6 +722,8 @@ Persist:
 
 ```
 claimed_at
+authorization_mode
+authorization_asserted_at
 headers_after_ms       nullable
 first_byte_after_ms    nullable
 last_byte_after_ms     nullable
@@ -670,7 +733,7 @@ durable_body_bytes
 error_category         nullable enum
 ```
 
-Durations use a monotonic clock. Unknown crash-time values remain null.
+Each response chunk additionally stores `received_at`. Durations use a monotonic clock. Unknown crash-time values remain null.
 
 Do not include:
 
@@ -682,6 +745,7 @@ Do not include:
 - Certificate paths.
 - Repository-sensitive content.
 - Unbounded provider-generated identifiers.
+- Free-text parser diagnostics.
 
 Validation errors must not echo sensitive input values. Logging handlers must not automatically append captured exceptions.
 
@@ -716,7 +780,7 @@ Quiesce V1 writers before treating its historical evidence as read-only. A read-
 7. Promote V2 registration with paid egress disabled and validate the conversational approval procedure.
 8. Obtain separate authorization for one bounded live canary.
 9. Send that canary once. Failure or ambiguity ends the canary; no automatic repair resend.
-10. Review identity binding, response durability, final outcome, and available billing evidence.
+10. Review identity binding, credential-exclusion evidence, response durability, parse receipt, final outcome, and available billing evidence.
 11. With explicit acceptance, route future new reviews to V2.
 12. Retain V1 retrieval.
 13. Remove the V1 execution surface later through a separately approved change.
@@ -735,27 +799,34 @@ The deployed MCP lifetime test is separate and provider-free; it exercises the a
 | Scope                 | Exact commits, deterministic inventory, no working-tree dependence, unsupported and oversized inputs rejected |
 | Identity              | Material manifest or body mutation prevents dispatch                                                          |
 | Frozen bytes          | Captured HTTP body exactly matches the stored approved bytes                                                  |
+| Credential exclusion  | Exact configured SEND credential absent from frozen body and manifest; exact-match sentinel is refused before claim |
 | Public SEND           | Accepts only `review_id` and `prepared_sha256`; rejects scope and execution overrides                         |
-| Approval procedure    | Nolan’s exact-identity approval precedes Byte’s SEND invocation; no claim of independent host attestation     |
-| Public output         | Uses `request_byte_count`; ordinary status contains no frozen request body                                    |
+| Approval procedure    | Nolan’s exact-identity approval precedes Byte’s SEND invocation; attempt stores asserted mode/time without claiming host attestation |
+| Public output         | Ordinary status/diagnostics stay within 8 KiB; successful original SEND may return complete review content    |
 | Single opportunity    | Concurrent threads/processes create at most one attempt and initiate at most one POST                         |
 | Replay                | Repeated SEND during and after every outcome never initiates another request                                  |
 | Commit uncertainty    | Uncertain claim commit causes zero transport invocations                                                      |
+| Live ownership        | `TRANSMITTING` is process-local only, takes presentation precedence while owned, and is released in `finally` |
 | Retries               | No application retry after connect, write, read, protocol, status, deadline, or cancellation failure          |
+| Connect classification | Definitive connect-phase failure is `FAILED`/known-not-sent; ambiguous/write/read failures are conservative   |
 | Redirect/fallback     | Redirects are not followed; no alternate endpoint, model, or provider request                                 |
 | Provider selection    | Z.AI is the sole hard-allowlisted provider                                                                    |
 | Environment isolation | `trust_env=False`; ambient proxy settings do not alter transport                                              |
 | Durability            | Committed chunks survive process termination; success references a matching complete receipt                  |
-| Ordering              | Chunk commit precedes interpretation; final outcome commit precedes reported completion                       |
+| Chunk evidence        | Each committed response chunk has contiguous sequence, bytes, and `received_at`                               |
+| Parse receipts        | `(review_id, parser_version)` is write-once; multiple versions allowed; result uses the closed enum            |
+| Parser epistemics     | Recognized unsuccessful outcomes fail; unknown finish reason/unsupported semantics remain unknown             |
+| Ordering              | Chunk commit precedes interpretation; parse receipt commit precedes final outcome; final outcome precedes reported completion |
 | Partial response      | Missing terminator, truncated JSON, malformed framing, and midstream close never become success               |
 | Bounds                | Oversized bodies/events produce bounded failure or unknown outcome without resend                             |
-| Crash matrix          | Every Section 13 boundary yields the specified durable interpretation                                         |
-| Storage failure       | Disk-full, commit failure, and corruption never reopen sending or report undurable success                    |
-| Privacy               | Sensitive canaries in exceptions, headers, environment, bodies, and paths do not reach operational output     |
-| Restricted evidence   | Body content remains inside its designated restricted boundary                                                |
+| Crash matrix          | Every Section 13 boundary yields the specified durable interpretation; parse receipt does not auto-finalize after restart |
+| SQLite configuration  | Every connection sets and verifies DELETE/FULL/foreign_keys/busy_timeout; `user_version` is schema-only       |
+| Storage failure       | Disk-full, busy-timeout expiry, commit failure, corruption, and pragma mismatch never reopen sending or report undurable success |
+| Privacy               | Sensitive canaries in exceptions, headers, environment, bodies, paths, and parser diagnostics do not reach operational output |
+| Restricted evidence   | Body and parse-receipt content remain inside their designated restricted boundary                             |
 | Schema                | Unknown fields rejected; sizes bounded; validation errors do not echo sensitive inputs                        |
 | V1 isolation          | V1 evidence unchanged; V2 imports no V1 execution services                                                    |
-| Restart               | No provider request, claim release, reconciliation, or automatic response interpretation                      |
+| Restart               | No provider request, claim release, reconciliation, automatic parsing, or automatic finalization              |
 | MCP lifetime          | Actual deployed path survives at least the required maximum invocation duration without provider calls        |
 | Lifetime failure      | Execution ownership is not frozen; work stops for architecture review without implementing a fallback         |
 | Live canary           | One separately authorized request only after provider-free qualification passes                               |
@@ -777,22 +848,29 @@ Process-kill tests establish process-crash behavior. Stronger power-loss durabil
 | Orphan recovery                             | Existing attempts are never executable after restart           |
 | Leases/heartbeats                           | No takeover is permitted                                       |
 | Restart reconciliation                      | Unfinished evidence remains unknown                            |
-| Event sourcing                              | Three tables express the required facts                        |
+| Event sourcing                              | Four tables express the required facts                         |
 | Summary/index artifacts                     | Direct retrieval is sufficient                                 |
 | Provider abstraction framework              | One transport path                                             |
 | Gateway retry compensation                  | Internal gateway behavior is outside Byte-MCP’s guarantee      |
 | Remote attribution framework                | Remote root cause is not reliably knowable                     |
 | V1 compatibility layer                      | Retrieval remains separate                                     |
-| Automatic parse recovery                    | Conservative unknown outcome is acceptable                     |
+| Automatic parse recovery/finalization       | Durable parse evidence is preserved but restart outcome stays unresolved |
+
+### Explicit Milestone-A deferrals
+
+Two reviewed ideas are deliberately not part of the Milestone-A architecture:
+
+1. **`REQUEST_STARTED` / `ABORTED_BEFORE_SEND`:** no fourth durable transport-start fact is added. A crash after claim and before an observable connect result remains consumed and unresolved. This is recorded as a conscious precision tradeoff, not an oversight.
+2. **Heartbeat lifetime probe:** the mandatory first qualification remains the strict silent 930-second Web UI → MCP → Byte-MCP probe. A heartbeat/keepalive experiment may be proposed only as a diagnostic after strict-probe failure during architecture review; it is not an automatic fallback and cannot convert that failure into a PASS.
 
 ## 19. Open qualification decisions
 
 These decisions complete configuration or validate assumptions; they do not authorize new capabilities.
 
 1. **MCP lifetime:** Does the deployed host path support the full required invocation duration? This controls whether synchronous ownership can be frozen.
-2. **Model profile:** Fix the model ID, output-token bound, supported SSE completion rules, and successful finish reasons.
+2. **Model profile:** Confirm supported SSE completion rules and successful finish reasons for the fixed model/profile before Task 7 qualification.
 3. **Preparation policy:** Confirm repository/subsystem allow-lists, context-selection rules, and artifact exclusions.
-4. **Storage qualification:** Confirm the supported local filesystem and SQLite durability configuration.
+4. **Storage qualification:** Confirm the supported local filesystem. SQLite mode is pinned to `journal_mode=DELETE`, `synchronous=FULL`, `foreign_keys=ON`, finite `busy_timeout`, and readback verification on every connection.
 5. **Snapshot semantics:** The approved exact commits remain the review target if branch tips move. SEND does not rebuild or revalidate repository content.
 6. **Evidence retention:** Define operator-controlled archival/deletion separately while preserving consumed-attempt identity. V2 exposes neither operation.
 
@@ -806,15 +884,15 @@ Each retained component has a direct requirement:
 - The public tools constrain operations.
 - SQLite prevents duplicate local claims and preserves evidence.
 - Transport performs the sole request.
-- Response validation prevents incomplete evidence from becoming success.
+- Response validation produces immutable versioned parse receipts from canonical durable bytes.
 
 The design retains no separate approval service, attempt lifecycle framework, retry system, background job, recovery process, or provider abstraction.
 
-`TRANSMITTING` remains only an optional live observation. Durable correctness depends on prepared evidence, attempt existence, response bytes, and an optional immutable final outcome.
+`TRANSMITTING` remains only a process-local optional live observation. Durable correctness depends on prepared evidence, attempt existence, response bytes, optional versioned parse receipts, and an optional immutable final outcome.
 
 The two central limits remain explicit:
 
-- Human authorization depends on Byte honoring Nolan’s conversational approval.
+- Human authorization depends on Byte honoring Nolan’s conversational approval; stored authorization fields are assertions, not independent proof.
 - At-most-once initiation applies to Byte-MCP’s Gateway HTTP request, not internal Vercel or Z.AI execution.
 
-**Final architecture:** freeze one request, obtain explicit conversational approval, consume one durable send opportunity, make at most one Gateway request, preserve streamed bytes, and never resend.
+**Final architecture:** freeze one request, obtain explicit conversational approval, exclude the exact SEND credential from the frozen payload, consume one durable send opportunity, make at most one Gateway request, preserve streamed bytes, version the interpretation, and never resend.
