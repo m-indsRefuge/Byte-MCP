@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from .ox_v2.lifetime_probe import run_probe as run_ox_v2_lifetime_probe
 from .service import FileService
 from .settings import Settings
 from .wolfram.runtime import WolframRuntime
@@ -141,6 +142,12 @@ def wolfram_query(
         source_finding_id,
         assumption,
     )
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def ox_v2_lifetime_probe() -> dict[str, object]:
+    """Run the provider-free 930-second deployed MCP lifetime qualification probe."""
+    return await run_ox_v2_lifetime_probe()
 
 
 def main() -> None:
