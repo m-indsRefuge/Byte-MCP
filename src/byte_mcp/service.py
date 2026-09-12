@@ -26,6 +26,7 @@ from .security import (
     resolve_under_root,
 )
 from .settings import Settings, load_roots
+from .vscode_context import MAX_STATE_BYTES, read_vscode_active_context
 
 
 class FileService:
@@ -126,6 +127,38 @@ class FileService:
         self.audit.record(
             "list_roots",
             root_count=len(self.roots),
+        )
+        return result
+
+    def vscode_active_context(self) -> dict[str, Any]:
+        audit_fields = {"root": "projects"}
+
+        with self._audit_failures(
+            "vscode_active_context",
+            **audit_fields,
+        ):
+            result = read_vscode_active_context(
+                self._root("projects"),
+                max_state_bytes=min(
+                    MAX_STATE_BYTES,
+                    self.settings.max_file_bytes,
+                ),
+            )
+
+        selection = result.get("selection")
+        selection_chars = 0
+        if isinstance(selection, dict):
+            selected_text = selection.get("text")
+            if isinstance(selected_text, str):
+                selection_chars = len(selected_text)
+
+        self.audit.record(
+            "vscode_active_context",
+            workspace_relative_path=result["workspace_relative_path"],
+            active_file=result["active_file"],
+            selection_chars=selection_chars,
+            stale=result["stale"],
+            **audit_fields,
         )
         return result
 
