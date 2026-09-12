@@ -8,7 +8,12 @@ def test_v1_ox_tools_are_not_registered() -> None:
     assert "ox_revalidate" not in registered
     assert "ox_get_review" not in registered
     assert set(registered) == {
-        "list_roots", "list_directory", "search", "fetch", "wolfram_query"
+        "list_roots",
+        "list_directory",
+        "search",
+        "fetch",
+        "wolfram_query",
+        "ox_v2_lifetime_probe",
     }
 
 
