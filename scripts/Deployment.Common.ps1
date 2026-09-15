@@ -285,6 +285,7 @@ function Start-LocalDeploymentSupervisor {
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Rehearsal runtime Python is missing: $python" }
     $pwsh = @((Get-Command pwsh -CommandType Application -ErrorAction Stop).Source)[0]
     $script = Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'
+    Remove-Item -LiteralPath (Join-Path $Context.StateRoot 'supervisor.json') -Force -ErrorAction SilentlyContinue
     $arguments = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,
         '-RuntimeRepo',$Context.RuntimeRepo,'-StateRoot',$Context.StateRoot,'-PythonPath',$python,
         '-McpPort',[string]$Context.McpPort,'-TunnelPort',[string]$Context.TunnelPort)
@@ -398,7 +399,7 @@ function Assert-DeploymentSupervisorStopped {
 
 function Resume-DeploymentSupervisor {
     param($Supervisor)
-    if ($Supervisor.kind -eq 'LocalProcess') { Resume-LocalDeploymentSupervisor -Context $Supervisor.Context | Out-Null; return }
+    if ($Supervisor.kind -eq 'LocalProcess') { return (Resume-LocalDeploymentSupervisor -Context $Supervisor.Context) }
     $task = Get-ScheduledTask -TaskName $Supervisor.task_name -TaskPath '\' -ErrorAction Stop
     if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Arguments -cne $Supervisor.arguments -or
         $task.Actions[0].Execute -cne $Supervisor.execute) { throw 'Supervisor task action changed during promotion.' }
@@ -645,7 +646,8 @@ function Invoke-ByteMcpPromotion {
             Write-DeploymentReceipt $receiptPath $receipt
             $mutationAttempted = $true
             Set-DeploymentHead $runtime $ExpectedPredecessor $TargetCommit
-            Resume-DeploymentSupervisor $supervisor
+            $restoredSupervisor = Resume-DeploymentSupervisor $supervisor
+            if ($null -ne $restoredSupervisor) { $supervisor = $restoredSupervisor }
             $after = Wait-DeploymentRuntime -RuntimeRepo $runtime -Context $context -ExpectedHead $TargetCommit -ExpectedTools $candidateTools -TaskName $SupervisorTaskName
             if ($InjectPostStartFailure) { throw 'Injected disposable post-start verification failure.' }
             if ($after.server_pid -eq $before.server_pid -and $after.server_started -eq $before.server_started) {
@@ -670,7 +672,8 @@ function Invoke-ByteMcpPromotion {
                         throw 'Unexpected live lineage during rollback; refusing overwrite.'
                     }
                     Set-DeploymentHead $runtime $head $ExpectedPredecessor
-                    Resume-DeploymentSupervisor $supervisor
+                    $restoredSupervisor = Resume-DeploymentSupervisor $supervisor
+                    if ($null -ne $restoredSupervisor) { $supervisor = $restoredSupervisor }
                     $rollback = Wait-DeploymentRuntime -RuntimeRepo $runtime -Context $context -ExpectedHead $ExpectedPredecessor -ExpectedTools @($before.tools) -TaskName $SupervisorTaskName
                     if ((Get-DeploymentVenvIdentity $runtime) -cne $venvIdentity) { throw 'Production venv identity changed during rollback.' }
                     $receipt.result = 'ROLLED_BACK'
@@ -687,7 +690,8 @@ function Invoke-ByteMcpPromotion {
         }
         finally {
             if ($restoreSupervisor) {
-                Resume-DeploymentSupervisor $supervisor
+                $restoredSupervisor = Resume-DeploymentSupervisor $supervisor
+                if ($null -ne $restoredSupervisor) { $supervisor = $restoredSupervisor }
                 # Failed suspension/stop also requires a healthy predecessor, not just task enablement.
                 if (-not $mutationAttempted) {
                     $null = Wait-DeploymentRuntime -RuntimeRepo $runtime -Context $context -ExpectedHead $ExpectedPredecessor -ExpectedTools @($before.tools) -TaskName $SupervisorTaskName
