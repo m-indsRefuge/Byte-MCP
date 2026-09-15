@@ -285,7 +285,17 @@ function Start-LocalDeploymentSupervisor {
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Rehearsal runtime Python is missing: $python" }
     $pwsh = @((Get-Command pwsh -CommandType Application -ErrorAction Stop).Source)[0]
     $script = Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'
-    Remove-Item -LiteralPath (Join-Path $Context.StateRoot 'supervisor.json') -Force -ErrorAction SilentlyContinue
+    $statePath = Join-Path $Context.StateRoot 'supervisor.json'
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+        try { return (Get-LocalSupervisorInspection -Context $Context) }
+        catch { Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue }
+    }
+    $scriptPath = [regex]::Escape($script)
+    $live = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -and $_.CommandLine -match $scriptPath -and
+        $_.CommandLine -match [regex]::Escape($Context.RuntimeRepo)
+    })
+    if ($live.Count -gt 0) { throw 'Unexpected existing live LocalProcess supervisor.' }
     $arguments = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,
         '-RuntimeRepo',$Context.RuntimeRepo,'-StateRoot',$Context.StateRoot,'-PythonPath',$python,
         '-McpPort',[string]$Context.McpPort,'-TunnelPort',[string]$Context.TunnelPort)
@@ -536,6 +546,7 @@ function Invoke-DeploymentQualification {
     if ($null -ne $Context) {
         $check.StateRoot = $Context.StateRoot
         $check.BaselineFailureFile = $Context.BaselineFailureFile
+        $check.BaselineManifestFile = $Context.BaselineFailureFile
         $check.McpPort = $Context.McpPort
         $check.TunnelPort = $Context.TunnelPort
         $check.SupervisorName = $Context.SupervisorName

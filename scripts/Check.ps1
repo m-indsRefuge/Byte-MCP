@@ -5,6 +5,8 @@ param(
     [string] $RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string] $StateRoot,
     [string] $BaselineFailureFile,
+    [string] $BaselineManifestFile,
+    [string] $PredecessorSHA,
     [ValidateRange(1024,65535)][int] $McpPort = 8000,
     [ValidateRange(1024,65535)][int] $TunnelPort = 8080,
     [string] $SupervisorName = 'Byte-MCP Daemon'
@@ -19,6 +21,7 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 $RepoRoot = Resolve-DeploymentPath $RepoRoot
 $Python = Resolve-DeploymentPath $PythonPath
+$manifestPath = if ($BaselineManifestFile) { $BaselineManifestFile } elseif ($BaselineFailureFile) { $BaselineFailureFile } else { $null }
 Assert-DeploymentIsolation $ProductionRepo $RepoRoot $Python
 # A caller cannot label a different checkout as production to qualify the managed live tree.
 $context = if ($StateRoot) {
@@ -60,21 +63,27 @@ try {
     }
     finally { $PSNativeCommandUseErrorActionPreference = $oldNativePreference }
     $pytestOutput | ForEach-Object { Write-Host $_ }
-    $failedNodes = @($pytestOutput | Where-Object { $_ -match '^FAILED\s+(.+?)(?:\s+-\s+.*)?$' } | ForEach-Object { $Matches[1].Trim() } | Sort-Object -Unique)
+    $failed = @($pytestOutput | Where-Object { $_ -match '^FAILED\s+(.+?)(?:\s+-\s+(.*))?$' } | ForEach-Object {
+        [pscustomobject]@{ node_id=$Matches[1].Trim(); signature=(($Matches[2] ?? '') -replace '\s+',' ').Trim() }
+    })
+    $failedNodes = @($failed.node_id | Sort-Object -Unique)
+    $collect = @(& $Python '-m' 'pytest' '--collect-only' '-q' 2>$null | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -match '::' -and $_ -notmatch '^=+' } | Sort-Object -Unique)
     $summary = ($pytestOutput | Where-Object { $_ -match '\d+\s+passed|\d+\s+failed' } | Select-Object -Last 1)
     $passedCount = if ($summary -match '(\d+)\s+passed') { [int]$Matches[1] } else { 0 }
     $failedCount = if ($summary -match '(\d+)\s+failed') { [int]$Matches[1] } else { 0 }
-    if ($BaselineFailureFile) {
-        if (-not (Test-Path -LiteralPath $BaselineFailureFile -PathType Leaf)) { throw "Baseline failure manifest not found: $BaselineFailureFile" }
-        $baselineNodes = @(Get-Content -LiteralPath $BaselineFailureFile | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
-        $baseJson = $baselineNodes | ConvertTo-Json -Compress
-        $candJson = $failedNodes | ConvertTo-Json -Compress
-        if ($baseJson -cne $candJson) {
-            $baseOnly = @($baselineNodes | Where-Object { $failedNodes -cnotcontains $_ })
-            $candOnly = @($failedNodes | Where-Object { $baselineNodes -cnotcontains $_ })
-            throw "Candidate pytest failure set differs from predecessor. BASELINE_ONLY=[$($baseOnly -join ', ')] CANDIDATE_ONLY=[$($candOnly -join ', ')]"
-        }
-        Write-Host "PASS: pytest failure set matches predecessor baseline ($($failedNodes.Count) shared failures)."
+    $manifest = [ordered]@{ predecessor_sha=$PredecessorSHA; collected_nodes=@($collect); failing_nodes=@($failed); passed_count=$passedCount; failed_count=$failedCount; collected_count=@($collect).Count }
+    if ($manifestPath -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        $baseline = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $missing = @($baseline.collected_nodes | Where-Object { $collect -notcontains $_ })
+        if ($missing.Count) { throw "Candidate pytest collection lost predecessor tests: $($missing -join ', ')" }
+        $baseFails = @($baseline.failing_nodes | ForEach-Object { $_.node_id })
+        $candOnly = @($failedNodes | Where-Object { $baseFails -notcontains $_ })
+        if ($candOnly.Count -or (@($baseFails | Where-Object { $failedNodes -notcontains $_ }).Count)) { throw 'Candidate pytest failure set differs from predecessor manifest.' }
+        foreach($b in @($baseline.failing_nodes)) { $c=$failed | Where-Object node_id -eq $b.node_id; if ($null -eq $c -or $c.signature -cne $b.signature) { throw "Inherited pytest failure signature drift: $($b.node_id)" } }
+        Write-Host "PASS: structured pytest manifest matches predecessor ($($failedNodes.Count) shared failures)."
+    } elseif ($manifestPath) {
+        $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8
+        Write-Host "PASS: predecessor pytest manifest recorded."
     } elseif ($pytestExit -ne 0) {
         throw "Pytest failed with exit code $pytestExit."
     }
