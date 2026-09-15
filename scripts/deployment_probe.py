@@ -98,7 +98,8 @@ def main() -> None:
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--live-url", default=LIVE_URL)
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(probe(args.repo, live=args.live, live_url=args.live_url)), sort_keys=True))
+    result = asyncio.run(probe(args.repo, live=args.live, live_url=args.live_url))
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

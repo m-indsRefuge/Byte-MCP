@@ -40,12 +40,22 @@ $tunnel = Start-Process -FilePath $pwsh `
     -RedirectStandardOutput (Join-Path $logs 'tunnel.out.log') `
     -RedirectStandardError (Join-Path $logs 'tunnel.err.log') -PassThru
 
+$deadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+    $serverPid = @(Get-NetTCPConnection -LocalPort $McpPort -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($serverPid.Count -eq 1) { break }
+    if ([DateTime]::UtcNow -ge $deadline) { throw 'Rehearsal server did not open its MCP listener.' }
+    Start-Sleep -Milliseconds 200
+} while ($true)
+$serverProcess = Get-Process -Id ([int]$serverPid[0]) -ErrorAction Stop
+
 $stateDir = Join-Path $root 'runtime'
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 $launcherState = [ordered]@{
     schema_version = 1; started_at_utc = [DateTime]::UtcNow.ToString('o'); mode = 'background'; repo_path = $RuntimeRepo
     root_profile = 'rehearsal'; tunnel_profile = 'rehearsal'
-    server = @{ pid = $server.Id; executable_path = $PythonPath; started_at_utc = $server.StartTime.ToUniversalTime().ToString('o') }
+    server = @{ pid = $serverProcess.Id; executable_path = $serverProcess.Path; started_at_utc = $serverProcess.StartTime.ToUniversalTime().ToString('o') }
     tunnel = @{ pid = $tunnel.Id; executable_path = $pwsh; started_at_utc = $tunnel.StartTime.ToUniversalTime().ToString('o') }
 }
 $statePath = Join-Path $stateDir 'launcher-state.json'
