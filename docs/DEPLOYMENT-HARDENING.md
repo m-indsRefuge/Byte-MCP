@@ -97,3 +97,26 @@ guards, and disposable Git checkouts. Python tests exercise discovery and blocke
 provider connections. Production health checks are read-only. Real supervisor
 suspension/restart and an actual live promotion are deliberately not part of this
 milestone's qualification.
+
+## Recorded deployment-hardening qualification
+
+The disposable end-to-end rehearsal was completed on the reviewed hardening branch.
+The predecessor was `fb87e39d24ee2e74f648da0495059f147f30fb89`; the qualified
+implementation was `a69541809385db730afef236d36556f9a2d3b265`.
+
+- Predecessor pytest: 924 passed, 15 failed.
+- Candidate pytest: 937 passed, 15 failed.
+- Candidate-only failures: none; all 15 failures are identical inherited
+  OX/specialist predecessor-lineage failures.
+- E2E success path: PASS.
+- E2E rollback path: PASS, with exact predecessor HEAD, repo path, READY state,
+  seven-tool surface, fresh supervisor instance, and retained rollback ref.
+- Fail-closed cases: PASS.
+- Focused deployment tests: 38 passed; full launcher/Pester suite: 99 passed.
+- Compile and Ruff: PASS.
+- Production remained untouched: predecessor HEAD, READY status, seven tools,
+  and a clean live worktree.
+- Provider requests: NVIDIA 0, OX 0, Wolfram 0.
+
+This records qualification only. It does not authorize IDE-01 or live feature
+promotion.
