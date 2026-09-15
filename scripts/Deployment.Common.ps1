@@ -440,7 +440,11 @@ function Stop-DeploymentRuntime {
     }
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
         Where-Object { $_.LocalPort -in @($context.McpPort, $context.TunnelPort) })
-    if (@($listeners | Where-Object { $_.OwningProcess -notin $owned }).Count) {
+    $unknownListeners = @($listeners | Where-Object {
+        $_.OwningProcess -notin $owned -and
+        -not ($context.SupervisorKind -eq 'LocalProcess' -and $_.LocalPort -eq $context.TunnelPort -and $_.OwningProcess -eq 4)
+    })
+    if ($unknownListeners.Count) {
         throw 'Unknown process owns a managed listener; refusing shutdown.'
     }
     foreach ($processId in $owned) {
