@@ -242,6 +242,18 @@ function Get-LocalSupervisorInspection {
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Local rehearsal supervisor state is absent.' }
     $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($state.pid)" -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+        $scriptPath = [regex]::Escape((Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'))
+        $matches = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -and $_.CommandLine -match $scriptPath -and
+            $_.CommandLine -match [regex]::Escape($Context.RuntimeRepo)
+        })
+        if ($matches.Count -eq 1) {
+            $process = $matches[0]
+            $state.pid = [int]$process.ProcessId
+            $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
+        }
+    }
     if ($null -eq $process -or -not $process.CommandLine -or
         $process.CommandLine -notmatch [regex]::Escape((Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'))) {
         throw 'Local rehearsal supervisor process is not running.'
