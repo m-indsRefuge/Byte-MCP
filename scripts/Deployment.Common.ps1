@@ -42,6 +42,78 @@ function Assert-DeploymentIsolation {
     if (Test-DeploymentPathWithin $python $runtime) { throw 'Qualification Python resolves inside production.' }
 }
 
+function New-DeploymentContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $RuntimeRepo,
+        [string] $StateRoot = (Join-Path $env:USERPROFILE '.byte-mcp'),
+        [ValidateRange(1024, 65535)][int] $McpPort = 8000,
+        [ValidateRange(1024, 65535)][int] $TunnelPort = 8080,
+        [ValidateSet('ScheduledTask', 'LocalProcess')][string] $SupervisorKind = 'ScheduledTask',
+        [string] $SupervisorName = 'Byte-MCP Daemon',
+        [ValidateSet('Production', 'Disposable')][string] $Mode = 'Production',
+        [string] $BaselineFailureFile
+    )
+
+    $runtime = Resolve-DeploymentPath $RuntimeRepo
+    $state = Resolve-DeploymentPath $StateRoot
+    $productionRuntime = Resolve-DeploymentPath 'C:\Users\nolan\AIProjects\Byte-MCP-runtime\daemon'
+    $productionState = Resolve-DeploymentPath (Join-Path $env:USERPROFILE '.byte-mcp')
+
+    $inferredDisposable = $false
+    if ($SupervisorKind -eq 'LocalProcess' -and $SupervisorName -ieq 'Byte-MCP Daemon' -and
+        -not $PSBoundParameters.ContainsKey('SupervisorName')) { $SupervisorName = 'rehearsal-supervisor' }
+    if ($Mode -eq 'Production' -and $SupervisorKind -eq 'LocalProcess') {
+        $Mode = 'Disposable'
+        $inferredDisposable = $true
+        if ($SupervisorKind -eq 'LocalProcess' -and $SupervisorName -ieq 'Byte-MCP Daemon') { $SupervisorName = 'rehearsal-supervisor' }
+    }
+    if ($Mode -eq 'Disposable') {
+        if ($runtime -ieq $productionRuntime) { throw 'Disposable context cannot use the production runtime.' }
+        if ($state -ieq $productionState) { throw 'Disposable context cannot use the production state root.' }
+        if ($McpPort -eq 8000) { throw 'Disposable context cannot use the production MCP port.' }
+        if ($TunnelPort -eq 8080) { throw 'Disposable context cannot use the production tunnel port.' }
+        if ($SupervisorKind -eq 'ScheduledTask') { throw 'Disposable context cannot use a scheduled task supervisor.' }
+        if ($SupervisorName -ieq 'Byte-MCP Daemon') { throw 'Disposable context cannot use the production supervisor.' }
+    }
+    else {
+        if ($runtime -ine $productionRuntime) { throw 'Production context must use the production runtime.' }
+        if ($state -ine $productionState) { throw 'Production context cannot use a non-production state root.' }
+        if ($McpPort -ne 8000) { throw 'Production context must use the production MCP port.' }
+        if ($TunnelPort -ne 8080) { throw 'Production context must use the production tunnel port.' }
+        if ($SupervisorKind -ne 'ScheduledTask' -or $SupervisorName -cne 'Byte-MCP Daemon') {
+            throw 'Production context must use the production scheduled-task supervisor.'
+        }
+    }
+
+    [pscustomobject]@{
+        Mode = $Mode
+        RuntimeRepo = $runtime
+        StateRoot = $state
+        LauncherStatePath = Join-Path $state 'runtime\launcher-state.json'
+        McpPort = $McpPort
+        TunnelPort = $TunnelPort
+        SupervisorKind = $SupervisorKind
+        SupervisorName = $SupervisorName
+        BaselineFailureFile = $BaselineFailureFile
+        Supervisor = $null
+    }
+}
+
+function Get-DeploymentContext {
+    param([string] $RuntimeRepo, [pscustomobject] $Context)
+    if ($null -ne $Context) { return $Context }
+    $resolved = Resolve-DeploymentPath $RuntimeRepo
+    $production = Resolve-DeploymentPath 'C:\Users\nolan\AIProjects\Byte-MCP-runtime\daemon'
+    if ($resolved -ieq $production) { return New-DeploymentContext -RuntimeRepo $resolved }
+    [pscustomobject]@{
+        Mode = 'Legacy'; RuntimeRepo = $resolved; StateRoot = Resolve-DeploymentPath (Join-Path $env:USERPROFILE '.byte-mcp')
+        LauncherStatePath = Join-Path (Resolve-DeploymentPath (Join-Path $env:USERPROFILE '.byte-mcp')) 'runtime\launcher-state.json'
+        McpPort = 8000; TunnelPort = 8080; SupervisorKind = 'ScheduledTask'; SupervisorName = 'Byte-MCP Daemon'
+        BaselineFailureFile = $null; Supervisor = $null
+    }
+}
+
 function Invoke-DeploymentNative {
     param([string] $FilePath, [string[]] $Arguments)
     & $FilePath @Arguments
@@ -80,9 +152,12 @@ function Get-DeploymentVenvIdentity {
 }
 
 function Get-DeploymentTools {
-    param([string] $Repo, [string] $PythonPath, [switch] $Live)
+    param([string] $Repo, [string] $PythonPath, [switch] $Live, [pscustomobject] $Context)
     $arguments = @('-B', (Join-Path $PSScriptRoot 'deployment_probe.py'), '--repo', $Repo)
-    if ($Live) { $arguments += '--live' }
+    if ($Live) {
+        $arguments += '--live'
+        if ($null -ne $Context) { $arguments += @('--live-url', "http://127.0.0.1:$($Context.McpPort)/mcp") }
+    }
     $result = (Invoke-DeploymentNative $PythonPath $arguments) | ConvertFrom-Json
     if ((Resolve-DeploymentPath $result.repo_path) -ine (Resolve-DeploymentPath $Repo)) {
         throw 'Tool probe repository identity mismatch.'
@@ -114,26 +189,40 @@ function Get-DeploymentToolDelta {
 }
 
 function Get-DeploymentRuntime {
-    param([string] $RuntimeRepo)
-    $paths = Get-ByteMcpLauncherPaths -RepoRoot $RuntimeRepo -UserProfile $env:USERPROFILE
-    $state = Read-LauncherState -Path $paths.StateFile
-    if ((Resolve-DeploymentPath $state.repo_path) -ine (Resolve-DeploymentPath $RuntimeRepo)) {
+    param([string] $RuntimeRepo, [pscustomobject] $Context)
+    $context = Get-DeploymentContext $RuntimeRepo $Context
+    $state = Read-LauncherState -Path $context.LauncherStatePath
+    if ((Resolve-DeploymentPath $state.repo_path) -ine $context.RuntimeRepo) {
         throw 'Managed launcher repo_path differs from the explicit runtime path.'
     }
-    $status = Get-ByteMcpStatus -State $state
-    if ($status.Overall -ne 'READY') { throw "Production runtime is not READY: $($status.Overall)" }
-    $listeners = @(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction Stop |
+    $serverProcess = $false
+    $tunnelProcess = $false
+    foreach ($role in @('server', 'tunnel')) {
+        $record = $state.$role
+        $process = Get-Process -Id ([int]$record.pid) -ErrorAction SilentlyContinue
+        if ($null -ne $process -and (Test-LauncherProcessIdentity -Record $record -Process $process)) {
+            if ($role -eq 'server') { $serverProcess = $true } else { $tunnelProcess = $true }
+        }
+    }
+    $mcp = (Invoke-LauncherHttpProbe -Uri "http://127.0.0.1:$($context.McpPort)/mcp").reachable
+    $tunnelHealth = Invoke-LauncherHttpProbe -Uri "http://127.0.0.1:$($context.TunnelPort)/healthz"
+    $tunnelReady = Invoke-LauncherHttpProbe -Uri "http://127.0.0.1:$($context.TunnelPort)/readyz"
+    $ready = $serverProcess -and $tunnelProcess -and $mcp -and
+        $tunnelHealth.status_code -eq 200 -and $tunnelHealth.body -eq 'live' -and
+        $tunnelReady.status_code -eq 200 -and $tunnelReady.body -eq 'ready'
+    if (-not $ready) { throw 'Deployment runtime is not READY.' }
+    $listeners = @(Get-NetTCPConnection -LocalPort $context.McpPort -State Listen -ErrorAction Stop |
         Where-Object LocalAddress -EQ '127.0.0.1' | Select-Object -ExpandProperty OwningProcess -Unique)
     if ($listeners.Count -ne 1 -or $listeners[0] -ne $state.server.pid) {
         throw 'Live MCP listener does not belong to the recorded managed server.'
     }
     [pscustomobject]@{
         repo_path = $state.repo_path
-        head = Get-DeploymentHead $RuntimeRepo
-        status = $status.Overall
+        head = Get-DeploymentHead $context.RuntimeRepo
+        status = if ($ready) { 'READY' } else { 'DEGRADED' }
         server_pid = $state.server.pid
         server_started = $state.server.started_at_utc
-        tools = @(Get-DeploymentTools $RuntimeRepo $paths.PythonPath -Live)
+        tools = @(Get-DeploymentTools $context.RuntimeRepo (Join-Path $context.RuntimeRepo '.venv\Scripts\python.exe') -Live -Context $context)
     }
 }
 
@@ -147,8 +236,74 @@ function Assert-DeploymentRuntime {
     Assert-DeploymentToolSet @($Snapshot.tools) $ExpectedTools
 }
 
+function Get-LocalSupervisorInspection {
+    param([pscustomobject] $Context)
+    $statePath = Join-Path $Context.StateRoot 'supervisor.json'
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Local rehearsal supervisor state is absent.' }
+    $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($state.pid)" -ErrorAction SilentlyContinue
+    if ($null -eq $process -or -not $process.CommandLine -or
+        $process.CommandLine -notmatch [regex]::Escape((Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'))) {
+        throw 'Local rehearsal supervisor process is not running.'
+    }
+    [pscustomobject]@{
+        kind = 'LocalProcess'; task_name = $Context.SupervisorName; process_id = [int]$state.pid
+        created = $process.CreationDate; arguments = $process.CommandLine
+        execute = $process.Name; state_path = $statePath; Context = $Context
+    }
+}
+
+function New-DeploymentSupervisor {
+    param([Parameter(Mandatory)][pscustomobject] $Context)
+    $supervisor = [pscustomobject]@{
+        Kind = $Context.SupervisorKind; Name = $Context.SupervisorName
+        StatePath = if ($Context.SupervisorKind -eq 'LocalProcess') { Join-Path $Context.StateRoot 'supervisor.json' } else { $null }
+        Context = $Context
+    }
+    $supervisor | Add-Member ScriptMethod Inspect { Get-LocalSupervisorInspection -Context $this.Context }
+    $supervisor | Add-Member ScriptMethod Suspend { Suspend-LocalDeploymentSupervisor -Supervisor (Get-LocalSupervisorInspection -Context $this.Context) }
+    $supervisor | Add-Member ScriptMethod Resume { Resume-LocalDeploymentSupervisor -Context $this.Context }
+    $supervisor
+}
+
+function Start-LocalDeploymentSupervisor {
+    param([Parameter(Mandatory)][pscustomobject] $Context)
+    New-Item -ItemType Directory -Force -Path $Context.StateRoot | Out-Null
+    $python = Join-Path $Context.RuntimeRepo '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Rehearsal runtime Python is missing: $python" }
+    $pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+    $script = Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'
+    $arguments = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,
+        '-RuntimeRepo',$Context.RuntimeRepo,'-StateRoot',$Context.StateRoot,'-PythonPath',$python,
+        '-McpPort',[string]$Context.McpPort,'-TunnelPort',[string]$Context.TunnelPort)
+    Start-Process -FilePath $pwsh -ArgumentList $arguments -WindowStyle Hidden | Out-Null
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        try { return (Get-LocalSupervisorInspection -Context $Context) }
+        catch { if ([DateTime]::UtcNow -ge $deadline) { throw }; Start-Sleep -Milliseconds 250 }
+    } while ($true)
+}
+
+function Suspend-LocalDeploymentSupervisor {
+    param([Parameter(Mandatory)]$Supervisor)
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($Supervisor.process_id)" -ErrorAction Stop
+    if ($null -eq $process -or $process.CreationDate -ne $Supervisor.created -or
+        $process.CommandLine -cne $Supervisor.arguments) { throw 'Local supervisor identity changed.' }
+    Stop-Process -Id $Supervisor.process_id -ErrorAction Stop
+    Wait-Process -Id $Supervisor.process_id -Timeout 15 -ErrorAction SilentlyContinue
+    if (Get-Process -Id $Supervisor.process_id -ErrorAction SilentlyContinue) { throw 'Local supervisor did not stop.' }
+}
+
+function Resume-LocalDeploymentSupervisor {
+    param([Parameter(Mandatory)][pscustomobject] $Context)
+    Start-LocalDeploymentSupervisor -Context $Context
+}
+
 function Get-DeploymentSupervisor {
-    param([string] $RuntimeRepo, [string] $TaskName)
+    param([string] $RuntimeRepo, [string] $TaskName, [pscustomobject] $Context)
+    $context = Get-DeploymentContext $RuntimeRepo $Context
+    if ($context.SupervisorKind -eq 'LocalProcess') { return Get-LocalSupervisorInspection -Context $context }
+    $TaskName = $context.SupervisorName
     $task = Get-ScheduledTask -TaskName $TaskName -TaskPath '\' -ErrorAction Stop
     if (-not $task.Settings.Enabled -or [string]$task.State -ne 'Running') {
         throw 'Managed supervisor task must be enabled and running before promotion.'
@@ -167,13 +322,14 @@ function Get-DeploymentSupervisor {
     })
     if ($processes.Count -ne 1) { throw 'Cannot establish unique managed supervisor process identity.' }
     [pscustomobject]@{
-        task_name = $TaskName; arguments = $arguments; execute = $actions[0].Execute
-        process_id = $processes[0].ProcessId; created = $processes[0].CreationDate
+        kind = 'ScheduledTask'; task_name = $TaskName; arguments = $arguments; execute = $actions[0].Execute
+        process_id = $processes[0].ProcessId; created = $processes[0].CreationDate; Context = $context
     }
 }
 
 function Suspend-DeploymentSupervisor {
     param($Supervisor)
+    if ($Supervisor.kind -eq 'LocalProcess') { Suspend-LocalDeploymentSupervisor -Supervisor $Supervisor; return }
     Disable-ScheduledTask -TaskName $Supervisor.task_name -TaskPath '\' -ErrorAction Stop | Out-Null
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $($Supervisor.process_id)" -ErrorAction Stop
     if ($null -eq $process -or $process.CreationDate -ne $Supervisor.created -or
@@ -192,6 +348,12 @@ function Suspend-DeploymentSupervisor {
 
 function Suspend-DeploymentRecoverySupervisor {
     param([string] $RuntimeRepo, $Supervisor)
+    if ($Supervisor.kind -eq 'LocalProcess') {
+        if (Get-CimInstance Win32_Process -Filter "ProcessId = $($Supervisor.process_id)" -ErrorAction SilentlyContinue) {
+            Suspend-DeploymentSupervisor $Supervisor
+        }
+        return
+    }
     $task = Get-ScheduledTask -TaskName $Supervisor.task_name -TaskPath '\' -ErrorAction Stop
     if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Arguments -cne $Supervisor.arguments -or
         $task.Actions[0].Execute -cne $Supervisor.execute) { throw 'Supervisor task action changed before rollback.' }
@@ -207,6 +369,12 @@ function Suspend-DeploymentRecoverySupervisor {
 
 function Assert-DeploymentSupervisorStopped {
     param($Supervisor)
+    if ($Supervisor.kind -eq 'LocalProcess') {
+        if (Get-CimInstance Win32_Process -Filter "ProcessId = $($Supervisor.process_id)" -ErrorAction SilentlyContinue) {
+            throw 'Local rehearsal supervisor is not quiescent.'
+        }
+        return
+    }
     $task = Get-ScheduledTask -TaskName $Supervisor.task_name -TaskPath '\' -ErrorAction Stop
     $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
         $_.CommandLine -and $_.CommandLine.EndsWith($Supervisor.arguments, [StringComparison]::Ordinal)
@@ -218,6 +386,7 @@ function Assert-DeploymentSupervisorStopped {
 
 function Resume-DeploymentSupervisor {
     param($Supervisor)
+    if ($Supervisor.kind -eq 'LocalProcess') { Resume-LocalDeploymentSupervisor -Context $Supervisor.Context | Out-Null; return }
     $task = Get-ScheduledTask -TaskName $Supervisor.task_name -TaskPath '\' -ErrorAction Stop
     if (@($task.Actions).Count -ne 1 -or $task.Actions[0].Arguments -cne $Supervisor.arguments -or
         $task.Actions[0].Execute -cne $Supervisor.execute) { throw 'Supervisor task action changed during promotion.' }
@@ -243,15 +412,18 @@ function Resume-DeploymentSupervisor {
 }
 
 function Stop-DeploymentRuntime {
-    param([string] $RuntimeRepo)
-    $paths = Get-ByteMcpLauncherPaths -RepoRoot $RuntimeRepo -UserProfile $env:USERPROFILE
-    if (-not (Test-Path -LiteralPath $paths.StateFile)) {
-        if (-not (Confirm-LauncherListenersStopped)) { throw 'Listeners exist without managed launcher state.' }
+    param([string] $RuntimeRepo, [pscustomobject] $Context)
+    $context = Get-DeploymentContext $RuntimeRepo $Context
+    $statePath = $context.LauncherStatePath
+    if (-not (Test-Path -LiteralPath $statePath)) {
+        $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalPort -in @($context.McpPort, $context.TunnelPort) })
+        if ($listeners.Count) { throw 'Listeners exist without managed launcher state.' }
         return
     }
-    $stateHash = (Get-FileHash -LiteralPath $paths.StateFile).Hash
-    $state = Read-LauncherState $paths.StateFile
-    if ((Resolve-DeploymentPath $state.repo_path) -ine (Resolve-DeploymentPath $RuntimeRepo)) {
+    $stateHash = (Get-FileHash -LiteralPath $statePath).Hash
+    $state = Read-LauncherState $statePath
+    if ((Resolve-DeploymentPath $state.repo_path) -ine $context.RuntimeRepo) {
         throw 'Refusing shutdown of another managed checkout.'
     }
     # Validate every surviving process before stopping any; dead startup components are allowed.
@@ -267,7 +439,7 @@ function Stop-DeploymentRuntime {
         }
     }
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
-        Where-Object { $_.LocalPort -in @(8000, 8080) })
+        Where-Object { $_.LocalPort -in @($context.McpPort, $context.TunnelPort) })
     if (@($listeners | Where-Object { $_.OwningProcess -notin $owned }).Count) {
         throw 'Unknown process owns a managed listener; refusing shutdown.'
     }
@@ -280,23 +452,26 @@ function Stop-DeploymentRuntime {
         Stop-Process -Id $processId -ErrorAction Stop
         Wait-Process -Id $processId -Timeout 10 -ErrorAction SilentlyContinue
     }
-    if (-not (Confirm-LauncherListenersStopped)) { throw 'Managed listeners failed to stop.' }
-    if ((Get-FileHash -LiteralPath $paths.StateFile).Hash -cne $stateHash) {
+    $remaining = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -in @($context.McpPort, $context.TunnelPort) })
+    if ($remaining.Count) { throw 'Managed listeners failed to stop.' }
+    if ((Get-FileHash -LiteralPath $statePath).Hash -cne $stateHash) {
         throw 'Launcher state changed during shutdown; preserving it.'
     }
-    Remove-Item -LiteralPath $paths.StateFile -ErrorAction Stop
+    Remove-Item -LiteralPath $statePath -ErrorAction Stop
 }
 
 function Wait-DeploymentRuntime {
-    param([string] $RuntimeRepo, [string] $ExpectedHead, [string[]] $ExpectedTools,
+    param([string] $RuntimeRepo, [pscustomobject] $Context, [string] $ExpectedHead, [string[]] $ExpectedTools,
         [string] $TaskName, [int] $TimeoutSeconds = 90)
+    $context = Get-DeploymentContext $RuntimeRepo $Context
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
     $lastFailure = 'No runtime evidence.'
     do {
         try {
-            $snapshot = Get-DeploymentRuntime $RuntimeRepo
-            Assert-DeploymentRuntime $snapshot $RuntimeRepo $ExpectedHead $ExpectedTools
-            $null = Get-DeploymentSupervisor $RuntimeRepo $TaskName
+             $snapshot = Get-DeploymentRuntime -RuntimeRepo $context.RuntimeRepo -Context $context
+            Assert-DeploymentRuntime $snapshot $context.RuntimeRepo $ExpectedHead $ExpectedTools
+            $null = Get-DeploymentSupervisor -Context $context
             return $snapshot
         }
         catch { $lastFailure = $_.Exception.Message }
@@ -321,7 +496,7 @@ function New-DeploymentCandidate {
 }
 
 function Invoke-DeploymentQualification {
-    param([string] $RuntimeRepo, [string] $CandidateRepo, [string] $PythonPath)
+    param([string] $RuntimeRepo, [string] $CandidateRepo, [string] $PythonPath, [pscustomobject] $Context)
     Assert-DeploymentIsolation $RuntimeRepo $CandidateRepo $PythonPath
     if (Test-Path -LiteralPath (Join-Path $CandidateRepo '.venv')) {
         throw 'New candidate must not contain an existing virtual environment.'
@@ -331,7 +506,15 @@ function Invoke-DeploymentQualification {
     Assert-DeploymentIsolation $RuntimeRepo $CandidateRepo $PythonPath
     Invoke-DeploymentNative 'uv' @('pip', 'install', '--python', $PythonPath, '-e', "$CandidateRepo`[dev`]")
     # Use this reviewed gate, not an arbitrary candidate-supplied replacement.
-    & (Join-Path $PSScriptRoot 'Check.ps1') -RepoRoot $CandidateRepo -PythonPath $PythonPath -ProductionRepo $RuntimeRepo
+    $check = @{ RepoRoot = $CandidateRepo; PythonPath = $PythonPath; ProductionRepo = $RuntimeRepo }
+    if ($null -ne $Context) {
+        $check.StateRoot = $Context.StateRoot
+        $check.BaselineFailureFile = $Context.BaselineFailureFile
+        $check.McpPort = $Context.McpPort
+        $check.TunnelPort = $Context.TunnelPort
+        $check.SupervisorName = $Context.SupervisorName
+    }
+    & (Join-Path $PSScriptRoot 'Check.ps1') @check
 }
 
 function Set-DeploymentHead {
@@ -367,10 +550,28 @@ function Invoke-ByteMcpPromotion {
         [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string] $TargetCommit,
         [Parameter(Mandatory)][string] $CandidateRepo,
         [string[]] $ExpectedAdded = @(), [string[]] $ExpectedRemoved = @(),
-        [string] $SupervisorTaskName = 'Byte-MCP Daemon', [switch] $Apply
+        [string] $SupervisorTaskName = 'Byte-MCP Daemon', [switch] $Apply,
+        [string] $StateRoot = (Join-Path $env:USERPROFILE '.byte-mcp'),
+        [ValidateRange(1024,65535)][int] $McpPort = 8000,
+        [ValidateRange(1024,65535)][int] $TunnelPort = 8080,
+        [ValidateSet('ScheduledTask','LocalProcess')][string] $SupervisorKind = 'ScheduledTask',
+        [string] $SupervisorName = $SupervisorTaskName,
+        [ValidateSet('Production','Disposable')][string] $Mode = 'Production',
+        [string] $BaselineFailureFile,
+        [switch] $InjectPostStartFailure
     )
     $runtime = Resolve-DeploymentPath $RuntimeRepo
     $candidate = Resolve-DeploymentPath $CandidateRepo
+    $productionRuntime = Resolve-DeploymentPath 'C:\Users\nolan\AIProjects\Byte-MCP-runtime\daemon'
+    $legacyMockContext = $runtime -ine $productionRuntime -and -not $PSBoundParameters.ContainsKey('Mode') -and
+        -not $PSBoundParameters.ContainsKey('StateRoot') -and -not $PSBoundParameters.ContainsKey('McpPort') -and
+        -not $PSBoundParameters.ContainsKey('TunnelPort') -and -not $PSBoundParameters.ContainsKey('SupervisorKind') -and
+        -not $PSBoundParameters.ContainsKey('SupervisorName')
+    $context = if ($legacyMockContext) { $null } else {
+        New-DeploymentContext -RuntimeRepo $runtime -StateRoot $StateRoot -McpPort $McpPort -TunnelPort $TunnelPort `
+            -SupervisorKind $SupervisorKind -SupervisorName $SupervisorName -Mode $Mode -BaselineFailureFile $BaselineFailureFile
+    }
+    if ($InjectPostStartFailure -and $context.Mode -ne 'Disposable') { throw 'Post-start failure injection is permitted only in disposable mode.' }
     $python = Join-Path $candidate '.venv\Scripts\python.exe'
     Assert-DeploymentIsolation $runtime $candidate $python
     $mutexKey = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
@@ -383,16 +584,16 @@ function Invoke-ByteMcpPromotion {
         }
         if (-not $locked) { throw 'Another promotion owns this runtime.' }
         Assert-DeploymentClean $runtime
-        $before = Get-DeploymentRuntime $runtime
+        $before = Get-DeploymentRuntime -RuntimeRepo $runtime -Context $context
         Assert-DeploymentRuntime $before $runtime $ExpectedPredecessor @($before.tools)
-        $supervisor = Get-DeploymentSupervisor $runtime $SupervisorTaskName
+        $supervisor = Get-DeploymentSupervisor -RuntimeRepo $runtime -TaskName $SupervisorTaskName -Context $context
         $venvIdentity = Get-DeploymentVenvIdentity $runtime
         New-DeploymentCandidate $runtime $candidate $ExpectedPredecessor $TargetCommit | Out-Null
         $receiptPath = Join-Path $candidate '.venv\deployment-receipt.json'
-        Invoke-DeploymentQualification $runtime $candidate $python | Out-Host
+        Invoke-DeploymentQualification -RuntimeRepo $runtime -CandidateRepo $candidate -PythonPath $python -Context $context | Out-Host
         Assert-DeploymentClean $candidate
         if ((Get-DeploymentHead $candidate) -cne $TargetCommit) { throw 'Candidate HEAD changed during qualification.' }
-        $candidateTools = @(Get-DeploymentTools $candidate $python)
+        $candidateTools = @(Get-DeploymentTools -Repo $candidate -PythonPath $python)
         $delta = Get-DeploymentToolDelta @($before.tools) $candidateTools $ExpectedAdded $ExpectedRemoved
         $receipt = [ordered]@{
             runtime_repo = $runtime; predecessor = $ExpectedPredecessor; target = $TargetCommit
@@ -403,10 +604,10 @@ function Invoke-ByteMcpPromotion {
         if (-not $Apply) { return [pscustomobject]$receipt }
         # Revalidate after arbitrarily long qualification, before any live operation.
         Assert-DeploymentClean $runtime
-        $fresh = Get-DeploymentRuntime $runtime
+        $fresh = Get-DeploymentRuntime -RuntimeRepo $runtime -Context $context
         Assert-DeploymentRuntime $fresh $runtime $ExpectedPredecessor @($before.tools)
         if ((Get-DeploymentVenvIdentity $runtime) -cne $venvIdentity) { throw 'Production venv changed during qualification.' }
-        $supervisor = Get-DeploymentSupervisor $runtime $SupervisorTaskName
+        $supervisor = Get-DeploymentSupervisor -RuntimeRepo $runtime -TaskName $SupervisorTaskName -Context $context
         $receipt.rollback_ref = New-DeploymentRollbackRef $runtime $ExpectedPredecessor
         $receipt.result = 'PREPARED'
         Write-DeploymentReceipt $receiptPath $receipt
@@ -416,14 +617,15 @@ function Invoke-ByteMcpPromotion {
             # Set restoration obligation before an operation that could partially succeed.
             $restoreSupervisor = $true
             Suspend-DeploymentSupervisor $supervisor
-            Stop-DeploymentRuntime $runtime
+            Stop-DeploymentRuntime -RuntimeRepo $runtime -Context $context
             Assert-DeploymentSupervisorStopped $supervisor
             $receipt.result = 'PROMOTING'
             Write-DeploymentReceipt $receiptPath $receipt
             $mutationAttempted = $true
             Set-DeploymentHead $runtime $ExpectedPredecessor $TargetCommit
             Resume-DeploymentSupervisor $supervisor
-            $after = Wait-DeploymentRuntime $runtime $TargetCommit $candidateTools $SupervisorTaskName
+            $after = Wait-DeploymentRuntime -RuntimeRepo $runtime -Context $context -ExpectedHead $TargetCommit -ExpectedTools $candidateTools -TaskName $SupervisorTaskName
+            if ($InjectPostStartFailure) { throw 'Injected disposable post-start verification failure.' }
             if ($after.server_pid -eq $before.server_pid -and $after.server_started -eq $before.server_started) {
                 throw 'Post-start evidence still identifies the predecessor process.'
             }
@@ -440,14 +642,14 @@ function Invoke-ByteMcpPromotion {
                 try {
                     # The supervisor might already be stopped, or running after failed startup.
                     Suspend-DeploymentRecoverySupervisor $runtime $supervisor
-                    Stop-DeploymentRuntime $runtime
+                    Stop-DeploymentRuntime -RuntimeRepo $runtime -Context $context
                     $head = Get-DeploymentHead $runtime
                     if ($head -cne $ExpectedPredecessor -and $head -cne $TargetCommit) {
                         throw 'Unexpected live lineage during rollback; refusing overwrite.'
                     }
                     Set-DeploymentHead $runtime $head $ExpectedPredecessor
                     Resume-DeploymentSupervisor $supervisor
-                    $rollback = Wait-DeploymentRuntime $runtime $ExpectedPredecessor @($before.tools) $SupervisorTaskName
+                    $rollback = Wait-DeploymentRuntime -RuntimeRepo $runtime -Context $context -ExpectedHead $ExpectedPredecessor -ExpectedTools @($before.tools) -TaskName $SupervisorTaskName
                     if ((Get-DeploymentVenvIdentity $runtime) -cne $venvIdentity) { throw 'Production venv identity changed during rollback.' }
                     $receipt.result = 'ROLLED_BACK'
                     $receipt['rollback'] = $rollback
@@ -466,7 +668,7 @@ function Invoke-ByteMcpPromotion {
                 Resume-DeploymentSupervisor $supervisor
                 # Failed suspension/stop also requires a healthy predecessor, not just task enablement.
                 if (-not $mutationAttempted) {
-                    $null = Wait-DeploymentRuntime $runtime $ExpectedPredecessor @($before.tools) $SupervisorTaskName
+                    $null = Wait-DeploymentRuntime -RuntimeRepo $runtime -Context $context -ExpectedHead $ExpectedPredecessor -ExpectedTools @($before.tools) -TaskName $SupervisorTaskName
                 }
             }
         }

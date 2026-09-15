@@ -67,11 +67,11 @@ async def offline_tools(repo: Path) -> list[str]:
         return tool_names(await server.mcp.list_tools())
 
 
-async def live_tools() -> list[str]:
+async def live_tools(url: str = LIVE_URL) -> list[str]:
     # Ignore proxy environment and reject redirects so discovery stays on the fixed loopback URL.
     async with (
         httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=15.0) as client,
-        streamable_http_client(LIVE_URL, http_client=client) as (read, write, _),
+        streamable_http_client(url, http_client=client) as (read, write, _),
         ClientSession(read, write) as session,
     ):
         await session.initialize()
@@ -81,14 +81,14 @@ async def live_tools() -> list[str]:
         return tool_names(result.tools)
 
 
-async def probe(repo: Path, *, live: bool = False) -> dict[str, Any]:
+async def probe(repo: Path, *, live: bool = False, live_url: str = LIVE_URL) -> dict[str, Any]:
     resolved = repo.resolve(strict=True)
     if not resolved.is_dir() or not (resolved / "src" / "byte_mcp" / "server.py").is_file():
         raise ValueError("Expected repository does not contain the MCP server.")
     async with asyncio.timeout(30):
         names = await offline_tools(resolved)
         if live:
-            names = await live_tools()
+            names = await live_tools(live_url)
     return {"repo_path": str(resolved), "tools": names, "tool_count": len(names)}
 
 
@@ -96,8 +96,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--live-url", default=LIVE_URL)
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(probe(args.repo, live=args.live)), sort_keys=True))
+    print(json.dumps(asyncio.run(probe(args.repo, live=args.live, live_url=args.live_url)), sort_keys=True))
 
 
 if __name__ == "__main__":
