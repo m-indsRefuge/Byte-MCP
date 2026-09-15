@@ -5,6 +5,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
+. (Join-Path $PSScriptRoot 'Launcher.Platform.ps1')
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 
@@ -18,7 +20,7 @@ try {
     & $Python -m pip check
 
     Write-Host "`n=== COMPILE ==="
-    & $Python -m compileall -q src tests scripts\mcp_smoke_test.py
+    & $Python -m compileall -q src tests scripts\mcp_smoke_test.py scripts\wolfram_qualification.py
 
     Write-Host "`n=== RUFF ==="
     & $Python -m ruff check .

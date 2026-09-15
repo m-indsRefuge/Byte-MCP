@@ -4,6 +4,8 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'Launcher.Platform.ps1')
+
 if (-not $IsWindows) {
     throw 'Byte-MCP launcher tests require Windows.'
 }

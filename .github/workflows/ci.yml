@@ -33,7 +33,7 @@ jobs:
           python -m pip check
 
       - name: Compile
-        run: python -m compileall -q src tests scripts/mcp_smoke_test.py
+        run: python -m compileall -q src tests scripts/mcp_smoke_test.py scripts/wolfram_qualification.py scripts/wolfram_native_calibration.py
 
       - name: Lint
         run: python -m ruff check .
@@ -58,6 +58,21 @@ jobs:
           if ($null -eq $pester) {
             Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
           }
+
+      - name: Launcher tests
+        shell: pwsh
+        run: .\scripts\Check-Launcher.ps1
+
+  launcher-pester6-test:
+    name: Windows launcher on Pester 6
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester 6.1.0
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 6.1.0 -Scope CurrentUser -Force -SkipPublisherCheck
 
       - name: Launcher tests
         shell: pwsh

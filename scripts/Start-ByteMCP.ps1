@@ -10,9 +10,11 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Launcher.Platform.ps1')
 . (Join-Path $PSScriptRoot 'Launcher.Common.ps1')
 . (Join-Path $PSScriptRoot 'Launcher.Ownership.ps1')
+. (Join-Path $PSScriptRoot 'Launcher.Wolfram.ps1')
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $paths = Get-ByteMcpLauncherPaths -RepoRoot $repoRoot -UserProfile $env:USERPROFILE
+$paths = Add-WolframLauncherPaths -Paths $paths -UserProfile $env:USERPROFILE
 
 if ($Foreground) {
     Start-ByteMcpForegroundStack -Paths $paths -StartupTimeoutSeconds $StartupTimeoutSeconds
