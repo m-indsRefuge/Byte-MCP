@@ -477,7 +477,10 @@ function Stop-DeploymentRuntime {
         if (-not $remaining -or [datetime]::UtcNow -ge $listenerDeadline) { break }
         Start-Sleep -Milliseconds 200
     } while ($true)
-    if ($remaining.Count) { throw 'Managed listeners failed to stop.' }
+    $remainingManaged = @($remaining | Where-Object {
+        -not ($context.SupervisorKind -eq 'LocalProcess' -and $_.LocalPort -eq $context.TunnelPort -and $_.OwningProcess -eq 4)
+    })
+    if ($remainingManaged.Count) { throw 'Managed listeners failed to stop.' }
     if ((Get-FileHash -LiteralPath $statePath).Hash -cne $stateHash) {
         throw 'Launcher state changed during shutdown; preserving it.'
     }
