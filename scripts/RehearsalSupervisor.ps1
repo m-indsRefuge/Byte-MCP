@@ -34,7 +34,8 @@ $server = Start-Process -FilePath $PythonPath -WorkingDirectory $RuntimeRepo `
     -RedirectStandardOutput (Join-Path $logs 'server.out.log') `
     -RedirectStandardError (Join-Path $logs 'server.err.log') -PassThru
 $tunnelScript = Join-Path $PSScriptRoot 'RehearsalTunnel.ps1'
-$tunnel = Start-Process -FilePath (Get-Command pwsh -CommandType Application).Source `
+$pwsh = @((Get-Command pwsh -CommandType Application).Source)[0]
+$tunnel = Start-Process -FilePath $pwsh `
     -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$tunnelScript,'-Port',[string]$TunnelPort) `
     -RedirectStandardOutput (Join-Path $logs 'tunnel.out.log') `
     -RedirectStandardError (Join-Path $logs 'tunnel.err.log') -PassThru
@@ -45,7 +46,7 @@ $launcherState = [ordered]@{
     schema_version = 1; started_at_utc = [DateTime]::UtcNow.ToString('o'); mode = 'background'; repo_path = $RuntimeRepo
     root_profile = 'rehearsal'; tunnel_profile = 'rehearsal'
     server = @{ pid = $server.Id; executable_path = $PythonPath; started_at_utc = $server.StartTime.ToUniversalTime().ToString('o') }
-    tunnel = @{ pid = $tunnel.Id; executable_path = (Get-Command pwsh -CommandType Application).Source; started_at_utc = $tunnel.StartTime.ToUniversalTime().ToString('o') }
+    tunnel = @{ pid = $tunnel.Id; executable_path = $pwsh; started_at_utc = $tunnel.StartTime.ToUniversalTime().ToString('o') }
 }
 $statePath = Join-Path $stateDir 'launcher-state.json'
 $launcherState | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $statePath -Encoding utf8

@@ -271,7 +271,7 @@ function Start-LocalDeploymentSupervisor {
     New-Item -ItemType Directory -Force -Path $Context.StateRoot | Out-Null
     $python = Join-Path $Context.RuntimeRepo '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw "Rehearsal runtime Python is missing: $python" }
-    $pwsh = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+    $pwsh = @((Get-Command pwsh -CommandType Application -ErrorAction Stop).Source)[0]
     $script = Join-Path $PSScriptRoot 'RehearsalSupervisor.ps1'
     $arguments = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,
         '-RuntimeRepo',$Context.RuntimeRepo,'-StateRoot',$Context.StateRoot,'-PythonPath',$python,
