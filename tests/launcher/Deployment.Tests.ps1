@@ -224,3 +224,90 @@ Describe 'Real Git promotion preserves a production environment' {
         { Assert-DeploymentClean $repo } | Should -Not -Throw
     }
 }
+
+Describe 'Explicit deployment context boundary' {
+    BeforeAll {
+        $script:productionRuntime = 'C:\Users\nolan\AIProjects\Byte-MCP-runtime\daemon'
+        $script:productionState = Join-Path $env:USERPROFILE '.byte-mcp'
+    }
+
+    It 'accepts explicit runtime, state root, ports, and supervisor configuration' {
+        $context = New-DeploymentContext `
+            -RuntimeRepo 'C:\rehearsal\daemon' `
+            -StateRoot 'C:\rehearsal\state' `
+            -McpPort 18000 -TunnelPort 18080 `
+            -SupervisorKind 'LocalProcess' `
+            -SupervisorName 'rehearsal-supervisor'
+
+        $context.RuntimeRepo | Should -Be 'C:\rehearsal\daemon'
+        $context.StateRoot | Should -Be 'C:\rehearsal\state'
+        $context.LauncherStatePath | Should -Be 'C:\rehearsal\state\runtime\launcher-state.json'
+        $context.McpPort | Should -Be 18000
+        $context.TunnelPort | Should -Be 18080
+        $context.SupervisorKind | Should -Be 'LocalProcess'
+        $context.SupervisorName | Should -Be 'rehearsal-supervisor'
+    }
+
+    It 'preserves production defaults at the explicit production boundary' {
+        $context = New-DeploymentContext -RuntimeRepo $productionRuntime
+
+        $context.StateRoot | Should -Be $productionState
+        $context.LauncherStatePath | Should -Be (Join-Path $productionState 'runtime\launcher-state.json')
+        $context.McpPort | Should -Be 8000
+        $context.TunnelPort | Should -Be 8080
+        $context.SupervisorKind | Should -Be 'ScheduledTask'
+        $context.SupervisorName | Should -Be 'Byte-MCP Daemon'
+    }
+
+    It 'rejects disposable state equal to production state' {
+        { New-DeploymentContext -RuntimeRepo 'C:\rehearsal\daemon' -StateRoot $productionState `
+            -McpPort 18000 -TunnelPort 18080 -SupervisorKind LocalProcess -Mode Disposable } |
+            Should -Throw '*production state root*'
+    }
+
+    It 'rejects disposable runtime equal to production runtime' {
+        { New-DeploymentContext -RuntimeRepo $productionRuntime -StateRoot 'C:\rehearsal\state' `
+            -McpPort 18000 -TunnelPort 18080 -SupervisorKind LocalProcess -Mode Disposable } |
+            Should -Throw '*production runtime*'
+    }
+
+    It 'rejects disposable production ports' {
+        { New-DeploymentContext -RuntimeRepo 'C:\rehearsal\daemon' -StateRoot 'C:\rehearsal\state' `
+            -McpPort 8000 -TunnelPort 18080 -SupervisorKind LocalProcess -Mode Disposable } |
+            Should -Throw '*MCP port*'
+        { New-DeploymentContext -RuntimeRepo 'C:\rehearsal\daemon' -StateRoot 'C:\rehearsal\state' `
+            -McpPort 18000 -TunnelPort 8080 -SupervisorKind LocalProcess -Mode Disposable } |
+            Should -Throw '*tunnel port*'
+    }
+
+    It 'rejects disposable scheduled-task supervision and the production task name' {
+        { New-DeploymentContext -RuntimeRepo 'C:\rehearsal\daemon' -StateRoot 'C:\rehearsal\state' `
+            -McpPort 18000 -TunnelPort 18080 -SupervisorKind ScheduledTask -Mode Disposable } |
+            Should -Throw '*scheduled task*'
+        { New-DeploymentContext -RuntimeRepo 'C:\rehearsal\daemon' -StateRoot 'C:\rehearsal\state' `
+            -McpPort 18000 -TunnelPort 18080 -SupervisorKind LocalProcess `
+            -SupervisorName 'Byte-MCP Daemon' -Mode Disposable } |
+            Should -Throw '*supervisor*'
+    }
+
+    It 'rejects production mode that silently points at rehearsal infrastructure' {
+        { New-DeploymentContext -RuntimeRepo $productionRuntime -StateRoot 'C:\rehearsal\state' `
+            -McpPort 8000 -TunnelPort 8080 -SupervisorKind ScheduledTask -Mode Production } |
+            Should -Throw '*production state root*'
+        { New-DeploymentContext -RuntimeRepo $productionRuntime -StateRoot $productionState `
+            -McpPort 18000 -TunnelPort 8080 -SupervisorKind ScheduledTask -Mode Production } |
+            Should -Throw '*MCP port*'
+    }
+
+    It 'exposes a real local supervisor implementation without scheduled-task APIs' {
+        $context = New-DeploymentContext -RuntimeRepo 'C:\rehearsal\daemon' -StateRoot 'C:\rehearsal\state' `
+            -McpPort 18000 -TunnelPort 18080 -SupervisorKind LocalProcess -Mode Disposable
+        $supervisor = New-DeploymentSupervisor -Context $context
+
+        $supervisor.Kind | Should -Be 'LocalProcess'
+        $supervisor.StatePath | Should -Be 'C:\rehearsal\state\supervisor.json'
+        $supervisor.PSObject.Methods.Name | Should -Contain 'Inspect'
+        $supervisor.PSObject.Methods.Name | Should -Contain 'Suspend'
+        $supervisor.PSObject.Methods.Name | Should -Contain 'Resume'
+    }
+}
