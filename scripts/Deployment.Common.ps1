@@ -456,8 +456,14 @@ function Stop-DeploymentRuntime {
         Stop-Process -Id $processId -ErrorAction Stop
         Wait-Process -Id $processId -Timeout 10 -ErrorAction SilentlyContinue
     }
-    $remaining = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-        Where-Object { $_.LocalPort -in @($context.McpPort, $context.TunnelPort) })
+    $remaining = @()
+    $listenerDeadline = [datetime]::UtcNow.AddSeconds(10)
+    do {
+        $remaining = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalPort -in @($context.McpPort, $context.TunnelPort) })
+        if (-not $remaining -or [datetime]::UtcNow -ge $listenerDeadline) { break }
+        Start-Sleep -Milliseconds 200
+    } while ($true)
     if ($remaining.Count) { throw 'Managed listeners failed to stop.' }
     if ((Get-FileHash -LiteralPath $statePath).Hash -cne $stateHash) {
         throw 'Launcher state changed during shutdown; preserving it.'
