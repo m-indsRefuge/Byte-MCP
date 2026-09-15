@@ -194,7 +194,7 @@ OX is optional. Without `AI_GATEWAY_API_KEY`, OX initializes as `DISABLED` while
 Run the aggregate gate:
 
 ```powershell
-.\scripts\Check.ps1
+.\scripts\Check.ps1 -PythonPath "$PWD\.venv\Scripts\python.exe" -ProductionRepo 'C:\Users\nolan\AIProjects\Byte-MCP-runtime\daemon'
 ```
 
 The Python gate performs dependency integrity, compilation, Ruff, and full pytest validation. On Windows, the aggregate script also runs the launcher Pester suite. The launcher-only gate is:
