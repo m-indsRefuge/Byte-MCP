@@ -27,7 +27,7 @@ from .errors import NvidiaChatFailureKind
 from .registry import NVIDIA_PROVIDER
 from .review_packet import PreparedNvidiaReviewPacket
 from .review_protocol import (
-    NVIDIA_REVIEW_MODEL_ID,
+    NVIDIA_REVIEW_MODEL_PROFILES,
     NVIDIA_REVIEW_PROTOCOL_VERSION,
     NvidiaReviewResult,
     NvidiaReviewResultError,
@@ -280,7 +280,7 @@ class NvidiaReviewEvidenceManifest:
             raise ValueError("protocol_version is invalid")
         if self.provider_id != NVIDIA_PROVIDER.provider_id:
             raise ValueError("provider_id is invalid")
-        if self.model_id != NVIDIA_REVIEW_MODEL_ID:
+        if self.model_id not in NVIDIA_REVIEW_MODEL_PROFILES:
             raise ValueError("model_id is invalid")
         if self.method != "POST":
             raise ValueError("method is invalid")
@@ -474,7 +474,10 @@ class NvidiaReviewEvidenceStore:
         except (TypeError, ValueError):
             raise NvidiaReviewEvidenceError("prepared review identity is invalid") from None
 
-        expected_request = prepare_nvidia_review_request(packet)
+        expected_request = prepare_nvidia_review_request(
+            packet,
+            model_id=prepared_request.model_id,
+        )
         if prepared_request != expected_request:
             raise NvidiaReviewEvidenceError("prepared request does not match review packet")
         packet_payload = _packet_payload(packet.serialized_packet)

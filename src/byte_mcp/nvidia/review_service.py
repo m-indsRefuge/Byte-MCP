@@ -145,6 +145,7 @@ class NvidiaReviewService:
         base_commit: str,
         objective: str,
         verification: Sequence[Mapping[str, object]],
+        model_id: str,
     ) -> dict[str, object]:
         try:
             definition = self._registry.get(repository)
@@ -164,7 +165,10 @@ class NvidiaReviewService:
             objective,
             verification,
         )
-        prepared_request = prepare_nvidia_review_request(packet)
+        prepared_request = prepare_nvidia_review_request(
+            packet,
+            model_id=model_id,
+        )
         manifest = self._evidence_store.prepare(
             packet,
             prepared_request,

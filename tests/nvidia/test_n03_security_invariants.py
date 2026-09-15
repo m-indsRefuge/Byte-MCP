@@ -88,10 +88,19 @@ def test_review_modules_have_no_retry_fallback_replay_or_catalog_execution() -> 
 def test_review_request_model_and_controls_are_fixed() -> None:
     assert review_protocol.NVIDIA_REVIEW_MODEL_ID == _REVIEW_MODEL
     signature = inspect.signature(review_protocol.prepare_nvidia_review_request)
-    assert tuple(signature.parameters) == ("packet",)
+    assert tuple(signature.parameters) == ("packet", "model_id")
+    assert signature.parameters["model_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["model_id"].default is inspect.Parameter.empty
 
     review_signature = inspect.signature(server.nvidia_review)
-    for forbidden in ("model", "model_id", "endpoint", "prompt", "retry", "fallback"):
+    assert "model_id" in review_signature.parameters
+    for forbidden in (
+        "model",
+        "endpoint",
+        "prompt",
+        "retry",
+        "fallback",
+    ):
         assert forbidden not in review_signature.parameters
 
 

@@ -82,7 +82,10 @@ def prepared_components(tmp_path: Path):
             }
         ],
     )
-    request = prepare_nvidia_review_request(packet)
+    request = prepare_nvidia_review_request(
+        packet,
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
+    )
     return packet, request
 
 

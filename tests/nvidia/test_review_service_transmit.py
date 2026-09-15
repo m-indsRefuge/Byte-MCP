@@ -77,6 +77,7 @@ def prepared_service(tmp_path: Path):
         base_commit=base,
         objective="Review correctness and regression risk",
         verification=verification(),
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
     return service, store, prepared
 

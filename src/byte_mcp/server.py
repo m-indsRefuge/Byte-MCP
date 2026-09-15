@@ -144,8 +144,6 @@ def wolfram_query(
     )
 
 
-
-
 NVIDIA_EXTERNAL = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -184,6 +182,7 @@ async def nvidia_review(
     base_commit: str | None = None,
     objective: str | None = None,
     verification: list[dict[str, Any]] | None = None,
+    model_id: str | None = None,
     review_id: str | None = None,
     expected_request_sha256: str | None = None,
     approve: bool = False,
@@ -196,6 +195,7 @@ async def nvidia_review(
         base_commit,
         objective,
         verification,
+        model_id,
     )
     if review_id is None:
         if approve or expected_request_sha256 is not None:
@@ -209,6 +209,7 @@ async def nvidia_review(
             base_commit=base_commit,
             objective=objective,
             verification=verification,
+            model_id=model_id,
         )
 
     if (

@@ -120,8 +120,14 @@ def test_review_request_is_deterministic_and_uses_fixed_thinking_off_controls() 
     module = review_protocol_module()
     review_packet = packet()
 
-    first = module.prepare_nvidia_review_request(review_packet)
-    second = module.prepare_nvidia_review_request(review_packet)
+    first = module.prepare_nvidia_review_request(
+        review_packet,
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
+    )
+    second = module.prepare_nvidia_review_request(
+        review_packet,
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
+    )
 
     assert first.body_bytes == second.body_bytes
     assert first.request_sha256 == second.request_sha256

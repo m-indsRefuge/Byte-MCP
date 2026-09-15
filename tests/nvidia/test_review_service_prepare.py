@@ -104,6 +104,7 @@ def test_prepare_review_persists_one_exact_provider_free_identity(
         base_commit=base,
         objective="Review correctness and regression risk",
         verification=verification(),
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
 
     assert prepared["review_id"] == "NVR-000001"
@@ -142,6 +143,7 @@ def test_prepare_and_read_paths_never_load_hosted_credentials(
         base_commit=base,
         objective="Review",
         verification=verification(),
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
     summary = service.get_review(prepared["review_id"], view="summary")
     manifest = service.get_review(prepared["review_id"], view="manifest")
@@ -168,6 +170,7 @@ def test_get_review_exposes_bounded_read_only_views(
         base_commit=base,
         objective="Review",
         verification=verification(),
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
     review_id = prepared["review_id"]
 
@@ -216,6 +219,7 @@ def test_prepare_rejects_unknown_repository_or_subsystem_and_get_rejects_view(
             base_commit=base,
             objective="Review",
             verification=verification(),
+            model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
         )
     with pytest.raises(ValueError, match="subsystem"):
         service.prepare_review(
@@ -225,6 +229,7 @@ def test_prepare_rejects_unknown_repository_or_subsystem_and_get_rejects_view(
             base_commit=base,
             objective="Review",
             verification=verification(),
+            model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
         )
 
     prepared = service.prepare_review(
@@ -234,6 +239,7 @@ def test_prepare_rejects_unknown_repository_or_subsystem_and_get_rejects_view(
         base_commit=base,
         objective="Review",
         verification=verification(),
+        model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
     )
     with pytest.raises(ValueError, match="view"):
         service.get_review(prepared["review_id"], view="raw")
