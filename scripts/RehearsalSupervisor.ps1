@@ -40,6 +40,18 @@ $tunnel = Start-Process -FilePath $pwsh `
     -RedirectStandardOutput (Join-Path $logs 'tunnel.out.log') `
     -RedirectStandardError (Join-Path $logs 'tunnel.err.log') -PassThru
 
+$tunnelProcess = $null
+$tunnelDeadline = [DateTime]::UtcNow.AddSeconds(20)
+do {
+    $tunnelMatches = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -and $_.CommandLine -match [regex]::Escape($tunnelScript) -and
+        $_.CommandLine -match "-Port $TunnelPort"
+    })
+    if ($tunnelMatches.Count -eq 1) { $tunnelProcess = Get-Process -Id $tunnelMatches[0].ProcessId -ErrorAction SilentlyContinue; if ($null -ne $tunnelProcess) { break } }
+    if ([DateTime]::UtcNow -ge $tunnelDeadline) { throw 'Rehearsal tunnel did not start.' }
+    Start-Sleep -Milliseconds 200
+} while ($true)
+
 $deadline = [DateTime]::UtcNow.AddSeconds(20)
 do {
     $serverPid = @(Get-NetTCPConnection -LocalPort $McpPort -State Listen -ErrorAction SilentlyContinue |
@@ -56,7 +68,7 @@ $launcherState = [ordered]@{
     schema_version = 1; started_at_utc = [DateTime]::UtcNow.ToString('o'); mode = 'background'; repo_path = $RuntimeRepo
     root_profile = 'rehearsal'; tunnel_profile = 'rehearsal'
     server = @{ pid = $serverProcess.Id; executable_path = $serverProcess.Path; started_at_utc = $serverProcess.StartTime.ToUniversalTime().ToString('o') }
-    tunnel = @{ pid = $tunnel.Id; executable_path = $pwsh; started_at_utc = $tunnel.StartTime.ToUniversalTime().ToString('o') }
+    tunnel = @{ pid = $tunnelProcess.Id; executable_path = $tunnelProcess.Path; started_at_utc = $tunnelProcess.StartTime.ToUniversalTime().ToString('o') }
 }
 $statePath = Join-Path $stateDir 'launcher-state.json'
 $launcherState | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $statePath -Encoding utf8
@@ -65,7 +77,8 @@ $supervisorState | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 's
 
 try {
     while ($true) {
-        if ($server.HasExited -or $tunnel.HasExited) { exit 2 }
+        if ($null -eq (Get-Process -Id $serverProcess.Id -ErrorAction SilentlyContinue) -or
+            $null -eq (Get-Process -Id $tunnelProcess.Id -ErrorAction SilentlyContinue)) { exit 2 }
         Start-Sleep -Seconds 1
     }
 }
