@@ -72,3 +72,88 @@ A query failure never causes a second provider call inside the same invocation. 
 - Preserve append-only evidence.
 - Never solve a failure by weakening model governance, credential isolation, response bounds, audit privacy, or exact request identity.
 - Any future automatic retry, fallback, model routing, or discovery feature requires a new design and explicit approval; it is not a repair.
+## NVIDIA-06 durable credential bootstrap
+
+### F22 — Protected NVIDIA credential store missing
+
+- **Boundary:** The expected CurrentUser DPAPI credential blob at `%USERPROFILE%\.byte-mcp\secrets\nvidia-api-key.dpapi` does not exist when Byte-MCP starts.
+- **Observable symptom:** `Test-NvidiaCredentialStore` reports `ABSENT`; launcher reports `NVIDIA_CREDENTIAL_STATE=ABSENT`; NVIDIA calls remain locally unavailable while the rest of Byte-MCP is allowed to start.
+- **Likely causes:** Credential enrollment has never been run; the protected blob was intentionally removed; the user profile was restored without the `.byte-mcp\secrets` directory; or the launcher is running under a different profile.
+- **First diagnostics:** Run `scripts\Test-NvidiaCredential.ps1`; confirm the expected path with `Get-NvidiaCredentialPath`; confirm User/Machine `NVIDIA_API_KEY` remain absent.
+- **Propagation path:** Missing store → no process-scoped NVIDIA key imported → child daemon starts without NVIDIA credential → NVIDIA provider operations terminate locally at the existing credential boundary.
+- **Safe recovery:** Run `scripts\Setup-NvidiaCredential.ps1` interactively under the intended Windows user, then restart the managed Byte-MCP daemon through the normal launcher path.
+- **Data risk:** None from the missing blob itself; do not compensate by persisting the key in plaintext or in User/Machine environment variables.
+- **Do not:** Do not fall back to `.env`, `setx`, source files, connector configuration, or a manually exported long-lived process key.
+- **Related tests:** NVIDIA-06 missing-store state test; absent-store child-boundary test; persistent-environment static guards.
+
+### F23 — DPAPI decrypt failure or corrupt protected blob
+
+- **Boundary:** The credential blob exists but cannot be decrypted with Windows DPAPI CurrentUser, or decrypts to an empty/invalid value.
+- **Observable symptom:** `Test-NvidiaCredentialStore` reports `INVALID`; startup reports `NVIDIA_CREDENTIAL_STATE=INVALID`; no NVIDIA credential is injected into the child.
+- **Likely causes:** Blob corruption; copied credential file from another Windows identity/profile; DPAPI user master-key loss; truncated write; manual file modification.
+- **First diagnostics:** Run `scripts\Test-NvidiaCredential.ps1`; verify the launcher is running under the expected Windows identity; inspect file presence and ACL metadata without printing blob contents.
+- **Propagation path:** Existing blob → DPAPI unprotect fails or produces invalid plaintext → store classified `INVALID` → stale process key cleared → daemon starts without NVIDIA credential.
+- **Safe recovery:** Preserve the invalid blob long enough for local diagnosis if needed, then re-enroll with `scripts\Setup-NvidiaCredential.ps1 -Replace` only when the existing store can be safely replaced; if replacement is intentionally impossible, remove and enroll anew using the lifecycle commands.
+- **Data risk:** Repeated ad-hoc conversion or copying can destroy the only protected credential artifact; plaintext recovery attempts can leak the API key.
+- **Do not:** Do not print ciphertext, decrypted text, secret length, prefixes/suffixes, hashes derived from the secret, or raw exception data that contains secret material.
+- **Related tests:** Corrupt-store classification test; DPAPI round-trip test; child-boundary stale-key suppression test.
+
+### F24 — Unsafe credential-file ACL
+
+- **Boundary:** The protected credential file grants broad write/modify/full-control rights to identities such as Everyone, Users, or Authenticated Users.
+- **Observable symptom:** ACL validation rejects the store; `Test-NvidiaCredentialStore` reports `INVALID`; setup/rotation validation fails before the credential is accepted.
+- **Likely causes:** Inherited permissive directory ACLs; manual permission changes; copying the blob through a location that rewrites ACLs; third-party backup/restore tooling.
+- **First diagnostics:** Inspect the ACL on the protected blob and its parent directory; identify broad allow rules with write, modify, full-control, create, append, permission-change, or ownership rights.
+- **Propagation path:** Unsafe ACL → credential store rejected → no credential injection → NVIDIA unavailable to the daemon while non-NVIDIA Byte-MCP startup remains possible.
+- **Safe recovery:** Correct the specific unsafe ACL inheritance or explicit broad-write grant while preserving required access for the current user and legitimate inherited SYSTEM/Administrators entries; rerun the provider-free credential test.
+- **Data risk:** An attacker or unrelated local user with write access could replace the ciphertext and influence which secret is injected into the daemon.
+- **Do not:** Do not wholesale replace profile ACL inheritance merely to make the test pass; do not broaden access to simplify troubleshooting.
+- **Related tests:** Temporary-path DPAPI/ACL round-trip; ACL static contract; lifecycle validation checks.
+
+### F25 — Atomic credential replacement failure
+
+- **Boundary:** Enrollment or rotation fails while writing, verifying, or atomically replacing the protected credential blob.
+- **Observable symptom:** Setup/rotation throws before reporting success; temporary same-directory blob may be cleaned up; the previously valid credential must remain authoritative if failure occurs before final replacement.
+- **Likely causes:** Filesystem denial; antivirus/file lock; insufficient permissions; disk or profile filesystem error; failed temporary-blob validation; `File.Replace`/move failure.
+- **First diagnostics:** Confirm whether the final credential file still decrypts and validates; inspect same-directory temporary/backup artifacts without reading their contents; review filesystem/ACL errors.
+- **Propagation path:** New credential protection/write → temporary verification → atomic move/replace → final verification. A failure before replacement must not invalidate the old credential; a failure after replacement requires immediate final-store validation.
+- **Safe recovery:** Resolve the filesystem or ACL cause, confirm the last known valid final blob, remove abandoned temporary/backup artifacts only after identity is clear, then rerun rotation explicitly with `-Replace`.
+- **Data risk:** Incorrect recovery can delete the last valid protected credential or leave an unverified replacement in service.
+- **Do not:** Do not truncate or overwrite the final credential in place; do not delete the old valid blob before the new same-directory temporary blob has been protected and verified.
+- **Related tests:** DPAPI rotation replacement test; same-directory temporary cleanup test; verified replacement behavior.
+
+### F26 — Launcher credential injection or cleanup failure
+
+- **Boundary:** The final NVIDIA launcher layer cannot import the durable credential before child creation, or fails to clear process-scoped `NVIDIA_API_KEY` after delegation.
+- **Observable symptom:** NVIDIA credential state is `ABSENT`/`INVALID` unexpectedly, daemon starts without NVIDIA access, or a launcher process retains `NVIDIA_API_KEY` after the child has been created.
+- **Likely causes:** Invalid/missing store; regression in `Launcher.Nvidia.ps1`; incorrect dot-source order; wrapper override lost; exception between import and cleanup; future launcher refactor bypassing the NVIDIA layer.
+- **First diagnostics:** Verify `Start-ByteMCP.ps1` dot-sources `Launcher.Wolfram.ps1` before `Launcher.Nvidia.ps1`; verify the final `Start-LauncherServerProcess`/foreground wrapper resolves from NVIDIA; run the child-boundary tests provider-free.
+- **Propagation path:** Launcher clears stale key → validates/imports durable key → delegates to established Wolfram child-process creator → child inherits process environment → `finally` clears parent process key.
+- **Safe recovery:** Restore the final NVIDIA launcher override and `try/finally` cleanup contract; rerun focused NVIDIA-06 tests and the full NVIDIA regression with the worktree `src` pinned.
+- **Data risk:** Cleanup regression can retain plaintext credential material in the launcher process; ordering regression can cause the daemon to inherit no credential or a stale credential.
+- **Do not:** Do not move cleanup around the top-level foreground stack, because foreground mode blocks after child creation; do not bypass the established Wolfram launcher environment snapshot/restore path.
+- **Related tests:** Final-wrapper structure tests; stale-process-key clear-before-import test; child-boundary inheritance-and-cleanup test; dot-source-order test.
+
+### F27 — Stale daemon after credential rotation or removal
+
+- **Boundary:** The protected credential store changes, but an already-running Byte-MCP daemon continues using the credential value inherited when that daemon process was created.
+- **Observable symptom:** Setup/remove reports `DAEMON_RESTART_REQUIRED=YES`; the protected store and the running daemon disagree about which NVIDIA credential is active.
+- **Likely causes:** Credential was rotated or removed without restarting the managed daemon; operator assumed DPAPI file changes are read dynamically by the Python provider layer.
+- **First diagnostics:** Check when the daemon was started relative to credential setup/rotation/removal; confirm the protected-store state separately from daemon state; do not make a provider request merely to identify the stale condition.
+- **Propagation path:** Daemon child inherits process environment once at creation → later protected-store mutation does not alter that child environment → old credential remains resident until daemon termination.
+- **Safe recovery:** Restart the managed Byte-MCP daemon through the normal launcher after enrollment, rotation, or removal. For removal, treat the old inherited credential as active until the old daemon is stopped.
+- **Data risk:** A removed or superseded key can remain usable inside an existing daemon process longer than intended.
+- **Do not:** Do not claim rotation/removal is operationally complete until the old daemon has been replaced; do not attempt in-process secret mutation as a shortcut.
+- **Related tests:** Lifecycle receipts requiring restart; startup child-boundary contract; provider-free restart qualification in NVIDIA-06 promotion.
+
+### F28 — Wrong Windows identity or user profile
+
+- **Boundary:** Byte-MCP or the credential lifecycle command runs under a Windows identity/profile different from the identity that protected the DPAPI blob.
+- **Observable symptom:** Expected credential path may be absent under the new profile, or the blob exists but DPAPI CurrentUser decrypt fails and the store is classified `INVALID`.
+- **Likely causes:** Scheduled task/service account mismatch; elevated shell under a different identity; copied profile data; alternate admin account; runtime launched from another user's session.
+- **First diagnostics:** Confirm the effective Windows identity and `%USERPROFILE%`; compare `Get-NvidiaCredentialPath` with the profile used during enrollment; verify the blob was not copied between users.
+- **Propagation path:** Different identity/profile → different credential path and/or incompatible DPAPI CurrentUser protection → no valid import → daemon starts without NVIDIA credential.
+- **Safe recovery:** Run Byte-MCP and credential lifecycle operations under the intended account, or deliberately enroll a separate protected credential for the intended runtime identity using the normal setup command.
+- **Data risk:** Copying the blob between identities does not make it portable and can encourage insecure plaintext migration attempts.
+- **Do not:** Do not weaken DPAPI scope, change to Machine scope, or export plaintext merely to make one blob work across users.
+- **Related tests:** DPAPI CurrentUser round-trip; missing/corrupt store behavior; provider-free credential validation and startup qualification.
