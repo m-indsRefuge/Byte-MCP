@@ -276,3 +276,55 @@ finally {{
         assert "synthetic-n06-new" not in result.stdout
         assert list(directory.glob("*.tmp")) == []
         assert list(directory.glob("*.tmp.*")) == []
+
+def test_n06_operator_scripts_dot_source_launcher_module() -> None:
+    for path in (SETUP_NVIDIA, TEST_NVIDIA, REMOVE_NVIDIA):
+        text = read_text_if_exists(path)
+        assert "Launcher.Nvidia.ps1" in text
+
+
+def test_n06_setup_does_not_restart_byte_mcp() -> None:
+    text = read_text_if_exists(SETUP_NVIDIA).lower()
+    assert "start-bytemcp.ps1" not in text
+    assert "stop-bytemcp.ps1" not in text
+
+
+def test_n06_remove_does_not_restart_byte_mcp() -> None:
+    text = read_text_if_exists(REMOVE_NVIDIA).lower()
+    assert "start-bytemcp.ps1" not in text
+    assert "stop-bytemcp.ps1" not in text
+
+
+def test_n06_operator_scripts_do_not_accept_plaintext_key_parameter() -> None:
+    joined = "\n".join(
+        read_text_if_exists(path)
+        for path in (SETUP_NVIDIA, TEST_NVIDIA, REMOVE_NVIDIA)
+    )
+    assert not re.search(
+        r"(?im)\b(ApiKey|NvidiaApiKey|CredentialText|PlainTextKey)\b"
+        r"\s*(?:=|,|\))",
+        joined,
+    )
+
+
+def test_n06_setup_receipt_requires_restart_without_provider_call() -> None:
+    text = read_text_if_exists(SETUP_NVIDIA)
+    assert "DAEMON_RESTART_REQUIRED=YES" in text
+    assert "PROVIDER_CALLS=0" in text
+    assert "DPAPI_SCOPE=CURRENT_USER" in text
+
+
+def test_n06_test_command_is_provider_free_and_requires_available_store() -> None:
+    text = read_text_if_exists(TEST_NVIDIA)
+    assert "Test-NvidiaCredentialStore" in text
+    assert 'State -ne "AVAILABLE"' in text
+    assert "PROVIDER_CALLS=0" in text
+    assert "NVIDIA_CREDENTIAL_TEST=PASS" in text
+
+
+def test_n06_remove_is_idempotent_by_guarding_file_removal() -> None:
+    text = read_text_if_exists(REMOVE_NVIDIA)
+    assert "Test-Path" in text
+    assert "Remove-Item" in text
+    assert "CREDENTIAL_FILE_PRESENT=NO" in text
+    assert "PROVIDER_CALLS=0" in text
