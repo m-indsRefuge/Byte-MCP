@@ -60,11 +60,11 @@
     "nvidia_query",
     "nvidia_review"
   ],
-  "failure_map_sha256": "9838d665842746f66101556fd3ac7b0a4c5fd246e3ad3d757691efeca449a3e1",
+  "failure_map_sha256": "d656ac882f3b4854f181ddacd75223113eae23db18d0616a58dd65e73e5186bc",
   "provider_calls": 0,
   "query_qualification": {
-    "deepseek-v4-pro": "OFFLINE_QUALIFIED",
-    "lightning": "OFFLINE_QUALIFIED"
+    "lightning": "OFFLINE_QUALIFIED",
+    "nemotron-ultra": "OFFLINE_QUALIFIED"
   },
   "schema_version": "nvidia-n05-offline-qualification-v1",
   "status": "PASS"

@@ -68,7 +68,7 @@ def test_offline_qualification_is_provider_and_credential_free(monkeypatch) -> N
     assert report["provider_calls"] == 0
     assert report["credential_status"] == "DEFERRED_TO_TRANSMIT"
     assert report["query_qualification"] == {
-        "deepseek-v4-pro": "OFFLINE_QUALIFIED",
+        "nemotron-ultra": "OFFLINE_QUALIFIED",
         "lightning": "OFFLINE_QUALIFIED",
     }
     assert report["expected_mcp_surface_names"] == [

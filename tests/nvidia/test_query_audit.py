@@ -44,7 +44,7 @@ def test_success_audit_is_metadata_only(tmp_path: Path) -> None:
     result = asyncio.run(
         service.execute_nvidia_query(
             PROMPT_SECRET,
-            model="deepseek-v4-pro",
+            model="nemotron-ultra",
             system_prompt="SYSTEM-SECRET-55D4",
             settings_loader=lambda: settings.NvidiaHostedSettings(api_key=KEY_SECRET),
             executor=executor,
@@ -64,8 +64,8 @@ def test_success_audit_is_metadata_only(tmp_path: Path) -> None:
     assert event["action"] == "nvidia_query"
     assert event["outcome"] == "allowed"
     assert event["surface"] == "query"
-    assert event["model_alias"] == "deepseek-v4-pro"
-    assert event["provider_model_id"] == "deepseek-ai/deepseek-v4-pro-0813"
+    assert event["model_alias"] == "nemotron-ultra"
+    assert event["provider_model_id"] == "nvidia/nemotron-3-ultra-550b-a55b"
     assert len(event["request_sha256"]) == 64
     assert event["provider_started"] is True
     assert event["finish_reason"] == "stop"

@@ -79,22 +79,22 @@ _LIGHTNING_REVIEW_PROFILE = _profile(
     },
 )
 
-_DEEPSEEK_QUERY_PROFILE = _profile(
+_ULTRA_QUERY_PROFILE = _profile(
     temperature=1.0,
     top_p=0.95,
     max_tokens=16_384,
     seed=None,
-    chat_template_kwargs={},
-    reasoning_effort="low",
+    chat_template_kwargs={"enable_thinking": False},
+    reasoning_effort=None,
 )
 
-_DEEPSEEK_REVIEW_PROFILE = _profile(
+_ULTRA_REVIEW_PROFILE = _profile(
     temperature=1.0,
     top_p=0.95,
     max_tokens=16_384,
     seed=None,
-    chat_template_kwargs={},
-    reasoning_effort="low",
+    chat_template_kwargs={"enable_thinking": False},
+    reasoning_effort=None,
 )
 
 
@@ -110,13 +110,13 @@ NVIDIA_MODELS: Mapping[str, NvidiaModelDefinition] = MappingProxyType(
             query_qualification=(NvidiaQualificationState.OFFLINE_QUALIFIED),
             review_qualification=(NvidiaQualificationState.REVIEW_LIVE_QUALIFIED),
         ),
-        "deepseek-v4-pro": NvidiaModelDefinition(
-            alias="deepseek-v4-pro",
-            provider_model_id=("deepseek-ai/deepseek-v4-pro-0813"),
+        "nemotron-ultra": NvidiaModelDefinition(
+            alias="nemotron-ultra",
+            provider_model_id=("nvidia/nemotron-3-ultra-550b-a55b"),
             query_enabled=True,
             review_enabled=True,
-            query_profile=_DEEPSEEK_QUERY_PROFILE,
-            review_profile=_DEEPSEEK_REVIEW_PROFILE,
+            query_profile=_ULTRA_QUERY_PROFILE,
+            review_profile=_ULTRA_REVIEW_PROFILE,
             query_qualification=(NvidiaQualificationState.OFFLINE_QUALIFIED),
             review_qualification=(NvidiaQualificationState.OFFLINE_QUALIFIED),
         ),

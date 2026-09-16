@@ -14,7 +14,7 @@ def test_registry_has_exact_initial_aliases() -> None:
 
     assert set(models.NVIDIA_MODELS) == {
         "lightning",
-        "deepseek-v4-pro",
+        "nemotron-ultra",
     }
 
 
@@ -40,15 +40,22 @@ def test_lightning_has_exact_provider_identity() -> None:
     assert model.review_enabled is True
 
 
-def test_deepseek_has_exact_provider_identity() -> None:
+def test_nemotron_ultra_has_exact_provider_identity() -> None:
     models = _models()
 
-    model = models.resolve_model("deepseek-v4-pro")
+    model = models.resolve_model("nemotron-ultra")
 
-    assert model.alias == "deepseek-v4-pro"
-    assert model.provider_model_id == "deepseek-ai/deepseek-v4-pro-0813"
+    assert model.alias == "nemotron-ultra"
+    assert model.provider_model_id == "nvidia/nemotron-3-ultra-550b-a55b"
     assert model.query_enabled is True
     assert model.review_enabled is True
+
+
+def test_removed_deepseek_alias_is_rejected_locally() -> None:
+    models = _models()
+
+    with pytest.raises(ValueError, match="model is not allowed"):
+        models.resolve_model("deepseek-v4-pro")
 
 
 def test_unknown_alias_is_rejected_locally() -> None:
@@ -76,10 +83,10 @@ def test_provider_id_reverse_lookup_returns_exact_models() -> None:
     models = _models()
 
     lightning = models.model_for_provider_id("nvidia/nemotron-3.5-lightning-30b-a3b")
-    deepseek = models.model_for_provider_id("deepseek-ai/deepseek-v4-pro-0813")
+    deepseek = models.model_for_provider_id("nvidia/nemotron-3-ultra-550b-a55b")
 
     assert lightning.alias == "lightning"
-    assert deepseek.alias == "deepseek-v4-pro"
+    assert deepseek.alias == "nemotron-ultra"
 
 
 def test_unknown_provider_id_is_rejected_locally() -> None:
@@ -104,17 +111,17 @@ def test_lightning_review_profile_preserves_n04_request_controls() -> None:
     assert profile.reasoning_effort is None
 
 
-def test_deepseek_review_profile_preserves_n04_request_controls() -> None:
+def test_nemotron_ultra_review_profile_preserves_n04_request_controls() -> None:
     models = _models()
 
-    profile = models.resolve_review_model("deepseek-v4-pro").review_profile
+    profile = models.resolve_review_model("nemotron-ultra").review_profile
 
     assert profile.temperature == 1.0
     assert profile.top_p == 0.95
     assert profile.max_tokens == 16_384
     assert profile.seed is None
-    assert dict(profile.chat_template_kwargs) == {}
-    assert profile.reasoning_effort == "low"
+    assert dict(profile.chat_template_kwargs) == {"enable_thinking": False}
+    assert profile.reasoning_effort is None
 
 
 def test_lightning_query_profile_is_deterministic() -> None:
@@ -132,17 +139,17 @@ def test_lightning_query_profile_is_deterministic() -> None:
     assert profile.reasoning_effort is None
 
 
-def test_deepseek_query_profile_is_deterministic() -> None:
+def test_nemotron_ultra_query_profile_is_deterministic() -> None:
     models = _models()
 
-    profile = models.resolve_query_model("deepseek-v4-pro").query_profile
+    profile = models.resolve_query_model("nemotron-ultra").query_profile
 
     assert profile.temperature == 1.0
     assert profile.top_p == 0.95
     assert profile.max_tokens == 16_384
     assert profile.seed is None
-    assert dict(profile.chat_template_kwargs) == {}
-    assert profile.reasoning_effort == "low"
+    assert dict(profile.chat_template_kwargs) == {"enable_thinking": False}
+    assert profile.reasoning_effort is None
 
 
 def test_qualification_state_vocabulary_is_exact() -> None:
@@ -162,7 +169,7 @@ def test_initial_model_maturity_states_are_conservative() -> None:
     models = _models()
 
     lightning = models.resolve_model("lightning")
-    deepseek = models.resolve_model("deepseek-v4-pro")
+    deepseek = models.resolve_model("nemotron-ultra")
 
     assert lightning.query_qualification is models.NvidiaQualificationState.OFFLINE_QUALIFIED
     assert lightning.review_qualification is models.NvidiaQualificationState.REVIEW_LIVE_QUALIFIED
@@ -264,7 +271,7 @@ def test_query_enabled_model_requires_query_profile() -> None:
 
     registry = {
         "lightning": invalid,
-        "deepseek-v4-pro": models.resolve_model("deepseek-v4-pro"),
+        "nemotron-ultra": models.resolve_model("nemotron-ultra"),
     }
 
     with pytest.raises(
@@ -273,7 +280,7 @@ def test_query_enabled_model_requires_query_profile() -> None:
     ):
         models.validate_model_registry(
             registry,
-            default_query_model="deepseek-v4-pro",
+            default_query_model="nemotron-ultra",
         )
 
 
@@ -287,7 +294,7 @@ def test_review_enabled_model_requires_review_profile() -> None:
 
     registry = {
         "lightning": invalid,
-        "deepseek-v4-pro": models.resolve_model("deepseek-v4-pro"),
+        "nemotron-ultra": models.resolve_model("nemotron-ultra"),
     }
 
     with pytest.raises(
@@ -296,7 +303,7 @@ def test_review_enabled_model_requires_review_profile() -> None:
     ):
         models.validate_model_registry(
             registry,
-            default_query_model="deepseek-v4-pro",
+            default_query_model="nemotron-ultra",
         )
 
 
@@ -319,13 +326,13 @@ def test_registry_rejects_duplicate_provider_ids() -> None:
 
     lightning = models.resolve_model("lightning")
     deepseek = replace(
-        models.resolve_model("deepseek-v4-pro"),
+        models.resolve_model("nemotron-ultra"),
         provider_model_id=lightning.provider_model_id,
     )
 
     registry = {
         "lightning": lightning,
-        "deepseek-v4-pro": deepseek,
+        "nemotron-ultra": deepseek,
     }
 
     with pytest.raises(
@@ -352,12 +359,12 @@ def test_registry_rejects_disabled_default_query_model() -> None:
     models = _models()
 
     disabled = replace(
-        models.resolve_model("deepseek-v4-pro"),
+        models.resolve_model("nemotron-ultra"),
         query_enabled=False,
     )
 
     registry = dict(models.NVIDIA_MODELS)
-    registry["deepseek-v4-pro"] = disabled
+    registry["nemotron-ultra"] = disabled
 
     with pytest.raises(
         ValueError,
@@ -365,5 +372,5 @@ def test_registry_rejects_disabled_default_query_model() -> None:
     ):
         models.validate_model_registry(
             registry,
-            default_query_model="deepseek-v4-pro",
+            default_query_model="nemotron-ultra",
         )

@@ -266,21 +266,18 @@ def test_result_error_does_not_echo_provider_content() -> None:
     assert secret_text not in repr(caught.value)
 
 
-def test_deepseek_review_request_uses_top_level_reasoning_effort() -> None:
+def test_nemotron_ultra_review_request_uses_chat_template_kwargs() -> None:
+    import json
+
     module = review_protocol_module()
     review_packet = packet()
 
     prepared = module.prepare_nvidia_review_request(
         review_packet,
-        model_id=module.NVIDIA_REVIEW_DEEPSEEK_MODEL_ID,
+        model_id=module.NVIDIA_REVIEW_ULTRA_MODEL_ID,
     )
     body = json.loads(prepared.body_bytes)
 
-    assert body["model"] == module.NVIDIA_REVIEW_DEEPSEEK_MODEL_ID
-    assert body["temperature"] == 1.0
-    assert body["top_p"] == 0.95
-    assert body["max_tokens"] == 16_384
-    assert body["reasoning_effort"] == "low"
-    assert "chat_template_kwargs" not in body
-    assert "seed" not in body
-    assert '"thinking"' not in json.dumps(body, sort_keys=True)
+    assert body["model"] == module.NVIDIA_REVIEW_ULTRA_MODEL_ID
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning_effort" not in body

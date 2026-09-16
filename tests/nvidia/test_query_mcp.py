@@ -23,7 +23,7 @@ def test_nvidia_query_delegates_to_query_engine(monkeypatch) -> None:
         calls.append((prompt, kwargs))
         return SimpleNamespace(
             to_dict=lambda: {
-                "model": kwargs["model"] or "deepseek-v4-pro",
+                "model": kwargs["model"] or "nemotron-ultra",
                 "provider_model_id": "provider/model",
                 "response": "OK",
                 "request_sha256": "a" * 64,

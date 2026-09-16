@@ -12,7 +12,7 @@ import pytest
 from byte_mcp.nvidia.review_service import NvidiaReviewService
 
 LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
-DEEPSEEK = "deepseek-ai/deepseek-v4-pro-0813"
+ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
 UNKNOWN = "nvidia/not-allowlisted-for-review"
 
 
@@ -59,7 +59,7 @@ def test_n04_same_packet_models_have_distinct_exact_request_identities() -> None
 
     deepseek = module.prepare_nvidia_review_request(
         review_packet,
-        model_id=DEEPSEEK,
+        model_id=ULTRA,
     )
 
     assert lightning.provider_id == deepseek.provider_id
@@ -68,7 +68,7 @@ def test_n04_same_packet_models_have_distinct_exact_request_identities() -> None
     assert lightning.endpoint_path == deepseek.endpoint_path
 
     assert lightning.model_id == LIGHTNING
-    assert deepseek.model_id == DEEPSEEK
+    assert deepseek.model_id == ULTRA
 
     assert lightning.body_bytes != deepseek.body_bytes
     assert lightning.payload_sha256 != deepseek.payload_sha256
@@ -86,7 +86,7 @@ def test_n04_exact_model_profiles_are_bound_into_canonical_request_bytes() -> No
 
     deepseek = module.prepare_nvidia_review_request(
         review_packet,
-        model_id=DEEPSEEK,
+        model_id=ULTRA,
     )
 
     lightning_body = json.loads(lightning.body_bytes)
@@ -102,13 +102,13 @@ def test_n04_exact_model_profiles_are_bound_into_canonical_request_bytes() -> No
     }
     assert "seed" not in lightning_body
 
-    assert deepseek_body["model"] == DEEPSEEK
+    assert deepseek_body["model"] == ULTRA
     assert deepseek_body["temperature"] == 1.0
     assert deepseek_body["top_p"] == 0.95
     assert deepseek_body["max_tokens"] == 16384
-    assert deepseek_body["reasoning_effort"] == "low"
+    assert deepseek_body["chat_template_kwargs"] == {"enable_thinking": False}
     assert "seed" not in deepseek_body
-    assert "chat_template_kwargs" not in deepseek_body
+    assert "reasoning_effort" not in deepseek_body
 
 
 def test_n04_unknown_review_model_is_rejected_locally() -> None:
@@ -152,7 +152,7 @@ def test_n04_same_review_packet_is_model_neutral_but_manifest_is_model_bound(
 
     deepseek = service.prepare_review(
         **common,
-        model_id=DEEPSEEK,
+        model_id=ULTRA,
     )
 
     # Model selection does not contaminate repository evidence.
@@ -164,7 +164,7 @@ def test_n04_same_review_packet_is_model_neutral_but_manifest_is_model_bound(
     assert lightning["request_sha256"] != deepseek["request_sha256"]
 
     assert lightning["model_id"] == LIGHTNING
-    assert deepseek["model_id"] == DEEPSEEK
+    assert deepseek["model_id"] == ULTRA
 
     lightning_manifest = service.get_review(
         lightning["review_id"],
@@ -178,7 +178,7 @@ def test_n04_same_review_packet_is_model_neutral_but_manifest_is_model_bound(
 
     assert lightning_manifest["model_id"] == LIGHTNING
 
-    assert deepseek_manifest["model_id"] == DEEPSEEK
+    assert deepseek_manifest["model_id"] == ULTRA
 
     assert lightning_manifest["request_sha256"] == lightning["request_sha256"]
 

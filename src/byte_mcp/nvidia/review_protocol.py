@@ -19,7 +19,7 @@ NVIDIA_REVIEW_PROTOCOL_VERSION = "nvidia-review-v1"
 
 # NVIDIA-03 Lightning identity remains stable for historical evidence.
 NVIDIA_REVIEW_MODEL_ID = "nvidia/nemotron-3.5-lightning-30b-a3b"
-NVIDIA_REVIEW_DEEPSEEK_MODEL_ID = "deepseek-ai/deepseek-v4-pro-0813"
+NVIDIA_REVIEW_ULTRA_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b"
 
 
 @dataclass(frozen=True, slots=True)

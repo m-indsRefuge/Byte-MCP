@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-DEEPSEEK = "deepseek-ai/deepseek-v4-pro-0813"
+ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
 LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
@@ -69,11 +69,11 @@ def test_query_request_identity_is_deterministic() -> None:
 
     first = protocol.prepare_nvidia_query_request(
         "same prompt",
-        model="deepseek-v4-pro",
+        model="nemotron-ultra",
     )
     second = protocol.prepare_nvidia_query_request(
         "same prompt",
-        model="deepseek-v4-pro",
+        model="nemotron-ultra",
     )
 
     assert first.request.body_bytes == second.request.body_bytes
@@ -88,7 +88,7 @@ def test_raw_provider_id_is_rejected_locally() -> None:
     with pytest.raises(errors.NvidiaPlatformError) as caught:
         protocol.prepare_nvidia_query_request(
             "hello",
-            model=DEEPSEEK,
+            model=ULTRA,
         )
 
     assert caught.value.code is errors.NvidiaErrorCode.MODEL_NOT_ALLOWED
@@ -121,27 +121,27 @@ def test_system_prompt_is_bounded_before_request_construction() -> None:
     assert caught.value.provider_started is False
 
 
-def test_deepseek_query_request_uses_top_level_reasoning_effort() -> None:
+def test_nemotron_ultra_query_request_uses_top_level_reasoning_effort() -> None:
     protocol = _protocol()
 
     prepared = protocol.prepare_nvidia_query_request(
         "Return OK.",
-        model="deepseek-v4-pro",
+        model="nemotron-ultra",
     )
     body = json.loads(prepared.request.body_bytes)
 
-    assert prepared.model == "deepseek-v4-pro"
-    assert prepared.provider_model_id == DEEPSEEK
+    assert prepared.model == "nemotron-ultra"
+    assert prepared.provider_model_id == ULTRA
     assert body == {
         "max_tokens": 16_384,
         "messages": [{"role": "user", "content": "Return OK."}],
-        "model": DEEPSEEK,
+        "model": ULTRA,
         "n": 1,
-        "reasoning_effort": "low",
+        "chat_template_kwargs": {"enable_thinking": False},
         "stream": False,
         "temperature": 1.0,
         "top_p": 0.95,
     }
-    assert "chat_template_kwargs" not in body
+    assert "reasoning_effort" not in body
     assert "seed" not in body
     assert '"thinking"' not in json.dumps(body, sort_keys=True)

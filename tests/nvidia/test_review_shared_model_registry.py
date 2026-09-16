@@ -7,7 +7,7 @@ from byte_mcp import server
 from byte_mcp.nvidia import models, review_protocol
 
 LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
-DEEPSEEK = "deepseek-ai/deepseek-v4-pro-0813"
+ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
 
 
 def test_review_protocol_profiles_are_derived_from_shared_registry() -> None:
@@ -16,10 +16,10 @@ def test_review_protocol_profiles_are_derived_from_shared_registry() -> None:
     assert "NVIDIA_MODELS" in source
     assert set(review_protocol.NVIDIA_REVIEW_MODEL_PROFILES) == {
         LIGHTNING,
-        DEEPSEEK,
+        ULTRA,
     }
 
-    for alias in ("lightning", "deepseek-v4-pro"):
+    for alias in ("lightning", "nemotron-ultra"):
         definition = models.resolve_review_model(alias)
         shared = definition.review_profile
         compatibility = review_protocol.NVIDIA_REVIEW_MODEL_PROFILES[definition.provider_model_id]
@@ -80,16 +80,16 @@ def test_server_prepare_resolves_alias_to_exact_provider_id(
             base_commit="a" * 40,
             objective="Review correctness",
             verification=[],
-            model="deepseek-v4-pro",
+            model="nemotron-ultra",
         )
     )
 
     assert result == {
         "review_id": "NVR-TEST",
-        "model_id": DEEPSEEK,
+        "model_id": ULTRA,
     }
     assert len(calls) == 1
-    assert calls[0]["model_id"] == DEEPSEEK
+    assert calls[0]["model_id"] == ULTRA
 
 
 def test_server_rejects_raw_provider_id_before_service_load(
@@ -112,7 +112,7 @@ def test_server_rejects_raw_provider_id_before_service_load(
                 base_commit="a" * 40,
                 objective="Review correctness",
                 verification=[],
-                model=DEEPSEEK,
+                model=ULTRA,
             )
         )
 
@@ -134,6 +134,6 @@ def test_approval_mode_rejects_model_alias_before_service_load(
                 review_id="NVR-000003",
                 expected_request_sha256="a" * 64,
                 approve=True,
-                model="deepseek-v4-pro",
+                model="nemotron-ultra",
             )
         )

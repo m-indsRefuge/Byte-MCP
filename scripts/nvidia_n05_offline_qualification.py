@@ -128,7 +128,7 @@ def _dialect_checks() -> dict[str, str]:
     deepseek = json.loads(
         prepare_nvidia_query_request(
             "offline-dialect-probe",
-            model="deepseek-v4-pro",
+            model="nemotron-ultra",
         ).request.body_bytes
     )
 
@@ -141,8 +141,8 @@ def _dialect_checks() -> dict[str, str]:
         ),
         "deepseek_reasoning_effort_low": (
             "PASS"
-            if deepseek.get("reasoning_effort") == "low"
-            and "chat_template_kwargs" not in deepseek
+            if deepseek.get("chat_template_kwargs") == {"enable_thinking": False}
+            and "reasoning_effort" not in deepseek
             and "seed" not in deepseek
             else "FAIL"
         ),
@@ -179,7 +179,7 @@ def build_report(repo_root: Path) -> dict[str, Any]:
         "PASS"
         if readiness.get("query_qualification")
         == {
-            "deepseek-v4-pro": "OFFLINE_QUALIFIED",
+            "nemotron-ultra": "OFFLINE_QUALIFIED",
             "lightning": "OFFLINE_QUALIFIED",
         }
         else "FAIL"

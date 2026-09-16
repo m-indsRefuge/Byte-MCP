@@ -26,8 +26,8 @@ def test_readiness_is_provider_free_and_secret_free(monkeypatch) -> None:
 
     assert payload["endpoint"] == "https://integrate.api.nvidia.com/v1/chat/completions"
     assert payload["default_query_alias"] == "lightning"
-    assert payload["enabled_query_aliases"] == ("deepseek-v4-pro", "lightning")
-    assert payload["enabled_review_aliases"] == ("deepseek-v4-pro", "lightning")
+    assert payload["enabled_query_aliases"] == ("lightning", "nemotron-ultra")
+    assert payload["enabled_review_aliases"] == ("lightning", "nemotron-ultra")
     assert payload["credential_status"] == "DEFERRED_TO_TRANSMIT"
     assert payload["request_builder_status"] == "READY"
     assert payload["response_bounds_status"] == "READY"
@@ -48,7 +48,7 @@ def test_both_query_models_are_offline_qualified() -> None:
         is models.NvidiaQualificationState.OFFLINE_QUALIFIED
     )
     assert (
-        models.NVIDIA_MODELS["deepseek-v4-pro"].query_qualification
+        models.NVIDIA_MODELS["nemotron-ultra"].query_qualification
         is models.NvidiaQualificationState.OFFLINE_QUALIFIED
     )
     assert (
@@ -56,7 +56,7 @@ def test_both_query_models_are_offline_qualified() -> None:
         is models.NvidiaQualificationState.REVIEW_LIVE_QUALIFIED
     )
     assert (
-        models.NVIDIA_MODELS["deepseek-v4-pro"].review_qualification
+        models.NVIDIA_MODELS["nemotron-ultra"].review_qualification
         is models.NvidiaQualificationState.OFFLINE_QUALIFIED
     )
 
@@ -81,7 +81,7 @@ def test_offline_qualification_is_deterministic_and_provider_free(monkeypatch) -
         "provider_calls": 0,
         "default_query_alias": "lightning",
         "models": {
-            "deepseek-v4-pro": "PASS",
+            "nemotron-ultra": "PASS",
             "lightning": "PASS",
         },
     }

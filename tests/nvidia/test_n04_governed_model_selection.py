@@ -10,7 +10,7 @@ import pytest
 from byte_mcp import server
 
 LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
-DEEPSEEK = "deepseek-ai/deepseek-v4-pro-0813"
+ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
 
 
 def review_protocol_module():
@@ -37,7 +37,7 @@ def test_n04_exposes_exact_two_model_review_allowlist() -> None:
 
     assert set(profiles) == {
         LIGHTNING,
-        DEEPSEEK,
+        ULTRA,
     }
 
 
@@ -64,15 +64,15 @@ def test_n04_profiles_freeze_exact_provider_controls() -> None:
     }
     assert lightning.reasoning_effort is None
 
-    deepseek = profiles[DEEPSEEK]
+    deepseek = profiles[ULTRA]
 
-    assert deepseek.model_id == DEEPSEEK
+    assert deepseek.model_id == ULTRA
     assert deepseek.temperature == 1.0
     assert deepseek.top_p == 0.95
     assert deepseek.max_tokens == 16384
     assert deepseek.seed is None
-    assert dict(deepseek.chat_template_kwargs) == {}
-    assert deepseek.reasoning_effort == "low"
+    assert dict(deepseek.chat_template_kwargs) == {"enable_thinking": False}
+    assert deepseek.reasoning_effort is None
 
 
 def test_n04_review_request_requires_explicit_model_id() -> None:
@@ -135,17 +135,17 @@ def test_n04_mcp_prepare_passes_explicit_model_to_service(
             base_commit="a" * 40,
             objective="Review correctness",
             verification=[],
-            model="deepseek-v4-pro",
+            model="nemotron-ultra",
         )
     )
 
     assert result == {
         "review_id": "NVR-TEST",
-        "model_id": DEEPSEEK,
+        "model_id": ULTRA,
     }
 
     assert len(calls) == 1
-    assert calls[0]["model_id"] == DEEPSEEK
+    assert calls[0]["model_id"] == ULTRA
 
 
 def test_n05_model_alias_is_forbidden_in_approval_mode(
@@ -168,7 +168,7 @@ def test_n05_model_alias_is_forbidden_in_approval_mode(
                 review_id="NVR-000003",
                 expected_request_sha256="a" * 64,
                 approve=True,
-                model="deepseek-v4-pro",
+                model="nemotron-ultra",
             )
         )
 
