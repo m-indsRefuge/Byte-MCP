@@ -104,7 +104,7 @@ NVIDIA_MODELS: Mapping[str, NvidiaModelDefinition] = MappingProxyType(
             review_enabled=True,
             query_profile=_LIGHTNING_QUERY_PROFILE,
             review_profile=_LIGHTNING_REVIEW_PROFILE,
-            query_qualification=(NvidiaQualificationState.REGISTERED),
+            query_qualification=(NvidiaQualificationState.OFFLINE_QUALIFIED),
             review_qualification=(NvidiaQualificationState.REVIEW_LIVE_QUALIFIED),
         ),
         "deepseek-v4-pro": NvidiaModelDefinition(
@@ -114,7 +114,7 @@ NVIDIA_MODELS: Mapping[str, NvidiaModelDefinition] = MappingProxyType(
             review_enabled=True,
             query_profile=_DEEPSEEK_QUERY_PROFILE,
             review_profile=_DEEPSEEK_REVIEW_PROFILE,
-            query_qualification=(NvidiaQualificationState.REGISTERED),
+            query_qualification=(NvidiaQualificationState.OFFLINE_QUALIFIED),
             review_qualification=(NvidiaQualificationState.OFFLINE_QUALIFIED),
         ),
     }

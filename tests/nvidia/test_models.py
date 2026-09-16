@@ -164,10 +164,10 @@ def test_initial_model_maturity_states_are_conservative() -> None:
     lightning = models.resolve_model("lightning")
     deepseek = models.resolve_model("deepseek-v4-pro")
 
-    assert lightning.query_qualification is models.NvidiaQualificationState.REGISTERED
+    assert lightning.query_qualification is models.NvidiaQualificationState.OFFLINE_QUALIFIED
     assert lightning.review_qualification is models.NvidiaQualificationState.REVIEW_LIVE_QUALIFIED
 
-    assert deepseek.query_qualification is models.NvidiaQualificationState.REGISTERED
+    assert deepseek.query_qualification is models.NvidiaQualificationState.OFFLINE_QUALIFIED
     assert deepseek.review_qualification is models.NvidiaQualificationState.OFFLINE_QUALIFIED
 
 

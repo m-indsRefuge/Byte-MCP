@@ -174,6 +174,32 @@ def _invalid_nvidia_review_mode() -> None:
     raise ValueError("invalid NVIDIA review mode")
 
 
+def _nvidia_query_executor():
+    query_module = import_module("byte_mcp.nvidia.query_service")
+    return query_module.execute_nvidia_query
+
+
+def _nvidia_query_audit():
+    audit_module = import_module("byte_mcp.audit")
+    return audit_module.AuditLog(SETTINGS.audit_file)
+
+
+@mcp.tool(annotations=NVIDIA_EXTERNAL)
+async def nvidia_query(
+    prompt: str,
+    model: str | None = None,
+    system_prompt: str | None = None,
+) -> dict[str, object]:
+    """Run one governed NVIDIA query with a friendly model alias."""
+    result = await _nvidia_query_executor()(
+        prompt,
+        model=model,
+        system_prompt=system_prompt,
+        audit=_nvidia_query_audit(),
+    )
+    return result.to_dict()
+
+
 @mcp.tool(annotations=NVIDIA_EXTERNAL)
 async def nvidia_review(
     repository: str | None = None,

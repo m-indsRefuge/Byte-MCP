@@ -119,9 +119,9 @@ def test_prepare_and_read_paths_do_not_load_hosted_credentials() -> None:
     assert "NvidiaHostedSettings" in transmit_source
 
 
-def test_server_exposes_only_the_two_governed_nvidia_review_tools() -> None:
+def test_server_exposes_exact_governed_nvidia_platform_tools() -> None:
     nvidia_tools = {name for name in server.mcp._tool_manager._tools if "nvidia" in name}
-    assert nvidia_tools == {"nvidia_review", "nvidia_get_review"}
+    assert nvidia_tools == {"nvidia_query", "nvidia_review", "nvidia_get_review"}
 
 
 def test_ox_and_wolfram_packages_do_not_import_nvidia_review_modules() -> None:
