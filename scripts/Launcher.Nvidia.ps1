@@ -313,3 +313,75 @@ function Clear-NvidiaCredentialFromCurrentProcess {
 
     Remove-Item Env:NVIDIA_API_KEY -ErrorAction SilentlyContinue
 }
+
+function Invoke-StartByteMcpServerWithNvidia {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $Paths,
+
+        [switch] $Foreground,
+
+        [string] $CredentialPath = (Get-NvidiaCredentialPath)
+    )
+
+    $Injected = $false
+
+    try {
+        # The durable store is authoritative. Remove any stale process-scoped
+        # value before evaluating it so an absent/invalid store cannot leak an
+        # older bootstrap credential into the child.
+        Clear-NvidiaCredentialFromCurrentProcess
+
+        $Injected = Import-NvidiaCredentialForChildProcess `
+            -Path $CredentialPath
+
+        if ($Injected) {
+            Write-Host "NVIDIA_CREDENTIAL_STATE=AVAILABLE"
+        }
+        else {
+            $State = Test-NvidiaCredentialStore -Path $CredentialPath
+            Write-Host "NVIDIA_CREDENTIAL_STATE=$($State.State)"
+        }
+
+        if ($Foreground) {
+            Invoke-StartByteMcpServerWithWolfram `
+                -Paths $Paths `
+                -Foreground
+        }
+        else {
+            Invoke-StartByteMcpServerWithWolfram `
+                -Paths $Paths
+        }
+    }
+    finally {
+        # Start-Process has already inherited the process environment by the
+        # time the delegated Wolfram launcher returns. Do not retain plaintext
+        # NVIDIA credential material in the launcher process.
+        Clear-NvidiaCredentialFromCurrentProcess
+    }
+}
+
+
+function Start-LauncherServerProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $Paths
+    )
+
+    Invoke-StartByteMcpServerWithNvidia -Paths $Paths
+}
+
+
+function Start-LauncherForegroundServer {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $Paths
+    )
+
+    Invoke-StartByteMcpServerWithNvidia `
+        -Paths $Paths `
+        -Foreground
+}

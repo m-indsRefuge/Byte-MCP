@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Launcher.Common.ps1')
 . (Join-Path $PSScriptRoot 'Launcher.Ownership.ps1')
 . (Join-Path $PSScriptRoot 'Launcher.Wolfram.ps1')
+. (Join-Path $PSScriptRoot 'Launcher.Nvidia.ps1')
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $paths = Get-ByteMcpLauncherPaths -RepoRoot $repoRoot -UserProfile $env:USERPROFILE

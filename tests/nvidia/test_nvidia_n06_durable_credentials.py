@@ -132,11 +132,12 @@ def test_n06_credential_scripts_have_no_provider_or_network_execution() -> None:
 
 def test_n06_start_launcher_integrates_nvidia_module() -> None:
     text = read_text(START_BYTE_MCP)
-    assert "Launcher.Nvidia.ps1" in text
-    assert "Import-NvidiaCredentialForChildProcess" in text
-    assert "Clear-NvidiaCredentialFromCurrentProcess" in text
-    assert "finally" in text.lower()
 
+    assert "Launcher.Wolfram.ps1" in text
+    assert "Launcher.Nvidia.ps1" in text
+    assert text.index("Launcher.Wolfram.ps1") < text.index(
+        "Launcher.Nvidia.ps1"
+    )
 
 def test_n06_python_layer_does_not_read_dpapi_blob() -> None:
     joined = "\n".join(
@@ -328,3 +329,140 @@ def test_n06_remove_is_idempotent_by_guarding_file_removal() -> None:
     assert "Remove-Item" in text
     assert "CREDENTIAL_FILE_PRESENT=NO" in text
     assert "PROVIDER_CALLS=0" in text
+
+def test_n06_nvidia_launcher_defines_final_server_wrappers() -> None:
+    text = read_text(LAUNCHER_NVIDIA)
+
+    assert "function Invoke-StartByteMcpServerWithNvidia" in text
+    assert "function Start-LauncherServerProcess" in text
+    assert "function Start-LauncherForegroundServer" in text
+    assert "Invoke-StartByteMcpServerWithWolfram" in text
+
+
+def test_n06_nvidia_wrapper_clears_stale_process_key_before_import() -> None:
+    text = read_text(LAUNCHER_NVIDIA)
+
+    wrapper_at = text.index("function Invoke-StartByteMcpServerWithNvidia")
+    wrapper = text[wrapper_at:]
+    clear_at = wrapper.index("Clear-NvidiaCredentialFromCurrentProcess")
+    import_at = wrapper.index("Import-NvidiaCredentialForChildProcess")
+
+    assert clear_at < import_at
+
+
+def test_n06_nvidia_wrapper_cleanup_is_in_finally() -> None:
+    text = read_text(LAUNCHER_NVIDIA)
+
+    wrapper_at = text.index("function Invoke-StartByteMcpServerWithNvidia")
+    wrapper = text[wrapper_at:]
+    delegate_at = wrapper.index("Invoke-StartByteMcpServerWithWolfram")
+    finally_at = wrapper.index("finally")
+    cleanup_at = wrapper.rindex(
+        "Clear-NvidiaCredentialFromCurrentProcess"
+    )
+
+    assert delegate_at < finally_at < cleanup_at
+
+
+def test_n06_nvidia_wrapper_reports_safe_credential_state_only() -> None:
+    text = read_text(LAUNCHER_NVIDIA)
+
+    assert "NVIDIA_CREDENTIAL_STATE=AVAILABLE" in text
+    assert "NVIDIA_CREDENTIAL_STATE=$($State.State)" in text
+    assert "Write-Host $env:NVIDIA_API_KEY" not in text
+
+
+def test_n06_child_boundary_inherits_durable_key_then_clears_parent() -> None:
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        path = (Path(td) / "credential.dpapi").as_posix()
+        script = rf"""
+. '{LAUNCHER_NVIDIA.as_posix()}'
+
+function Invoke-StartByteMcpServerWithWolfram {{
+    param(
+        [Parameter(Mandatory)] [pscustomobject] $Paths,
+        [switch] $Foreground
+    )
+
+    if ($env:NVIDIA_API_KEY -ne 'synthetic-n06-child-secret') {{
+        throw 'child boundary did not inherit durable credential'
+    }}
+
+    [pscustomobject]@{{
+        ChildSawCredential = $true
+        Foreground = $Foreground.IsPresent
+    }}
+}}
+
+$secure = ConvertTo-SecureString 'synthetic-n06-child-secret' -AsPlainText -Force
+Protect-NvidiaCredential -Credential $secure -Path '{path}'
+
+$result = Invoke-StartByteMcpServerWithNvidia `
+    -Paths ([pscustomobject]@{{}}) `
+    -CredentialPath '{path}'
+
+if (-not $result.ChildSawCredential) {{
+    throw 'delegate did not execute'
+}}
+if (-not [string]::IsNullOrEmpty($env:NVIDIA_API_KEY)) {{
+    throw 'launcher process credential not cleared'
+}}
+
+Write-Output 'NVIDIA_CHILD_BOUNDARY=PASS'
+"""
+        result = run_pwsh(script)
+        assert result.returncode == 0, result.stderr
+        assert "NVIDIA_CHILD_BOUNDARY=PASS" in result.stdout
+        assert "NVIDIA_CREDENTIAL_STATE=AVAILABLE" in result.stdout
+        assert "synthetic-n06-child-secret" not in result.stdout
+        assert "synthetic-n06-child-secret" not in result.stderr
+
+
+def test_n06_missing_store_starts_delegate_without_stale_process_key() -> None:
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        missing = (Path(td) / "missing.dpapi").as_posix()
+        script = rf"""
+. '{LAUNCHER_NVIDIA.as_posix()}'
+
+function Invoke-StartByteMcpServerWithWolfram {{
+    param(
+        [Parameter(Mandatory)] [pscustomobject] $Paths,
+        [switch] $Foreground
+    )
+
+    if (-not [string]::IsNullOrEmpty($env:NVIDIA_API_KEY)) {{
+        throw 'stale NVIDIA process credential leaked to child boundary'
+    }}
+
+    [pscustomobject]@{{
+        ChildSawCredential = $false
+    }}
+}}
+
+$env:NVIDIA_API_KEY = 'synthetic-stale-process-key'
+
+$result = Invoke-StartByteMcpServerWithNvidia `
+    -Paths ([pscustomobject]@{{}}) `
+    -CredentialPath '{missing}'
+
+if ($result.ChildSawCredential) {{
+    throw 'missing store unexpectedly supplied credential'
+}}
+if (-not [string]::IsNullOrEmpty($env:NVIDIA_API_KEY)) {{
+    throw 'stale parent process credential survived cleanup'
+}}
+
+Write-Output 'NVIDIA_ABSENT_STORE_BOUNDARY=PASS'
+"""
+        result = run_pwsh(script)
+        assert result.returncode == 0, result.stderr
+        assert "NVIDIA_ABSENT_STORE_BOUNDARY=PASS" in result.stdout
+        assert "NVIDIA_CREDENTIAL_STATE=ABSENT" in result.stdout
+        assert "synthetic-stale-process-key" not in result.stdout
+        assert "synthetic-stale-process-key" not in result.stderr
