@@ -2,14 +2,22 @@
 import json
 import os
 import re
+import os
 from pathlib import Path
 
 _reports = {}
 OUTCOMES = {"passed", "failed", "skipped"}
+SIGNATURE_VERSION = "repo-root-v1"
+
+
+def _normalize_signature(value):
+    root = os.path.normcase(os.path.abspath(os.getcwd())).replace("/", "\\").rstrip("\\")
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    return re.sub(re.escape(root), "<REPO>", text, flags=re.IGNORECASE)
 
 
 def validate_manifest(payload, expected_sha=None):
-    required = {"predecessor_sha", "collected_count", "passed_count", "failed_count", "skipped_count", "nodes"}
+    required = {"predecessor_sha", "signature_version", "collected_count", "passed_count", "failed_count", "skipped_count", "nodes"}
     if not isinstance(payload, dict) or not required.issubset(payload):
         raise ValueError("malformed pytest manifest")
     if expected_sha is not None and payload["predecessor_sha"] != expected_sha:
@@ -32,6 +40,8 @@ def validate_manifest(payload, expected_sha=None):
 def compare_manifests(baseline, candidate):
     validate_manifest(baseline)
     validate_manifest(candidate)
+    if baseline["signature_version"] != candidate["signature_version"]:
+        raise ValueError("signature normalization version mismatch")
     current = {n["nodeid"]: n for n in candidate["nodes"]}
     for node in baseline["nodes"]:
         actual = current.get(node["nodeid"])
@@ -59,7 +69,7 @@ def pytest_runtest_logreport(report):
         return
     signature = ""
     if outcome == "failed":
-        signature = re.sub(r"\s+", " ", str(report.longrepr)).strip()
+        signature = _normalize_signature(report.longrepr)
     record = {
         "nodeid": report.nodeid,
         "outcome": outcome,
@@ -78,6 +88,7 @@ def pytest_sessionfinish(session, exitstatus):
     counts = {o: sum(n["outcome"] == o for n in nodes) for o in ("passed", "failed", "skipped")}
     payload = {
         "predecessor_sha": os.environ.get("BYTE_PREDECESSOR_SHA", ""),
+        "signature_version": SIGNATURE_VERSION,
         "collected_count": len(nodes),
         "passed_count": counts["passed"],
         "failed_count": counts["failed"],
