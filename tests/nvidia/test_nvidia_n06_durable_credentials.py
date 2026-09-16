@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
+import os
 import re
+import subprocess
+import tempfile
+from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -143,3 +147,132 @@ def test_n06_python_layer_does_not_read_dpapi_blob() -> None:
     assert "nvidia-api-key.dpapi" not in joined
     assert "protecteddata" not in joined
     assert "dataprotectionscope" not in joined
+
+
+POWERSHELL = "pwsh"
+
+
+def run_pwsh(script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            POWERSHELL,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_n06_dpapi_round_trip_at_temp_path() -> None:
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        path = (Path(td) / "credential.dpapi").as_posix()
+        script = rf"""
+. '{LAUNCHER_NVIDIA.as_posix()}'
+$secure = ConvertTo-SecureString 'synthetic-n06-secret' -AsPlainText -Force
+Protect-NvidiaCredential -Credential $secure -Path '{path}'
+$value = Unprotect-NvidiaCredential -Path '{path}'
+try {{
+    if ($value -ne 'synthetic-n06-secret') {{
+        throw 'round trip mismatch'
+    }}
+    $state = Test-NvidiaCredentialStore -Path '{path}'
+    $state | ConvertTo-Json -Compress
+}}
+finally {{
+    $value = $null
+}}
+"""
+        result = run_pwsh(script)
+        assert result.returncode == 0, result.stderr
+        state = json.loads(result.stdout.strip().splitlines()[-1])
+        assert state["State"] == "AVAILABLE"
+        assert state["Exists"] is True
+        assert state["AclSafe"] is True
+        assert state["ProtectionScope"] == "CurrentUser"
+        assert "synthetic-n06-secret" not in result.stdout
+        assert "synthetic-n06-secret" not in result.stderr
+
+
+def test_n06_missing_store_reports_absent() -> None:
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        path = (Path(td) / "missing.dpapi").as_posix()
+        script = rf"""
+. '{LAUNCHER_NVIDIA.as_posix()}'
+$state = Test-NvidiaCredentialStore -Path '{path}'
+$state | ConvertTo-Json -Compress
+"""
+        result = run_pwsh(script)
+        assert result.returncode == 0, result.stderr
+        state = json.loads(result.stdout.strip().splitlines()[-1])
+        assert state["State"] == "ABSENT"
+        assert state["Exists"] is False
+        assert state["AclSafe"] is False
+        assert state["ProtectionScope"] == "CurrentUser"
+
+
+def test_n06_corrupt_store_reports_invalid_without_secret_output() -> None:
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        path_obj = Path(td) / "credential.dpapi"
+        path_obj.write_bytes(b"not-a-valid-dpapi-payload")
+        path = path_obj.as_posix()
+        script = rf"""
+. '{LAUNCHER_NVIDIA.as_posix()}'
+$state = Test-NvidiaCredentialStore -Path '{path}'
+$state | ConvertTo-Json -Compress
+"""
+        result = run_pwsh(script)
+        assert result.returncode == 0, result.stderr
+        state = json.loads(result.stdout.strip().splitlines()[-1])
+        assert state["State"] == "INVALID"
+        assert state["Exists"] is True
+        assert state["ProtectionScope"] == "CurrentUser"
+        assert "not-a-valid-dpapi-payload" not in result.stdout
+        assert "not-a-valid-dpapi-payload" not in result.stderr
+
+
+def test_n06_dpapi_rotation_replaces_verified_blob_without_temp_leak() -> None:
+    if os.name != "nt":
+        return
+
+    with tempfile.TemporaryDirectory() as td:
+        directory = Path(td)
+        path = (directory / "credential.dpapi").as_posix()
+        script = rf"""
+. '{LAUNCHER_NVIDIA.as_posix()}'
+$old = ConvertTo-SecureString 'synthetic-n06-old' -AsPlainText -Force
+$new = ConvertTo-SecureString 'synthetic-n06-new' -AsPlainText -Force
+Protect-NvidiaCredential -Credential $old -Path '{path}'
+Protect-NvidiaCredential -Credential $new -Path '{path}'
+$value = Unprotect-NvidiaCredential -Path '{path}'
+try {{
+    if ($value -ne 'synthetic-n06-new') {{
+        throw 'rotation mismatch'
+    }}
+    Write-Output 'ROTATION=PASS'
+}}
+finally {{
+    $value = $null
+}}
+"""
+        result = run_pwsh(script)
+        assert result.returncode == 0, result.stderr
+        assert "ROTATION=PASS" in result.stdout
+        assert "synthetic-n06-old" not in result.stdout
+        assert "synthetic-n06-new" not in result.stdout
+        assert list(directory.glob("*.tmp")) == []
+        assert list(directory.glob("*.tmp.*")) == []
