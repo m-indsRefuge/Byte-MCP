@@ -135,7 +135,7 @@ def test_n04_mcp_prepare_passes_explicit_model_to_service(
             base_commit="a" * 40,
             objective="Review correctness",
             verification=[],
-            model_id=DEEPSEEK,
+            model="deepseek-v4-pro",
         )
     )
 
@@ -148,7 +148,7 @@ def test_n04_mcp_prepare_passes_explicit_model_to_service(
     assert calls[0]["model_id"] == DEEPSEEK
 
 
-def test_n04_model_id_is_forbidden_in_approval_mode(
+def test_n05_model_alias_is_forbidden_in_approval_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -168,7 +168,7 @@ def test_n04_model_id_is_forbidden_in_approval_mode(
                 review_id="NVR-000003",
                 expected_request_sha256="a" * 64,
                 approve=True,
-                model_id=DEEPSEEK,
+                model="deepseek-v4-pro",
             )
         )
 

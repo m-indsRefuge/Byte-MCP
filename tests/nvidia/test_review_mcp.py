@@ -13,7 +13,7 @@ PREPARE_FIELDS = {
     "base_commit",
     "objective",
     "verification",
-    "model_id",
+    "model",
 }
 APPROVAL_FIELDS = {"review_id", "expected_request_sha256", "approve"}
 
@@ -30,7 +30,7 @@ def review_service_class():
 def test_nvidia_review_tool_signature_has_only_frozen_modes() -> None:
     signature = inspect.signature(server.nvidia_review)
     assert set(signature.parameters) == PREPARE_FIELDS | APPROVAL_FIELDS
-    forbidden = {"retry", "model", "endpoint", "prompt", "api_key", "key"}
+    forbidden = {"retry", "model_id", "endpoint", "prompt", "api_key", "key"}
     assert forbidden.isdisjoint(signature.parameters)
 
 
@@ -69,7 +69,7 @@ def test_nvidia_review_prepare_mode_calls_only_prepare_service(monkeypatch) -> N
             base_commit="a" * 40,
             objective="Review regression risk",
             verification=[],
-            model_id=("nvidia/nemotron-3.5-lightning-30b-a3b"),
+            model="lightning",
         )
     )
     assert result["review_id"] == "NVR-000001"
@@ -98,7 +98,7 @@ def test_nvidia_review_prepare_mode_rejects_approval_fields(monkeypatch, extra) 
         "base_commit": "a" * 40,
         "objective": "Review",
         "verification": [],
-        "model_id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "model": "lightning",
         **extra,
     }
     with pytest.raises(ValueError, match="NVIDIA review mode"):

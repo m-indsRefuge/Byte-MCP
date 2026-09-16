@@ -93,9 +93,9 @@ def test_review_request_model_and_controls_are_fixed() -> None:
     assert signature.parameters["model_id"].default is inspect.Parameter.empty
 
     review_signature = inspect.signature(server.nvidia_review)
-    assert "model_id" in review_signature.parameters
+    assert "model" in review_signature.parameters
+    assert "model_id" not in review_signature.parameters
     for forbidden in (
-        "model",
         "endpoint",
         "prompt",
         "retry",

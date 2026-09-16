@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from byte_mcp.nvidia.models import NVIDIA_MODELS
 from byte_mcp.providers import PreparedProviderRequest, prepare_provider_request
 
 from .chat import NVIDIA_CHAT_ENDPOINT_PATH, NVIDIA_CHAT_TARGET_ORIGIN
@@ -33,22 +34,16 @@ class NvidiaReviewModelProfile:
 
 NVIDIA_REVIEW_MODEL_PROFILES = MappingProxyType(
     {
-        NVIDIA_REVIEW_MODEL_ID: NvidiaReviewModelProfile(
-            model_id=NVIDIA_REVIEW_MODEL_ID,
-            temperature=0.2,
-            top_p=0.95,
-            max_tokens=4_096,
-            seed=None,
-            chat_template_kwargs=MappingProxyType({"enable_thinking": False}),
-        ),
-        NVIDIA_REVIEW_DEEPSEEK_MODEL_ID: NvidiaReviewModelProfile(
-            model_id=NVIDIA_REVIEW_DEEPSEEK_MODEL_ID,
-            temperature=1.0,
-            top_p=0.95,
-            max_tokens=16_384,
-            seed=42,
-            chat_template_kwargs=MappingProxyType({"thinking": False}),
-        ),
+        model.provider_model_id: NvidiaReviewModelProfile(
+            model_id=model.provider_model_id,
+            temperature=model.review_profile.temperature,
+            top_p=model.review_profile.top_p,
+            max_tokens=model.review_profile.max_tokens,
+            seed=model.review_profile.seed,
+            chat_template_kwargs=model.review_profile.chat_template_kwargs,
+        )
+        for model in NVIDIA_MODELS.values()
+        if model.review_enabled and model.review_profile is not None
     }
 )
 
