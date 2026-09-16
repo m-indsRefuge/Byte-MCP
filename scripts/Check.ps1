@@ -74,12 +74,16 @@ try {
     $manifest = [ordered]@{ predecessor_sha=$PredecessorSHA; collected_nodes=@($collect); failing_nodes=@($failed); passed_count=$passedCount; failed_count=$failedCount; collected_count=@($collect).Count }
     if ($manifestPath -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         $baseline = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        if ($PredecessorSHA -and $baseline.predecessor_sha -and $baseline.predecessor_sha -cne $PredecessorSHA) { throw 'Predecessor SHA differs from accepted pytest manifest lineage.' }
+        if ([int]$baseline.collected_count -ne @($baseline.collected_nodes).Count -or
+            [int]$baseline.passed_count + [int]$baseline.failed_count -gt [int]$baseline.collected_count) { throw 'Baseline pytest manifest counts are inconsistent.' }
         $missing = @($baseline.collected_nodes | Where-Object { $collect -notcontains $_ })
         if ($missing.Count) { throw "Candidate pytest collection lost predecessor tests: $($missing -join ', ')" }
         $baseFails = @($baseline.failing_nodes | ForEach-Object { $_.node_id })
         $candOnly = @($failedNodes | Where-Object { $baseFails -notcontains $_ })
         if ($candOnly.Count -or (@($baseFails | Where-Object { $failedNodes -notcontains $_ }).Count)) { throw 'Candidate pytest failure set differs from predecessor manifest.' }
         foreach($b in @($baseline.failing_nodes)) { $c=$failed | Where-Object node_id -eq $b.node_id; if ($null -eq $c -or $c.signature -cne $b.signature) { throw "Inherited pytest failure signature drift: $($b.node_id)" } }
+        if ($passedCount + $failedCount -gt $collect.Count -or $failedCount -ne $failed.Count) { throw 'Candidate pytest manifest counts are inconsistent.' }
         Write-Host "PASS: structured pytest manifest matches predecessor ($($failedNodes.Count) shared failures)."
     } elseif ($manifestPath) {
         $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8
