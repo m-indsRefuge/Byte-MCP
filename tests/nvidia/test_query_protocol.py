@@ -15,24 +15,23 @@ def _errors():
     return importlib.import_module("byte_mcp.nvidia.errors")
 
 
-def test_default_query_request_uses_governed_deepseek_profile() -> None:
+def test_default_query_request_uses_governed_lightning_profile() -> None:
     protocol = _protocol()
 
     prepared = protocol.prepare_nvidia_query_request("Explain one invariant.")
     body = json.loads(prepared.request.body_bytes)
 
-    assert prepared.model == "deepseek-v4-pro"
-    assert prepared.provider_model_id == DEEPSEEK
-    assert prepared.request.model_id == DEEPSEEK
+    assert prepared.model == "lightning"
+    assert prepared.provider_model_id == LIGHTNING
+    assert prepared.request.model_id == LIGHTNING
     assert body == {
-        "chat_template_kwargs": {"thinking": False},
-        "max_tokens": 16_384,
+        "chat_template_kwargs": {"enable_thinking": False},
+        "max_tokens": 4_096,
         "messages": [{"role": "user", "content": "Explain one invariant."}],
-        "model": DEEPSEEK,
+        "model": LIGHTNING,
         "n": 1,
-        "seed": 42,
         "stream": False,
-        "temperature": 1.0,
+        "temperature": 0.2,
         "top_p": 0.95,
     }
     assert len(prepared.request.request_sha256) == 64
@@ -120,3 +119,29 @@ def test_system_prompt_is_bounded_before_request_construction() -> None:
 
     assert caught.value.code is errors.NvidiaErrorCode.INVALID_REQUEST
     assert caught.value.provider_started is False
+
+
+def test_deepseek_query_request_uses_top_level_reasoning_effort() -> None:
+    protocol = _protocol()
+
+    prepared = protocol.prepare_nvidia_query_request(
+        "Return OK.",
+        model="deepseek-v4-pro",
+    )
+    body = json.loads(prepared.request.body_bytes)
+
+    assert prepared.model == "deepseek-v4-pro"
+    assert prepared.provider_model_id == DEEPSEEK
+    assert body == {
+        "max_tokens": 16_384,
+        "messages": [{"role": "user", "content": "Return OK."}],
+        "model": DEEPSEEK,
+        "n": 1,
+        "reasoning_effort": "low",
+        "stream": False,
+        "temperature": 1.0,
+        "top_p": 0.95,
+    }
+    assert "chat_template_kwargs" not in body
+    assert "seed" not in body
+    assert '"thinking"' not in json.dumps(body, sort_keys=True)

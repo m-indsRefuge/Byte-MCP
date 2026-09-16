@@ -30,6 +30,7 @@ class NvidiaReviewModelProfile:
     max_tokens: int
     seed: int | None
     chat_template_kwargs: Mapping[str, object]
+    reasoning_effort: str | None
 
 
 NVIDIA_REVIEW_MODEL_PROFILES = MappingProxyType(
@@ -41,6 +42,7 @@ NVIDIA_REVIEW_MODEL_PROFILES = MappingProxyType(
             max_tokens=model.review_profile.max_tokens,
             seed=model.review_profile.seed,
             chat_template_kwargs=model.review_profile.chat_template_kwargs,
+            reasoning_effort=model.review_profile.reasoning_effort,
         )
         for model in NVIDIA_MODELS.values()
         if model.review_enabled and model.review_profile is not None
@@ -125,7 +127,6 @@ def prepare_nvidia_review_request(
         f"{packet_text}"
     )
     body: dict[str, object] = {
-        "chat_template_kwargs": dict(profile.chat_template_kwargs),
         "max_tokens": profile.max_tokens,
         "messages": [
             {"content": _SYSTEM_PROMPT, "role": "system"},
@@ -138,6 +139,10 @@ def prepare_nvidia_review_request(
         "top_p": profile.top_p,
     }
 
+    if profile.chat_template_kwargs:
+        body["chat_template_kwargs"] = dict(profile.chat_template_kwargs)
+    if profile.reasoning_effort is not None:
+        body["reasoning_effort"] = profile.reasoning_effort
     if profile.seed is not None:
         body["seed"] = profile.seed
 

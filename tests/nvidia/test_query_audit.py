@@ -122,3 +122,63 @@ def test_audit_failure_after_provider_success_never_reinvokes_executor() -> None
         )
 
     assert calls == 1
+
+
+def test_provider_rejection_preserves_http_status_in_safe_audit(tmp_path: Path) -> None:
+    service = _module("byte_mcp.nvidia.query_service")
+    settings = _module("byte_mcp.nvidia.settings")
+    errors = _module("byte_mcp.nvidia.errors")
+    providers = _module("byte_mcp.providers")
+    audit_path = tmp_path / "audit.jsonl"
+    timestamp = "2026-09-16T04:30:00+00:00"
+
+    async def executor(request, context, _settings):
+        observation = providers.ProviderTransportObservation(
+            response_headers_received=True,
+            response_headers_at=timestamp,
+            response_headers_elapsed_ms=10,
+            http_status_code=400,
+            response_body_started=True,
+            first_body_at=timestamp,
+            first_body_elapsed_ms=11,
+            last_body_at=timestamp,
+            last_body_elapsed_ms=11,
+            decoded_body_bytes_received=32,
+            provider_started_at=context.provider_started_at,
+            provider_finished_at=timestamp,
+            elapsed_ms=12,
+            transport_failure_kind=None,
+            trust_env_enabled=True,
+            proxy_environment_present=False,
+        )
+        raise errors.NvidiaChatError(
+            kind=errors.NvidiaChatFailureKind.REQUEST,
+            attempt_outcome=providers.ProviderAttemptOutcome.REJECTED,
+            transport_observation=observation,
+            request_sha256=request.request_sha256,
+        )
+
+    with pytest.raises(errors.NvidiaPlatformError) as caught:
+        asyncio.run(
+            service.execute_nvidia_query(
+                "hello",
+                model="lightning",
+                settings_loader=lambda: settings.NvidiaHostedSettings(api_key=KEY_SECRET),
+                executor=executor,
+                audit=AuditLog(audit_path),
+            )
+        )
+
+    assert caught.value.code is errors.NvidiaErrorCode.INVALID_REQUEST
+    assert caught.value.provider_started is True
+    assert caught.value.status_code == 400
+
+    event = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert event["action"] == "nvidia_query"
+    assert event["outcome"] == "error"
+    assert event["provider_started"] is True
+    assert event["error_code"] == "INVALID_REQUEST"
+    assert event["status_code"] == 400
+    assert PROMPT_SECRET not in json.dumps(event)
+    assert RESPONSE_SECRET not in json.dumps(event)
+    assert KEY_SECRET not in json.dumps(event)

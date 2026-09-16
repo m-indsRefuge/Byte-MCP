@@ -12,7 +12,7 @@ REPO_ROOT = Path(byte_mcp.__file__).resolve().parents[2]
 FAILURE_MAP = REPO_ROOT / "FAILURE_MAP.md"
 QUALIFICATION_SCRIPT = REPO_ROOT / "scripts/nvidia_n05_offline_qualification.py"
 QUALIFICATION_ARTIFACT = REPO_ROOT / "qualification/nvidia-n05/offline-qualification.json"
-REQUIRED_FAILURE_IDS = tuple(f"F{number:02d}" for number in range(1, 21))
+REQUIRED_FAILURE_IDS = tuple(f"F{number:02d}" for number in range(1, 22))
 
 
 def _qualification_module():
@@ -41,6 +41,7 @@ def test_failure_map_covers_all_n05_failure_boundaries() -> None:
         "Prompt text, response text, credentials",
         "OUTCOME_UNKNOWN",
         "append-only evidence",
+        "Hosted request dialect drift",
     ):
         assert required in text
 

@@ -103,7 +103,6 @@ def prepare_nvidia_query_request(
     )
 
     body: dict[str, object] = {
-        "chat_template_kwargs": dict(profile.chat_template_kwargs),
         "max_tokens": profile.max_tokens,
         "messages": [
             {
@@ -118,6 +117,10 @@ def prepare_nvidia_query_request(
         "temperature": profile.temperature,
         "top_p": profile.top_p,
     }
+    if profile.chat_template_kwargs:
+        body["chat_template_kwargs"] = dict(profile.chat_template_kwargs)
+    if profile.reasoning_effort is not None:
+        body["reasoning_effort"] = profile.reasoning_effort
     if profile.seed is not None:
         body["seed"] = profile.seed
 

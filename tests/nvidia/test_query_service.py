@@ -113,8 +113,8 @@ def test_success_executes_exactly_once_and_returns_bounded_result() -> None:
     )
 
     assert calls == {"settings": 1, "executor": 1}
-    assert result.model == "deepseek-v4-pro"
-    assert result.provider_model_id == "deepseek-ai/deepseek-v4-pro-0813"
+    assert result.model == "lightning"
+    assert result.provider_model_id == "nvidia/nemotron-3.5-lightning-30b-a3b"
     assert result.response == "OK"
     assert result.finish_reason == "stop"
     assert result.response_id == "chatcmpl-query-test"

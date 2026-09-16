@@ -106,10 +106,9 @@ def test_n04_exact_model_profiles_are_bound_into_canonical_request_bytes() -> No
     assert deepseek_body["temperature"] == 1.0
     assert deepseek_body["top_p"] == 0.95
     assert deepseek_body["max_tokens"] == 16384
-    assert deepseek_body["seed"] == 42
-    assert deepseek_body["chat_template_kwargs"] == {
-        "thinking": False,
-    }
+    assert deepseek_body["reasoning_effort"] == "low"
+    assert "seed" not in deepseek_body
+    assert "chat_template_kwargs" not in deepseek_body
 
 
 def test_n04_unknown_review_model_is_rejected_locally() -> None:

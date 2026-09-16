@@ -62,6 +62,7 @@ def test_n04_profiles_freeze_exact_provider_controls() -> None:
     assert dict(lightning.chat_template_kwargs) == {
         "enable_thinking": False,
     }
+    assert lightning.reasoning_effort is None
 
     deepseek = profiles[DEEPSEEK]
 
@@ -69,10 +70,9 @@ def test_n04_profiles_freeze_exact_provider_controls() -> None:
     assert deepseek.temperature == 1.0
     assert deepseek.top_p == 0.95
     assert deepseek.max_tokens == 16384
-    assert deepseek.seed == 42
-    assert dict(deepseek.chat_template_kwargs) == {
-        "thinking": False,
-    }
+    assert deepseek.seed is None
+    assert dict(deepseek.chat_template_kwargs) == {}
+    assert deepseek.reasoning_effort == "low"
 
 
 def test_n04_review_request_requires_explicit_model_id() -> None:

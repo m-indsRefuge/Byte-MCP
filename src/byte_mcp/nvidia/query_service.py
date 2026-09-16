@@ -91,12 +91,14 @@ def _platform_error(
     code: NvidiaErrorCode,
     message: str,
     provider_started: bool,
+    status_code: int | None = None,
 ) -> NvidiaPlatformError:
     return NvidiaPlatformError(
         code=code,
         message=message,
         provider_started=provider_started,
         safe_to_invoke_fresh=True,
+        status_code=status_code,
     )
 
 
@@ -262,6 +264,7 @@ async def execute_nvidia_query(
             code=_chat_error_code(error),
             message="NVIDIA query failed",
             provider_started=_started(error.attempt_outcome),
+            status_code=error.transport_observation.http_status_code,
         )
         _audit_event(
             audit,
@@ -271,6 +274,7 @@ async def execute_nvidia_query(
             provider_started=platform_error.provider_started,
             outcome="error",
             error_code=platform_error.code.value,
+            status_code=platform_error.status_code,
         )
         raise platform_error from error
     except ProviderTransportError as error:
@@ -278,6 +282,7 @@ async def execute_nvidia_query(
             code=NvidiaErrorCode.TRANSPORT_FAILED,
             message="NVIDIA transport failed",
             provider_started=_started(error.attempt_outcome),
+            status_code=error.transport_observation.http_status_code,
         )
         _audit_event(
             audit,
@@ -287,6 +292,7 @@ async def execute_nvidia_query(
             provider_started=platform_error.provider_started,
             outcome="error",
             error_code=platform_error.code.value,
+            status_code=platform_error.status_code,
         )
         raise platform_error from error
 

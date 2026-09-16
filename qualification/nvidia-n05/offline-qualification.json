@@ -18,6 +18,8 @@
     "coverage_file_test_review_protocol.py": "PASS",
     "coverage_file_test_review_service_transmit.py": "PASS",
     "credential_validation_deferred": "PASS",
+    "deepseek_no_legacy_thinking_field": "PASS",
+    "deepseek_reasoning_effort_low": "PASS",
     "failure_map_f01": "PASS",
     "failure_map_f02": "PASS",
     "failure_map_f03": "PASS",
@@ -38,6 +40,8 @@
     "failure_map_f18": "PASS",
     "failure_map_f19": "PASS",
     "failure_map_f20": "PASS",
+    "failure_map_f21": "PASS",
+    "lightning_nested_thinking_control": "PASS",
     "mcp_surface_exact": "PASS",
     "offline_qualification": "PASS",
     "qualification_no_hosted_settings_loader": "PASS",
@@ -50,13 +54,13 @@
     "server_no_static_nvidia_import": "PASS"
   },
   "credential_status": "DEFERRED_TO_TRANSMIT",
-  "default_query_alias": "deepseek-v4-pro",
+  "default_query_alias": "lightning",
   "expected_mcp_surface_names": [
     "nvidia_get_review",
     "nvidia_query",
     "nvidia_review"
   ],
-  "failure_map_sha256": "97bf5edc3127cbe7ccc4d500b030d67666442fdf4aa001dd024002e26b6c9deb",
+  "failure_map_sha256": "9838d665842746f66101556fd3ac7b0a4c5fd246e3ad3d757691efeca449a3e1",
   "provider_calls": 0,
   "query_qualification": {
     "deepseek-v4-pro": "OFFLINE_QUALIFIED",

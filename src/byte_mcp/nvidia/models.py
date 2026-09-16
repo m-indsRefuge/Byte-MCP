@@ -20,6 +20,7 @@ class NvidiaExecutionProfile:
     max_tokens: int
     seed: int | None
     chat_template_kwargs: Mapping[str, object]
+    reasoning_effort: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +35,7 @@ class NvidiaModelDefinition:
     review_qualification: NvidiaQualificationState
 
 
-NVIDIA_DEFAULT_QUERY_MODEL = "deepseek-v4-pro"
+NVIDIA_DEFAULT_QUERY_MODEL = "lightning"
 
 
 def _profile(
@@ -44,13 +45,17 @@ def _profile(
     max_tokens: int,
     seed: int | None,
     chat_template_kwargs: Mapping[str, object],
+    reasoning_effort: str | None = None,
 ) -> NvidiaExecutionProfile:
+    if reasoning_effort not in {None, "low", "high", "max"}:
+        raise ValueError("reasoning_effort is invalid")
     return NvidiaExecutionProfile(
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
         seed=seed,
         chat_template_kwargs=MappingProxyType(dict(chat_template_kwargs)),
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -78,20 +83,18 @@ _DEEPSEEK_QUERY_PROFILE = _profile(
     temperature=1.0,
     top_p=0.95,
     max_tokens=16_384,
-    seed=42,
-    chat_template_kwargs={
-        "thinking": False,
-    },
+    seed=None,
+    chat_template_kwargs={},
+    reasoning_effort="low",
 )
 
 _DEEPSEEK_REVIEW_PROFILE = _profile(
     temperature=1.0,
     top_p=0.95,
     max_tokens=16_384,
-    seed=42,
-    chat_template_kwargs={
-        "thinking": False,
-    },
+    seed=None,
+    chat_template_kwargs={},
+    reasoning_effort="low",
 )
 
 

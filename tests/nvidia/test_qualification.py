@@ -25,7 +25,7 @@ def test_readiness_is_provider_free_and_secret_free(monkeypatch) -> None:
     payload = report.to_dict()
 
     assert payload["endpoint"] == "https://integrate.api.nvidia.com/v1/chat/completions"
-    assert payload["default_query_alias"] == "deepseek-v4-pro"
+    assert payload["default_query_alias"] == "lightning"
     assert payload["enabled_query_aliases"] == ("deepseek-v4-pro", "lightning")
     assert payload["enabled_review_aliases"] == ("deepseek-v4-pro", "lightning")
     assert payload["credential_status"] == "DEFERRED_TO_TRANSMIT"
@@ -79,7 +79,7 @@ def test_offline_qualification_is_deterministic_and_provider_free(monkeypatch) -
     assert receipt == {
         "status": "PASS",
         "provider_calls": 0,
-        "default_query_alias": "deepseek-v4-pro",
+        "default_query_alias": "lightning",
         "models": {
             "deepseek-v4-pro": "PASS",
             "lightning": "PASS",

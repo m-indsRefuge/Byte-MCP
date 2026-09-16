@@ -18,15 +18,15 @@ def test_registry_has_exact_initial_aliases() -> None:
     }
 
 
-def test_default_query_model_is_deepseek_v4_pro() -> None:
+def test_default_query_model_is_lightning() -> None:
     models = _models()
 
-    assert models.NVIDIA_DEFAULT_QUERY_MODEL == "deepseek-v4-pro"
+    assert models.NVIDIA_DEFAULT_QUERY_MODEL == "lightning"
 
     model = models.resolve_query_model(None)
 
-    assert model.alias == "deepseek-v4-pro"
-    assert model.provider_model_id == "deepseek-ai/deepseek-v4-pro-0813"
+    assert model.alias == "lightning"
+    assert model.provider_model_id == "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
 def test_lightning_has_exact_provider_identity() -> None:
@@ -101,6 +101,7 @@ def test_lightning_review_profile_preserves_n04_request_controls() -> None:
     assert dict(profile.chat_template_kwargs) == {
         "enable_thinking": False,
     }
+    assert profile.reasoning_effort is None
 
 
 def test_deepseek_review_profile_preserves_n04_request_controls() -> None:
@@ -111,10 +112,9 @@ def test_deepseek_review_profile_preserves_n04_request_controls() -> None:
     assert profile.temperature == 1.0
     assert profile.top_p == 0.95
     assert profile.max_tokens == 16_384
-    assert profile.seed == 42
-    assert dict(profile.chat_template_kwargs) == {
-        "thinking": False,
-    }
+    assert profile.seed is None
+    assert dict(profile.chat_template_kwargs) == {}
+    assert profile.reasoning_effort == "low"
 
 
 def test_lightning_query_profile_is_deterministic() -> None:
@@ -129,6 +129,7 @@ def test_lightning_query_profile_is_deterministic() -> None:
     assert dict(profile.chat_template_kwargs) == {
         "enable_thinking": False,
     }
+    assert profile.reasoning_effort is None
 
 
 def test_deepseek_query_profile_is_deterministic() -> None:
@@ -139,10 +140,9 @@ def test_deepseek_query_profile_is_deterministic() -> None:
     assert profile.temperature == 1.0
     assert profile.top_p == 0.95
     assert profile.max_tokens == 16_384
-    assert profile.seed == 42
-    assert dict(profile.chat_template_kwargs) == {
-        "thinking": False,
-    }
+    assert profile.seed is None
+    assert dict(profile.chat_template_kwargs) == {}
+    assert profile.reasoning_effort == "low"
 
 
 def test_qualification_state_vocabulary_is_exact() -> None:

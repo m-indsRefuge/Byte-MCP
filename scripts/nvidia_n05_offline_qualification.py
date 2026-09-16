@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from byte_mcp.nvidia.qualification import inspect_nvidia_readiness, qualify_nvidia_offline
+from byte_mcp.nvidia.query_protocol import prepare_nvidia_query_request
 
 SCHEMA_VERSION = "nvidia-n05-offline-qualification-v1"
 
-REQUIRED_FAILURE_IDS = tuple(f"F{number:02d}" for number in range(1, 21))
+REQUIRED_FAILURE_IDS = tuple(f"F{number:02d}" for number in range(1, 22))
 
 REQUIRED_COVERAGE_FILES = (
     "tests/nvidia/test_chat_execution.py",
@@ -117,6 +118,40 @@ def _failure_map_checks(repo_root: Path) -> tuple[dict[str, str], str]:
     return checks, _sha256(path)
 
 
+def _dialect_checks() -> dict[str, str]:
+    lightning = json.loads(
+        prepare_nvidia_query_request(
+            "offline-dialect-probe",
+            model="lightning",
+        ).request.body_bytes
+    )
+    deepseek = json.loads(
+        prepare_nvidia_query_request(
+            "offline-dialect-probe",
+            model="deepseek-v4-pro",
+        ).request.body_bytes
+    )
+
+    return {
+        "lightning_nested_thinking_control": (
+            "PASS"
+            if lightning.get("chat_template_kwargs") == {"enable_thinking": False}
+            and "reasoning_effort" not in lightning
+            else "FAIL"
+        ),
+        "deepseek_reasoning_effort_low": (
+            "PASS"
+            if deepseek.get("reasoning_effort") == "low"
+            and "chat_template_kwargs" not in deepseek
+            and "seed" not in deepseek
+            else "FAIL"
+        ),
+        "deepseek_no_legacy_thinking_field": (
+            "PASS" if '"thinking"' not in json.dumps(deepseek, sort_keys=True) else "FAIL"
+        ),
+    }
+
+
 def build_report(repo_root: Path) -> dict[str, Any]:
     repo_root = repo_root.resolve()
 
@@ -124,6 +159,7 @@ def build_report(repo_root: Path) -> dict[str, Any]:
     readiness = inspect_nvidia_readiness().to_dict()
 
     checks = _governance_checks(repo_root)
+    checks.update(_dialect_checks())
     failure_checks, failure_map_sha256 = _failure_map_checks(repo_root)
     checks.update(failure_checks)
 
