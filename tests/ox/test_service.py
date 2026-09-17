@@ -9,7 +9,7 @@ import byte_mcp.ox.service as ox_service
 import httpx
 import pytest
 
-from byte_mcp.errors import OXBundleError, OXConfigurationError, OXEvidenceError, OXScopeError
+from byte_mcp.errors import OXBundleError, OXConfigurationError, OXEvidenceError, OXRepositoryError
 from byte_mcp.ox.evidence import OXEvidenceStore
 from byte_mcp.ox.models import OXPreparedReview, OXReviewMode, OXReviewScope
 from byte_mcp.ox.scope import OXResolvedRepository, OXScopeResolver
@@ -322,7 +322,7 @@ def test_preclaim_build_failures_do_not_allocate_send_authority(
     assert not reviews_root.exists() or not any(reviews_root.iterdir())
 
 
-def test_invalid_scope_is_preclaim_and_zero_transport(tmp_path: Path) -> None:
+def test_invalid_repository_is_preclaim_and_zero_transport(tmp_path: Path) -> None:
     service, _, evidence_root = _service(tmp_path)
     calls = 0
 
@@ -331,7 +331,7 @@ def test_invalid_scope_is_preclaim_and_zero_transport(tmp_path: Path) -> None:
         calls += 1
         return httpx.Response(200, content=_response_body("unexpected"))
 
-    with pytest.raises(OXScopeError):
+    with pytest.raises(OXRepositoryError):
         _review(
             service,
             repository="../repo",
