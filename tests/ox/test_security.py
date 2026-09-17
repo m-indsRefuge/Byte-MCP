@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
+from pathlib import Path
 
+import httpx
 import pytest
 
 from byte_mcp.errors import OXBundleError
+from byte_mcp.ox.evidence import OXEvidenceStore
 from byte_mcp.ox.packet import prepare_ox_request, validate_provider_bound_safety
+from byte_mcp.ox.scope import OXScopeResolver
+from byte_mcp.ox.service import OXReviewService
+from byte_mcp.ox.settings import OXSettings
 from byte_mcp.providers.requests import validate_prepared_provider_request_integrity
 
 _PRIVATE_KEY_MARKERS = (
@@ -80,3 +87,46 @@ def test_prepared_request_identity_tampering_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="prepared request integrity is invalid"):
         validate_prepared_provider_request_integrity(tampered)
+
+
+def test_service_blocks_exact_credential_in_frozen_source_before_send(tmp_path: Path) -> None:
+    credential = "vercel-secret-credential-SERVICE-BOUNDARY"
+    projects = tmp_path / "projects"
+    repository = projects / "repo"
+    repository.mkdir(parents=True)
+    (repository / "config.txt").write_text(
+        f"credential-like test fixture: {credential}\n",
+        encoding="utf-8",
+    )
+    evidence_root = tmp_path / "evidence"
+    service = OXReviewService(
+        scope_resolver=OXScopeResolver(projects),
+        evidence_store=OXEvidenceStore(evidence_root),
+        settings_loader=lambda: OXSettings(
+            api_key=credential,
+            evidence_root=evidence_root,
+        ),
+    )
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=b"unexpected")
+
+    with pytest.raises(OXBundleError) as raised:
+        asyncio.run(
+            service.review(
+                repository="repo",
+                mode="FULL_REPOSITORY",
+                paths=None,
+                objective="Review the frozen repository.",
+                transport=httpx.MockTransport(handler),
+            )
+        )
+
+    assert calls == 0
+    assert credential not in str(raised.value)
+    review_dir = evidence_root / "reviews" / "OX-000001"
+    assert (review_dir / "review.json").is_file()
+    assert not (review_dir / "send.claim").exists()
