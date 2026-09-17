@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 
+import byte_mcp.ox.client as ox_client
 import httpx
 import pytest
-
-import byte_mcp.ox.client as ox_client
 from byte_mcp.errors import OXProtocolError
 from byte_mcp.ox.client import execute_ox_transport, extract_ox_review_text
 from byte_mcp.ox.packet import prepare_ox_request
@@ -254,7 +253,14 @@ def test_extract_ox_review_text_preserves_arbitrary_free_form_review_exactly() -
         b"[]",
         b"{}",
         json.dumps({"choices": []}).encode(),
-        json.dumps({"choices": [{"message": {"role": "assistant", "content": "one"}}, {"message": {"role": "assistant", "content": "two"}}]}).encode(),
+        json.dumps(
+            {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "one"}},
+                    {"message": {"role": "assistant", "content": "two"}},
+                ]
+            }
+        ).encode(),
         json.dumps({"choices": [42]}).encode(),
         json.dumps({"choices": [{"message": []}]}).encode(),
         json.dumps({"choices": [{"message": {"content": "missing role"}}]}).encode(),
