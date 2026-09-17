@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "scripts"
 
@@ -138,6 +137,7 @@ def test_n06_start_launcher_integrates_nvidia_module() -> None:
     assert text.index("Launcher.Wolfram.ps1") < text.index(
         "Launcher.Nvidia.ps1"
     )
+
 
 def test_n06_python_layer_does_not_read_dpapi_blob() -> None:
     joined = "\n".join(
@@ -278,6 +278,7 @@ finally {{
         assert list(directory.glob("*.tmp")) == []
         assert list(directory.glob("*.tmp.*")) == []
 
+
 def test_n06_operator_scripts_dot_source_launcher_module() -> None:
     for path in (SETUP_NVIDIA, TEST_NVIDIA, REMOVE_NVIDIA):
         text = read_text_if_exists(path)
@@ -329,6 +330,7 @@ def test_n06_remove_is_idempotent_by_guarding_file_removal() -> None:
     assert "Remove-Item" in text
     assert "CREDENTIAL_FILE_PRESENT=NO" in text
     assert "PROVIDER_CALLS=0" in text
+
 
 def test_n06_nvidia_launcher_defines_final_server_wrappers() -> None:
     text = read_text(LAUNCHER_NVIDIA)
