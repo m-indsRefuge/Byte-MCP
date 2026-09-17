@@ -180,9 +180,14 @@ class _SharedReviewStore(OXEvidenceStore):
         self._shared_review_id = super().allocate_review_id()
         self._barrier = barrier
         self._claim_settled = threading.Event()
+        self._persist_lock = threading.Lock()
 
     def allocate_review_id(self) -> str:
         return self._shared_review_id
+
+    def persist_prepared(self, prepared: OXPreparedReview) -> None:
+        with self._persist_lock:
+            super().persist_prepared(prepared)
 
     def claim_send(self, review_id: str, request_sha256: str, claimed_at: str) -> bool:
         self._barrier.wait(timeout=5)
