@@ -20,9 +20,7 @@ _REVIEW_ID_RE = re.compile(r"^OX-(\d{6})$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _EVIDENCE_SCHEMA = "ox-review-evidence-v1"
 _SNAPSHOT_SCHEMA = "ox-snapshot-evidence-v1"
-_APPROVED_ATTEMPT_OUTCOMES = frozenset(
-    {"NOT_SENT", "REJECTED", "COMPLETED", "OUTCOME_UNKNOWN"}
-)
+_APPROVED_ATTEMPT_OUTCOMES = frozenset({"NOT_SENT", "REJECTED", "COMPLETED", "OUTCOME_UNKNOWN"})
 _TERMINAL_METADATA_KEYS = frozenset(
     {
         "state",
@@ -313,7 +311,9 @@ class OXEvidenceStore:
         if review_path.exists():
             existing = _read_json(review_path)
             if not _same_prepared_identity(existing, review_projection):
-                raise OXEvidenceError("OX prepared evidence identity does not match existing review.")
+                raise OXEvidenceError(
+                    "OX prepared evidence identity does not match existing review."
+                )
             return
         _write_atomic(review_path, _canonical_json(review_projection))
 
@@ -330,7 +330,9 @@ class OXEvidenceStore:
 
         metadata = _read_json(directory / "review.json")
         if metadata.get("request_sha256") != request_sha256:
-            raise OXEvidenceError("OX send claim request identity does not match prepared evidence.")
+            raise OXEvidenceError(
+                "OX send claim request identity does not match prepared evidence."
+            )
         for required_name in ("snapshot.json", "packet.bin", "request.bin"):
             if not (directory / required_name).is_file():
                 raise OXEvidenceError("OX prepared evidence is incomplete.")
@@ -348,9 +350,7 @@ class OXEvidenceStore:
         if _sha256(packet_bytes) != packet_sha256 or _sha256(request_bytes) != payload_sha256:
             raise OXEvidenceError("OX prepared evidence integrity is invalid.")
 
-        claim_bytes = _canonical_json(
-            {"request_sha256": request_sha256, "claimed_at": claimed_at}
-        )
+        claim_bytes = _canonical_json({"request_sha256": request_sha256, "claimed_at": claimed_at})
         try:
             descriptor = os.open(
                 claim_path,
