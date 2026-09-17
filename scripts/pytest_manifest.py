@@ -1,8 +1,8 @@
 """Small pytest plugin for deterministic per-node qualification manifests."""
+
 import json
 import os
 import re
-import os
 from pathlib import Path
 
 _reports = {}
@@ -17,22 +17,37 @@ def _normalize_signature(value):
 
 
 def validate_manifest(payload, expected_sha=None):
-    required = {"predecessor_sha", "signature_version", "collected_count", "passed_count", "failed_count", "skipped_count", "nodes"}
+    required = {
+        "predecessor_sha",
+        "signature_version",
+        "collected_count",
+        "passed_count",
+        "failed_count",
+        "skipped_count",
+        "nodes",
+    }
     if not isinstance(payload, dict) or not required.issubset(payload):
         raise ValueError("malformed pytest manifest")
     if expected_sha is not None and payload["predecessor_sha"] != expected_sha:
         raise ValueError("predecessor SHA mismatch")
     nodes = payload["nodes"]
-    if not isinstance(nodes, list) or len({n.get("nodeid") for n in nodes if isinstance(n, dict)}) != len(nodes):
+    nodeids = {n.get("nodeid") for n in nodes if isinstance(n, dict)}
+    if not isinstance(nodes, list) or len(nodeids) != len(nodes):
         raise ValueError("duplicate or malformed node records")
     counts = {o: 0 for o in OUTCOMES}
     for node in nodes:
-        if not isinstance(node, dict) or not isinstance(node.get("nodeid"), str) or node.get("outcome") not in OUTCOMES:
+        if (
+            not isinstance(node, dict)
+            or not isinstance(node.get("nodeid"), str)
+            or node.get("outcome") not in OUTCOMES
+        ):
             raise ValueError("malformed node record")
         counts[node["outcome"]] += 1
         if node["outcome"] == "failed" and not node.get("failure_signature"):
             raise ValueError("failed node lacks failure signature")
-    if payload["collected_count"] != len(nodes) or any(payload[f"{o}_count"] != counts[o] for o in OUTCOMES):
+    if payload["collected_count"] != len(nodes) or any(
+        payload[f"{o}_count"] != counts[o] for o in OUTCOMES
+    ):
         raise ValueError("manifest counts inconsistent")
     return payload
 
@@ -47,10 +62,17 @@ def compare_manifests(baseline, candidate):
         actual = current.get(node["nodeid"])
         if actual is None or actual["outcome"] != node["outcome"]:
             raise ValueError(f"predecessor outcome mismatch: {node['nodeid']}")
-        if node["outcome"] == "failed" and actual["failure_signature"] != node["failure_signature"]:
+        if (
+            node["outcome"] == "failed"
+            and actual["failure_signature"] != node["failure_signature"]
+        ):
             raise ValueError(f"failure signature drift: {node['nodeid']}")
     inherited = {n["nodeid"] for n in baseline["nodes"]}
-    extras = [n["nodeid"] for n in candidate["nodes"] if n["nodeid"] not in inherited and n["outcome"] == "failed"]
+    extras = [
+        n["nodeid"]
+        for n in candidate["nodes"]
+        if n["nodeid"] not in inherited and n["outcome"] == "failed"
+    ]
     if extras:
         raise ValueError(f"candidate-only failures: {', '.join(extras)}")
     return True
@@ -85,7 +107,10 @@ def pytest_sessionfinish(session, exitstatus):
     if not destination:
         return
     nodes = [_reports[k] for k in sorted(_reports)]
-    counts = {o: sum(n["outcome"] == o for n in nodes) for o in ("passed", "failed", "skipped")}
+    counts = {
+        o: sum(n["outcome"] == o for n in nodes)
+        for o in ("passed", "failed", "skipped")
+    }
     payload = {
         "predecessor_sha": os.environ.get("BYTE_PREDECESSOR_SHA", ""),
         "signature_version": SIGNATURE_VERSION,
@@ -95,4 +120,7 @@ def pytest_sessionfinish(session, exitstatus):
         "skipped_count": counts["skipped"],
         "nodes": nodes,
     }
-    Path(destination).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    Path(destination).write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
