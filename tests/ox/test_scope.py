@@ -2,12 +2,12 @@ import json
 from pathlib import Path
 
 import pytest
+from byte_mcp.ox.scope import OXScopeResolver
 
 from byte_mcp import security
 from byte_mcp.errors import OXRepositoryError, OXScopeError
 from byte_mcp.ox import scope as scope_module
 from byte_mcp.ox.models import OXReviewMode
-from byte_mcp.ox.scope import OXScopeResolver
 
 
 def _projects_with_repository(tmp_path: Path) -> tuple[Path, Path]:
