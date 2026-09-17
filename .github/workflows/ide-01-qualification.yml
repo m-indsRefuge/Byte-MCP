@@ -1,0 +1,354 @@
+name: IDE-01 production-lineage qualification
+
+on:
+  push:
+    branches:
+      - ops/ide-01-qualification
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IDE01_PREDECESSOR_SHA: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
+  IDE01_CANDIDATE_SHA: 03b3e3032d2ade30f8c704b16e7d304e6d11d822
+  PYTHONHASHSEED: "0"
+
+jobs:
+  qualification:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout production predecessor
+        uses: actions/checkout@v4
+        with:
+          ref: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
+          path: predecessor
+          fetch-depth: 1
+
+      - name: Checkout frozen IDE-01 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 03b3e3032d2ade30f8c704b16e7d304e6d11d822
+          path: candidate
+          fetch-depth: 1
+
+      - name: Set up Python 3.12.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12.10
+
+      - name: Prepare isolated qualification environments
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $PWD.Path
+          $qualification = Join-Path $root 'qualification'
+          New-Item -ItemType Directory -Force -Path $qualification | Out-Null
+
+          $predVenv = Join-Path $qualification 'predecessor.venv'
+          $candVenv = Join-Path $qualification 'candidate.venv'
+          python -m venv $predVenv
+          python -m venv $candVenv
+
+          $predPython = Join-Path $predVenv 'Scripts/python.exe'
+          $candPython = Join-Path $candVenv 'Scripts/python.exe'
+
+          Push-Location (Join-Path $root 'predecessor')
+          try {
+            & $predPython -m pip install --upgrade pip
+            & $predPython -m pip install -e '.[dev]'
+            & $predPython -m pip check
+            if ($LASTEXITCODE -ne 0) { throw 'predecessor environment preparation failed' }
+          }
+          finally { Pop-Location }
+
+          Push-Location (Join-Path $root 'candidate')
+          try {
+            & $candPython -m pip install --upgrade pip
+            & $candPython -m pip install -e '.[dev]'
+            & $candPython -m pip check
+            if ($LASTEXITCODE -ne 0) { throw 'candidate environment preparation failed' }
+          }
+          finally { Pop-Location }
+
+      - name: Run IDE-01 focused gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:NVIDIA_API_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:WOLFRAM_API_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:OX_API_KEY -ErrorAction SilentlyContinue
+
+          $root = $PWD.Path
+          $candidate = Join-Path $root 'candidate'
+          $candPython = Join-Path $root 'qualification/candidate.venv/Scripts/python.exe'
+
+          Push-Location $candidate
+          try {
+            & $candPython -m compileall -q src tests scripts/mcp_smoke_test.py scripts/wolfram_qualification.py scripts/wolfram_native_calibration.py
+            if ($LASTEXITCODE -ne 0) { throw 'COMPILE=FAIL' }
+            Write-Host 'COMPILE=PASS'
+
+            & $candPython -m ruff check .
+            if ($LASTEXITCODE -ne 0) { throw 'RUFF=FAIL' }
+            Write-Host 'RUFF=PASS'
+
+            & $candPython -m pytest -q `
+              tests/test_vscode_context.py `
+              tests/test_specialist_integration.py `
+              tests/test_deployment_probe.py `
+              tests/test_nvidia_runtime_integration.py `
+              tests/ox/test_mcp_surface.py::test_v1_ox_tools_are_not_registered
+            if ($LASTEXITCODE -ne 0) { throw 'IDE01_FOCUSED_TESTS=FAIL' }
+            Write-Host 'IDE01_FOCUSED_TESTS=PASS'
+          }
+          finally { Pop-Location }
+
+      - name: Verify exact predecessor and candidate tool surfaces
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:NVIDIA_API_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:WOLFRAM_API_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:OX_API_KEY -ErrorAction SilentlyContinue
+
+          $root = $PWD.Path
+          $qualification = Join-Path $root 'qualification'
+          $predPython = Join-Path $qualification 'predecessor.venv/Scripts/python.exe'
+          $candPython = Join-Path $qualification 'candidate.venv/Scripts/python.exe'
+          $expectedPredecessor = @(
+            'fetch',
+            'list_directory',
+            'list_roots',
+            'nvidia_get_review',
+            'nvidia_query',
+            'nvidia_review',
+            'search',
+            'wolfram_query'
+          ) | Sort-Object
+          $expectedCandidate = @(
+            'fetch',
+            'list_directory',
+            'list_roots',
+            'nvidia_get_review',
+            'nvidia_query',
+            'nvidia_review',
+            'search',
+            'vscode_active_context',
+            'wolfram_query'
+          ) | Sort-Object
+
+          function Get-ToolSurface([string]$Name, [string]$Python) {
+            Push-Location (Join-Path $root $Name)
+            try {
+              $json = & $Python -B -c "import json; from byte_mcp import server; print(json.dumps(sorted(server.mcp._tool_manager._tools)))"
+              if ($LASTEXITCODE -ne 0) { throw "$Name tool discovery failed" }
+              return @($json | ConvertFrom-Json)
+            }
+            finally { Pop-Location }
+          }
+
+          $predecessorTools = @(Get-ToolSurface 'predecessor' $predPython)
+          $candidateTools = @(Get-ToolSurface 'candidate' $candPython)
+
+          if (($predecessorTools -join "`n") -ne ($expectedPredecessor -join "`n")) {
+            throw "predecessor tool surface mismatch: $($predecessorTools -join ',')"
+          }
+          if (($candidateTools -join "`n") -ne ($expectedCandidate -join "`n")) {
+            throw "candidate tool surface mismatch: $($candidateTools -join ',')"
+          }
+
+          $added = @($candidateTools | Where-Object { $_ -notin $predecessorTools })
+          $removed = @($predecessorTools | Where-Object { $_ -notin $candidateTools })
+          if (($added -join ',') -ne 'vscode_active_context') {
+            throw "unexpected added tools: $($added -join ',')"
+          }
+          if ($removed.Count -ne 0) {
+            throw "unexpected removed tools: $($removed -join ',')"
+          }
+
+          Write-Host "PREDECESSOR_TOOL_COUNT=$($predecessorTools.Count)"
+          Write-Host "PREDECESSOR_TOOL_SURFACE=$($predecessorTools -join ',')"
+          Write-Host "CANDIDATE_TOOL_COUNT=$($candidateTools.Count)"
+          Write-Host "CANDIDATE_TOOL_SURFACE=$($candidateTools -join ',')"
+          Write-Host "TOOL_DELTA_ADDED=$($added -join ',')"
+          Write-Host "TOOL_DELTA_REMOVED=$($removed -join ',')"
+
+      - name: Generate repo-root-v3 manifests and compare
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          Remove-Item Env:NVIDIA_API_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:WOLFRAM_API_KEY -ErrorAction SilentlyContinue
+          Remove-Item Env:OX_API_KEY -ErrorAction SilentlyContinue
+
+          $root = $PWD.Path
+          $qualification = Join-Path $root 'qualification'
+          $predecessor = Join-Path $root 'predecessor'
+          $candidate = Join-Path $root 'candidate'
+          $predPython = Join-Path $qualification 'predecessor.venv/Scripts/python.exe'
+          $candPython = Join-Path $qualification 'candidate.venv/Scripts/python.exe'
+          $collectorDir = Join-Path $candidate 'scripts'
+          $predManifest = Join-Path $qualification 'predecessor.json'
+          $candManifest = Join-Path $qualification 'candidate.json'
+
+          $env:PYTHONPATH = $collectorDir
+          $env:PYTHONHASHSEED = '0'
+          $env:BYTE_PREDECESSOR_SHA = '61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9'
+
+          $collectorHash = (Get-FileHash -Algorithm SHA256 (Join-Path $collectorDir 'pytest_manifest.py')).Hash
+          Write-Host "COLLECTOR_SHA256=$collectorHash"
+          Write-Host 'SIGNATURE_VERSION=repo-root-v3'
+
+          $env:BYTE_PYTEST_MANIFEST = $predManifest
+          Push-Location $predecessor
+          try {
+            & $predPython -m pytest tests -p no:cacheprovider --tb=no -q -p pytest_manifest
+            $predExit = $LASTEXITCODE
+          }
+          finally { Pop-Location }
+          if ($predExit -notin @(0, 1)) { throw "predecessor pytest infrastructure exit $predExit" }
+          if (-not (Test-Path -LiteralPath $predManifest -PathType Leaf)) { throw 'predecessor manifest missing' }
+
+          $env:BYTE_PYTEST_MANIFEST = $candManifest
+          Push-Location $candidate
+          try {
+            & $candPython -m pytest tests -p no:cacheprovider --tb=no -q -p pytest_manifest
+            $candExit = $LASTEXITCODE
+          }
+          finally { Pop-Location }
+          if ($candExit -notin @(0, 1)) { throw "candidate pytest infrastructure exit $candExit" }
+          if (-not (Test-Path -LiteralPath $candManifest -PathType Leaf)) { throw 'candidate manifest missing' }
+
+          $script = @'
+          import json
+          import sys
+          from pathlib import Path
+
+          collector_dir = Path(sys.argv[1])
+          predecessor_path = Path(sys.argv[2])
+          candidate_path = Path(sys.argv[3])
+          expected_sha = sys.argv[4]
+          sys.path.insert(0, str(collector_dir))
+          from pytest_manifest import compare_manifests, validate_manifest
+
+          predecessor = json.loads(predecessor_path.read_text(encoding="utf-8"))
+          candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+          validate_manifest(predecessor, expected_sha)
+          validate_manifest(candidate, expected_sha)
+          compare_manifests(predecessor, candidate)
+
+          pred_nodes = {node["nodeid"]: node for node in predecessor["nodes"]}
+          cand_nodes = {node["nodeid"]: node for node in candidate["nodes"]}
+          missing = sorted(set(pred_nodes) - set(cand_nodes))
+          passed_to_skipped = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "passed"
+              and cand_nodes.get(nodeid, {}).get("outcome") == "skipped"
+          )
+          passed_to_failed = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "passed"
+              and cand_nodes.get(nodeid, {}).get("outcome") == "failed"
+          )
+          signature_drift = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "failed"
+              and nodeid in cand_nodes
+              and cand_nodes[nodeid].get("outcome") == "failed"
+              and cand_nodes[nodeid].get("failure_signature") != node.get("failure_signature")
+          )
+          candidate_only_failures = sorted(
+              nodeid for nodeid, node in cand_nodes.items()
+              if nodeid not in pred_nodes and node["outcome"] == "failed"
+          )
+          new_passing = sorted(
+              nodeid for nodeid, node in cand_nodes.items()
+              if nodeid not in pred_nodes and node["outcome"] == "passed"
+          )
+          fixed_predecessor_failures = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "failed"
+              and cand_nodes.get(nodeid, {}).get("outcome") == "passed"
+          )
+
+          def counts(payload):
+              return (
+                  payload["collected_count"],
+                  payload["passed_count"],
+                  payload["failed_count"],
+                  payload["skipped_count"],
+              )
+
+          print(f"PREDECESSOR_COUNTS={counts(predecessor)}")
+          print(f"CANDIDATE_COUNTS={counts(candidate)}")
+          print(f"PREDECESSOR_MISSING_NODES={missing}")
+          print(f"PASSED_TO_SKIPPED={passed_to_skipped}")
+          print(f"PASSED_TO_FAILED={passed_to_failed}")
+          print(f"FAILURE_SIGNATURE_DRIFT={signature_drift}")
+          print(f"CANDIDATE_ONLY_FAILURES={candidate_only_failures}")
+          print(f"NEW_PASSING_TESTS={len(new_passing)}")
+          print(f"FIXED_PREDECESSOR_FAILURES={fixed_predecessor_failures}")
+          print("PYTEST_MANIFEST_DIFFERENTIAL=PASS")
+          '@
+          $compareScript = Join-Path $qualification 'compare_manifests.py'
+          Set-Content -LiteralPath $compareScript -Value $script -Encoding utf8
+          & $candPython $compareScript $collectorDir $predManifest $candManifest '61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9'
+          if ($LASTEXITCODE -ne 0) { throw 'structured predecessor differential qualification failed' }
+
+          Write-Host "PREDECESSOR_PYTEST_EXIT=$predExit"
+          Write-Host "CANDIDATE_PYTEST_EXIT=$candExit"
+          Write-Host "PREDECESSOR_MANIFEST_SHA256=$((Get-FileHash -Algorithm SHA256 $predManifest).Hash)"
+          Write-Host "CANDIDATE_MANIFEST_SHA256=$((Get-FileHash -Algorithm SHA256 $candManifest).Hash)"
+          Write-Host 'NVIDIA_PROVIDER_REQUESTS=0'
+          Write-Host 'OX_PROVIDER_REQUESTS=0'
+          Write-Host 'WOLFRAM_PROVIDER_REQUESTS=0'
+          Write-Host 'PRODUCTION_MUTATION=FALSE'
+          Write-Host 'IDE01_QUALIFICATION=PASS'
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ide-01-qualification-${{ github.sha }}
+          path: qualification/
+          if-no-files-found: warn
+          retention-days: 14
+
+  launcher-pester5:
+    name: IDE-01 candidate launcher Pester 5+
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 03b3e3032d2ade30f8c704b16e7d304e6d11d822
+      - name: Ensure Pester 5+
+        shell: pwsh
+        run: |
+          $pester = Get-Module -ListAvailable -Name Pester |
+            Where-Object { $_.Version -ge [version]'5.0.0' } |
+            Sort-Object Version -Descending |
+            Select-Object -First 1
+          if ($null -eq $pester) {
+            Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          }
+      - name: Launcher tests
+        shell: pwsh
+        run: .\scripts\Check-Launcher.ps1
+
+  launcher-pester6:
+    name: IDE-01 candidate launcher Pester 6
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 03b3e3032d2ade30f8c704b16e7d304e6d11d822
+      - name: Install Pester 6.1.0
+        shell: pwsh
+        run: Install-Module Pester -RequiredVersion 6.1.0 -Scope CurrentUser -Force -SkipPublisherCheck
+      - name: Launcher tests
+        shell: pwsh
+        run: .\scripts\Check-Launcher.ps1
