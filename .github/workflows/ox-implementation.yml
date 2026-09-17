@@ -35,6 +35,9 @@ jobs:
       - name: Task 2 model tests
         run: python -m pytest tests/ox/test_models.py -q
 
+      - name: Task 3 scope tests
+        run: python -m pytest tests/ox/test_scope.py -q
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -44,12 +47,16 @@ jobs:
       - name: Wolfram regression tests
         run: python -m pytest tests/wolfram -q
 
-      - name: Clean-room test lint
+      - name: Clean-room lint
         run: >-
           python -m ruff check
+          src/byte_mcp/ox/models.py
+          src/byte_mcp/ox/settings.py
+          src/byte_mcp/ox/scope.py
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
           tests/ox/test_models.py
+          tests/ox/test_scope.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
