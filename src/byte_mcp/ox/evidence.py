@@ -489,11 +489,19 @@ class OXEvidenceStore:
             raise OXEvidenceError("OX review projection is invalid.") from exc
 
         claim_path = directory / "send.claim"
-        claim = _read_json(claim_path) if claim_path.is_file() else None
+        claim_present = claim_path.is_file()
+        claim_trustworthy = True
+        claim: dict[str, object] | None = None
+        if claim_present:
+            try:
+                claim = _read_json(claim_path)
+            except OXEvidenceError:
+                claim = {}
+                claim_trustworthy = False
         response = self._read_optional_bytes(directory / "response.bin")
         actual_response_bytes = len(response) if response is not None else None
 
-        if claim is None:
+        if not claim_present:
             state = OXReviewState.READY
             provider_started_at = None
         else:
@@ -501,18 +509,22 @@ class OXEvidenceStore:
                 metadata.get("provider_started_at"),
                 "provider_started_at",
             )
-            if provider_started_at is None:
+            if provider_started_at is None and claim_trustworthy and claim is not None:
                 provider_started_at = _require_optional_text(
                     claim.get("claimed_at"),
                     "claimed_at",
                 )
             state = stored_state
-            if stored_state is OXReviewState.READY or (
-                stored_state is OXReviewState.COMPLETED
-                and not self._completion_is_trustworthy(
-                    directory,
-                    metadata,
-                    claim,
+            if (
+                not claim_trustworthy
+                or stored_state is OXReviewState.READY
+                or (
+                    stored_state is OXReviewState.COMPLETED
+                    and not self._completion_is_trustworthy(
+                        directory,
+                        metadata,
+                        claim or {},
+                    )
                 )
             ):
                 state = OXReviewState.OUTCOME_UNKNOWN
