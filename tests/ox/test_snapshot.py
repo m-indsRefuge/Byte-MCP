@@ -21,7 +21,7 @@ from byte_mcp.ox.snapshot import freeze_snapshot
 
 def _repository(tmp_path: Path) -> tuple[Path, OXResolvedRepository]:
     path = tmp_path / "example"
-    path.mkdir()
+    path.mkdir(parents=True)
     return path, OXResolvedRepository(alias="example", path=path.resolve())
 
 
