@@ -258,10 +258,10 @@ def test_ngc_key_alone_never_satisfies_hosted_credential(monkeypatch):
     assert NvidiaHostedSettings.load().api_key is None
 
 
-def test_invalid_nvidia_configuration_does_not_break_core_ox_or_wolfram_imports():
+def test_invalid_nvidia_configuration_does_not_break_core_or_wolfram_imports():
     env = os.environ.copy()
     env["BYTE_MCP_NVIDIA_CHAT_READ_TIMEOUT_SECONDS"] = "9999"
-    command = "import byte_mcp.service; import byte_mcp.ox.runtime; import byte_mcp.wolfram.runtime"
+    command = "import byte_mcp.service; import byte_mcp.wolfram.runtime"
     completed = subprocess.run(
         [sys.executable, "-c", command],
         env=env,
