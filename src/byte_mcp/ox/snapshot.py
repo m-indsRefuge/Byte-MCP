@@ -73,9 +73,7 @@ _SENSITIVE_FILE_NAMES = frozenset(
 
 _SENSITIVE_SUFFIXES = frozenset({".key", ".kdbx", ".p12", ".pem", ".pfx"})
 _DATABASE_SUFFIXES = frozenset({".db", ".db3", ".sqlite", ".sqlite3"})
-_ARCHIVE_SUFFIXES = frozenset(
-    {".7z", ".bz2", ".gz", ".rar", ".tar", ".tgz", ".xz", ".zip"}
-)
+_ARCHIVE_SUFFIXES = frozenset({".7z", ".bz2", ".gz", ".rar", ".tar", ".tgz", ".xz", ".zip"})
 _BINARY_OR_MEDIA_SUFFIXES = frozenset(
     {
         ".a",
