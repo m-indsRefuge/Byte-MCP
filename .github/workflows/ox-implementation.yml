@@ -111,6 +111,23 @@ jobs:
           src/byte_mcp/ox/evidence.py
           tests/ox/test_crash_and_concurrency.py
 
+      - name: Task 11 lazy runtime and MCP surface tests
+        run: python -m pytest tests/ox/test_mcp_surface.py -q
+
+      - name: Task 11 runtime and server quality gate
+        run: >-
+          python -m ruff check
+          src/byte_mcp/server.py
+          src/byte_mcp/ox/runtime.py
+          tests/ox/test_mcp_surface.py
+
+      - name: Task 11 runtime and server format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/server.py
+          src/byte_mcp/ox/runtime.py
+          tests/ox/test_mcp_surface.py
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -131,6 +148,7 @@ jobs:
           src/byte_mcp/ox/evidence.py
           src/byte_mcp/ox/client.py
           src/byte_mcp/ox/service.py
+          src/byte_mcp/ox/runtime.py
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
           tests/ox/test_models.py
