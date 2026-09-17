@@ -60,6 +60,41 @@ def test_normalizes_repr_escaped_checkout_root(monkeypatch) -> None:
     assert "has no attribute '_ox_service'" in signature
 
 
+def test_normalizes_unordered_pytest_set_diff_items() -> None:
+    predecessor = """
+E AssertionError: assert {'fetch', ...} == {'fetch'}
+Extra items in the left set:
+'nvidia_get_review'
+'nvidia_review'
+'nvidia_query'
+Full diff:
+{
+    'fetch',
++   'nvidia_get_review',
++   'nvidia_query',
++   'nvidia_review',
+}
+"""
+    candidate = """
+E AssertionError: assert {'fetch', ...} == {'fetch'}
+Extra items in the left set:
+'nvidia_query'
+'nvidia_review'
+'nvidia_get_review'
+Full diff:
+{
+    'fetch',
++   'nvidia_get_review',
++   'nvidia_query',
++   'nvidia_review',
+}
+"""
+
+    assert pytest_manifest._normalize_signature(predecessor) == pytest_manifest._normalize_signature(
+        candidate
+    )
+
+
 def test_comparator_rejects_signature_version_mismatch() -> None:
     baseline = _manifest([{"nodeid": "test_a", "outcome": "passed"}], version="v1")
     candidate = _manifest([{"nodeid": "test_a", "outcome": "passed"}], version="v2")
