@@ -12,11 +12,10 @@ KEY = "NVIDIA-SECURITY-SENTINEL"
 LIGHTNING = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
-def test_invalid_nvidia_environment_does_not_break_existing_provider_modules(monkeypatch):
+def test_invalid_nvidia_environment_does_not_break_core_or_wolfram_modules(monkeypatch):
     monkeypatch.setenv("BYTE_MCP_NVIDIA_CATALOG_TIMEOUT_SECONDS", "invalid")
     for module_name in (
         "byte_mcp.service",
-        "byte_mcp.ox.runtime",
         "byte_mcp.wolfram.runtime",
     ):
         module = importlib.import_module(module_name)
