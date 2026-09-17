@@ -382,7 +382,7 @@ def test_provider_free_local_paths_never_open_network_connections(
                 )
             oversized.unlink()
 
-            (repository / "credential.txt").write_text(
+            (repository / "ordinary.py").write_text(
                 credential,
                 encoding="utf-8",
             )
