@@ -310,9 +310,7 @@ def test_restart_projection_never_reconstructs_send_authority(
 
     assert result["state"] == expected_state.value
     if stage == "prepared":
-        assert not (
-            _review_directory(evidence_root, review_id) / "send.claim"
-        ).exists()
+        assert not (_review_directory(evidence_root, review_id) / "send.claim").exists()
     else:
         claim_path = _review_directory(evidence_root, review_id) / "send.claim"
         claim_bytes = claim_path.read_bytes()
