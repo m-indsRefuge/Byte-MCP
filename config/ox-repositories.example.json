@@ -1,22 +1,7 @@
 {
-  "version": 1,
+  "_comment": "Documentation example only. OX repository arguments are direct child directory names beneath the configured projects root; absolute targets are invalid.",
   "repositories": {
-    "byte-mcp": {
-      "path": "C:\\Users\\YOUR_USER\\AIProjects\\Byte-MCP",
-      "subsystems": {
-        "ox-validation": {
-          "version": 1,
-          "source_roots": ["src/byte_mcp/ox"],
-          "test_roots": ["tests/ox"],
-          "boundary_files": ["src/byte_mcp/server.py", "src/byte_mcp/errors.py", "src/byte_mcp/settings.py"],
-          "context_files": [
-            "pyproject.toml",
-            "docs/superpowers/specs/2026-08-29-ox-integration-design.md",
-            "docs/superpowers/specs/2026-08-30-ox-natural-review-architecture-design.md",
-            "docs/OX-VALIDATION.md"
-          ]
-        }
-      }
-    }
+    "Byte-MCP": "Byte-MCP",
+    "moss": "moss"
   }
 }
