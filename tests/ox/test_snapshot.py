@@ -5,12 +5,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from byte_mcp.ox.snapshot import freeze_snapshot
 
 from byte_mcp.errors import OXBundleError
 from byte_mcp.ox import snapshot as snapshot_module
 from byte_mcp.ox.models import OXReviewMode, OXReviewScope
 from byte_mcp.ox.scope import OXResolvedRepository
-from byte_mcp.ox.snapshot import freeze_snapshot
 from byte_mcp.ox.settings import (
     OX_MAX_ARTIFACT_BYTES,
     OX_MAX_ARTIFACTS,
@@ -236,7 +236,9 @@ def test_snapshot_inventory_is_sorted_and_identity_is_deterministic(tmp_path: Pa
     second = freeze_snapshot(repository, _full_scope())
 
     assert [artifact.logical_path for artifact in first.artifacts] == ["a.txt", "b.txt"]
-    assert first.exclusions == tuple(sorted(first.exclusions, key=lambda item: (item.logical_path, item.reason)))
+    assert first.exclusions == tuple(
+        sorted(first.exclusions, key=lambda item: (item.logical_path, item.reason))
+    )
     assert first.snapshot_sha256 == second.snapshot_sha256
     assert first.policy_version == OX_SNAPSHOT_POLICY_VERSION
 
