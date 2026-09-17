@@ -56,6 +56,15 @@ jobs:
           src/byte_mcp/ox/packet.py
           tests/ox/test_packet.py
 
+      - name: Task 6 evidence tests
+        run: python -m pytest tests/ox/test_evidence.py -q
+
+      - name: Task 6 evidence format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/evidence.py
+          tests/ox/test_evidence.py
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -73,12 +82,14 @@ jobs:
           src/byte_mcp/ox/scope.py
           src/byte_mcp/ox/snapshot.py
           src/byte_mcp/ox/packet.py
+          src/byte_mcp/ox/evidence.py
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
           tests/ox/test_models.py
           tests/ox/test_scope.py
           tests/ox/test_snapshot.py
           tests/ox/test_packet.py
+          tests/ox/test_evidence.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
