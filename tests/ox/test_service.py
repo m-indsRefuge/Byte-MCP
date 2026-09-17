@@ -5,10 +5,10 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-import byte_mcp.ox.service as ox_service
 import httpx
 import pytest
 
+import byte_mcp.ox.service as ox_service
 from byte_mcp.errors import OXBundleError, OXConfigurationError, OXEvidenceError, OXRepositoryError
 from byte_mcp.ox.evidence import OXEvidenceStore
 from byte_mcp.ox.models import OXPreparedReview, OXReviewMode, OXReviewScope
