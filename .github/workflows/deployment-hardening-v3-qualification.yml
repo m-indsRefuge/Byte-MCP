@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 45
     env:
       BYTE_PREDECESSOR_SHA: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
-      CANDIDATE_SHA: e71958cf562722c3c4ed8c213b3edf9265c1628e
+      CANDIDATE_SHA: 74216a02a3ffcd757844952be46aa66de2b98e55
 
     steps:
       - name: Checkout predecessor
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
         with:
-          ref: e71958cf562722c3c4ed8c213b3edf9265c1628e
+          ref: 74216a02a3ffcd757844952be46aa66de2b98e55
           path: candidate
           fetch-depth: 1
 
