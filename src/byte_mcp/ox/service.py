@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from datetime import UTC, datetime
 
 import httpx
@@ -257,10 +258,8 @@ class OXReviewService:
         review_id: str,
         terminal_metadata: Mapping[str, object],
     ) -> dict[str, object]:
-        try:
+        with suppress(OXEvidenceError):
             self._evidence_store.finalize(review_id, terminal_metadata)
-        except OXEvidenceError:
-            pass
         return self.get_review(review_id)
 
     @staticmethod
