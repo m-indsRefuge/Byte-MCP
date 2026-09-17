@@ -2,6 +2,12 @@
 
 OX V1 and the abandoned OX V2 implementation are historical only. They are not runtime compatibility targets for the clean-room rebuild, and no legacy runtime state or evidence is migrated into the new OX generation.
 
+## Current contract boundary
+
+Current clean-room operating guidance lives in `docs/OX.md`. The current OX failure-engineering map lives in `docs/FAILURE_MAP.md`.
+
+`docs/OX-VALIDATION.md` and OX plans/specifications dated before the 2026-09-17 clean-room design are preserved as historical references only. They describe superseded tool surfaces, approval flows, evidence models, retry/continuation/revalidation behavior, or earlier architectural assumptions and must not be used as current execution instructions.
+
 ## Implementation campaign base
 
 - clean-room implementation branch: `feat/ox-clean-room-rebuild`
@@ -34,4 +40,4 @@ The approved implementation plan names non-head `refs/archive/*` refs. This Chat
 
 ## Active-tree policy
 
-The clean-room implementation will remove V1/V2 execution code, execution-only tests, runtime registrations, continuation/revalidation/retry/background machinery, and obsolete current-facing execution guidance from the active implementation branch. Historical source, evidence, designs, and qualification artifacts remain recoverable through the archive branches and Git history.
+The clean-room implementation has removed V1/V2 execution code, execution-only tests, runtime registrations, continuation/revalidation/retry/background machinery, and current README links to obsolete OX execution guidance. Historical source, evidence, designs, qualification artifacts, and the superseded operator document remain recoverable through the archive branches and Git history.
