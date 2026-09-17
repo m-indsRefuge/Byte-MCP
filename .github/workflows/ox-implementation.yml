@@ -74,6 +74,15 @@ jobs:
           src/byte_mcp/ox/packet.py
           tests/ox/test_security.py
 
+      - name: Task 8 client tests
+        run: python -m pytest tests/ox/test_client.py -q
+
+      - name: Task 8 client format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/client.py
+          tests/ox/test_client.py
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -92,6 +101,7 @@ jobs:
           src/byte_mcp/ox/snapshot.py
           src/byte_mcp/ox/packet.py
           src/byte_mcp/ox/evidence.py
+          src/byte_mcp/ox/client.py
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
           tests/ox/test_models.py
@@ -100,6 +110,7 @@ jobs:
           tests/ox/test_packet.py
           tests/ox/test_evidence.py
           tests/ox/test_security.py
+          tests/ox/test_client.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
