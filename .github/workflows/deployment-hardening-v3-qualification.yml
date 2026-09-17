@@ -1,0 +1,231 @@
+name: Deployment hardening V3 qualification
+
+on:
+  push:
+    branches:
+      - ops/deployment-hardening-v3-qualification
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  predecessor-differential:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      BYTE_PREDECESSOR_SHA: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
+      CANDIDATE_SHA: e71958cf562722c3c4ed8c213b3edf9265c1628e
+
+    steps:
+      - name: Checkout predecessor
+        uses: actions/checkout@v4
+        with:
+          ref: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
+          path: predecessor
+          fetch-depth: 1
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: e71958cf562722c3c4ed8c213b3edf9265c1628e
+          path: candidate
+          fetch-depth: 1
+
+      - name: Set up Python 3.12.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12.10
+
+      - name: Prepare isolated qualification environments
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = $PWD.Path
+          $qualification = Join-Path $root 'qualification'
+          New-Item -ItemType Directory -Force -Path $qualification | Out-Null
+
+          $predVenv = Join-Path $qualification 'predecessor.venv'
+          $candVenv = Join-Path $qualification 'candidate.venv'
+          python -m venv $predVenv
+          python -m venv $candVenv
+          $predPython = Join-Path $predVenv 'Scripts/python.exe'
+          $candPython = Join-Path $candVenv 'Scripts/python.exe'
+
+          Push-Location (Join-Path $root 'predecessor')
+          try {
+            & $predPython -m pip install --upgrade pip
+            & $predPython -m pip install -e '.[dev]'
+            & $predPython -m pip check
+          }
+          finally { Pop-Location }
+
+          Push-Location (Join-Path $root 'candidate')
+          try {
+            & $candPython -m pip install --upgrade pip
+            & $candPython -m pip install -e '.[dev]'
+            & $candPython -m pip check
+          }
+          finally { Pop-Location }
+
+      - name: Verify exact eight-tool surface without provider calls
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('NVIDIA_API_KEY','NVIDIA_API_TOKEN','WOLFRAM_APP_ID','WOLFRAM_API_KEY','OX_API_KEY','OPENAI_API_KEY')) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $root = $PWD.Path
+          $qualification = Join-Path $root 'qualification'
+          $predPython = Join-Path $qualification 'predecessor.venv/Scripts/python.exe'
+          $candPython = Join-Path $qualification 'candidate.venv/Scripts/python.exe'
+          $expected = @(
+            'fetch','list_directory','list_roots','nvidia_get_review',
+            'nvidia_query','nvidia_review','search','wolfram_query'
+          ) | Sort-Object
+
+          foreach ($entry in @(
+            @{ Name = 'predecessor'; Python = $predPython },
+            @{ Name = 'candidate'; Python = $candPython }
+          )) {
+            Push-Location (Join-Path $root $entry.Name)
+            try {
+              $json = & $entry.Python -B -c "import json; from byte_mcp import server; print(json.dumps(sorted(server.mcp._tool_manager._tools)))"
+              if ($LASTEXITCODE -ne 0) { throw "$($entry.Name) tool discovery failed" }
+              $actual = @($json | ConvertFrom-Json)
+              if (($actual -join "`n") -ne ($expected -join "`n")) {
+                throw "$($entry.Name) tool surface mismatch: $($actual -join ',')"
+              }
+              Write-Host "$($entry.Name.ToUpper())_TOOL_SURFACE=$($actual -join ',')"
+              Write-Host "$($entry.Name.ToUpper())_TOOL_COUNT=$($actual.Count)"
+            }
+            finally { Pop-Location }
+          }
+
+      - name: Generate predecessor and candidate manifests and compare
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $root = $PWD.Path
+          $qualification = Join-Path $root 'qualification'
+          $predecessor = Join-Path $root 'predecessor'
+          $candidate = Join-Path $root 'candidate'
+          $predPython = Join-Path $qualification 'predecessor.venv/Scripts/python.exe'
+          $candPython = Join-Path $qualification 'candidate.venv/Scripts/python.exe'
+          $collectorDir = Join-Path $candidate 'scripts'
+          $predManifest = Join-Path $qualification 'predecessor.json'
+          $candManifest = Join-Path $qualification 'candidate.json'
+
+          foreach ($name in @('NVIDIA_API_KEY','NVIDIA_API_TOKEN','WOLFRAM_APP_ID','WOLFRAM_API_KEY','OX_API_KEY','OPENAI_API_KEY')) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $env:PYTHONPATH = $collectorDir
+          $env:BYTE_PREDECESSOR_SHA = $env:BYTE_PREDECESSOR_SHA
+
+          $collectorHash = (Get-FileHash -Algorithm SHA256 (Join-Path $collectorDir 'pytest_manifest.py')).Hash
+          Write-Host "COLLECTOR_SHA256=$collectorHash"
+
+          $env:BYTE_PYTEST_MANIFEST = $predManifest
+          Push-Location $predecessor
+          try {
+            & $predPython -m pytest tests -p no:cacheprovider --tb=no -q -p pytest_manifest
+            $predExit = $LASTEXITCODE
+          }
+          finally { Pop-Location }
+          if ($predExit -notin @(0, 1)) { throw "predecessor pytest infrastructure exit $predExit" }
+          if (-not (Test-Path -LiteralPath $predManifest -PathType Leaf)) { throw 'predecessor manifest missing' }
+
+          $env:BYTE_PYTEST_MANIFEST = $candManifest
+          Push-Location $candidate
+          try {
+            & $candPython -m pytest tests -p no:cacheprovider --tb=no -q -p pytest_manifest
+            $candExit = $LASTEXITCODE
+          }
+          finally { Pop-Location }
+          if ($candExit -notin @(0, 1)) { throw "candidate pytest infrastructure exit $candExit" }
+          if (-not (Test-Path -LiteralPath $candManifest -PathType Leaf)) { throw 'candidate manifest missing' }
+
+          $script = @'
+          import json
+          import sys
+          from pathlib import Path
+
+          collector_dir = Path(sys.argv[1])
+          predecessor_path = Path(sys.argv[2])
+          candidate_path = Path(sys.argv[3])
+          expected_sha = sys.argv[4]
+          sys.path.insert(0, str(collector_dir))
+          from pytest_manifest import compare_manifests, validate_manifest
+
+          predecessor = json.loads(predecessor_path.read_text(encoding="utf-8"))
+          candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+          validate_manifest(predecessor, expected_sha)
+          validate_manifest(candidate, expected_sha)
+          if predecessor["signature_version"] != "repo-root-v3":
+              raise SystemExit(f"unexpected signature version: {predecessor['signature_version']}")
+          compare_manifests(predecessor, candidate)
+
+          pred_nodes = {node["nodeid"]: node for node in predecessor["nodes"]}
+          cand_nodes = {node["nodeid"]: node for node in candidate["nodes"]}
+          missing = sorted(set(pred_nodes) - set(cand_nodes))
+          passed_to_skipped = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "passed" and cand_nodes.get(nodeid, {}).get("outcome") == "skipped"
+          )
+          passed_to_failed = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "passed" and cand_nodes.get(nodeid, {}).get("outcome") == "failed"
+          )
+          signature_drift = sorted(
+              nodeid for nodeid, node in pred_nodes.items()
+              if node["outcome"] == "failed" and nodeid in cand_nodes
+              and cand_nodes[nodeid].get("failure_signature") != node.get("failure_signature")
+          )
+          candidate_only_failures = sorted(
+              nodeid for nodeid, node in cand_nodes.items()
+              if nodeid not in pred_nodes and node["outcome"] == "failed"
+          )
+          new_passing = sorted(
+              nodeid for nodeid, node in cand_nodes.items()
+              if nodeid not in pred_nodes and node["outcome"] == "passed"
+          )
+
+          def counts(payload):
+              return (
+                  payload["collected_count"], payload["passed_count"],
+                  payload["failed_count"], payload["skipped_count"]
+              )
+
+          print(f"SIGNATURE_VERSION={predecessor['signature_version']}")
+          print(f"PREDECESSOR_COUNTS={counts(predecessor)}")
+          print(f"CANDIDATE_COUNTS={counts(candidate)}")
+          print(f"PREDECESSOR_MISSING_NODES={missing}")
+          print(f"PASSED_TO_SKIPPED={passed_to_skipped}")
+          print(f"PASSED_TO_FAILED={passed_to_failed}")
+          print(f"FAILURE_SIGNATURE_DRIFT={signature_drift}")
+          print(f"CANDIDATE_ONLY_FAILURES={candidate_only_failures}")
+          print(f"NEW_PASSING_TESTS={len(new_passing)}")
+          print("DIFFERENTIAL_PYTEST_QUALIFICATION=PASS")
+          '@
+          $compareScript = Join-Path $qualification 'compare_manifests.py'
+          Set-Content -LiteralPath $compareScript -Value $script -Encoding utf8
+          & $candPython $compareScript $collectorDir $predManifest $candManifest $env:BYTE_PREDECESSOR_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'structured predecessor differential qualification failed' }
+
+          Write-Host "PREDECESSOR_PYTEST_EXIT=$predExit"
+          Write-Host "CANDIDATE_PYTEST_EXIT=$candExit"
+          Write-Host "PREDECESSOR_MANIFEST_SHA256=$((Get-FileHash -Algorithm SHA256 $predManifest).Hash)"
+          Write-Host "CANDIDATE_MANIFEST_SHA256=$((Get-FileHash -Algorithm SHA256 $candManifest).Hash)"
+          Write-Host 'NVIDIA_PROVIDER_REQUESTS=0'
+          Write-Host 'OX_PROVIDER_REQUESTS=0'
+          Write-Host 'WOLFRAM_PROVIDER_REQUESTS=0'
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-hardening-v3-manifests-${{ env.CANDIDATE_SHA }}
+          path: qualification/
+          if-no-files-found: warn
+          retention-days: 14
