@@ -34,7 +34,11 @@ def _require_logical_path(value: object, field_name: str = "logical_path") -> st
     if not isinstance(value, str) or not value or "\\" in value:
         raise ValueError(f"{field_name} must be a normalized repository-relative POSIX path")
     path = PurePosixPath(value)
-    if path.is_absolute() or value.startswith("/") or any(part in {"", ".", ".."} for part in path.parts):
+    if (
+        path.is_absolute()
+        or value.startswith("/")
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
         raise ValueError(f"{field_name} must be a normalized repository-relative POSIX path")
     if path.as_posix() != value:
         raise ValueError(f"{field_name} must be a normalized repository-relative POSIX path")
@@ -184,7 +188,10 @@ class OXPreparedReview:
             raise ValueError("scope is invalid")
         if not isinstance(self.snapshot, OXSnapshot):
             raise ValueError("snapshot is invalid")
-        if self.scope.repository != self.snapshot.repository or self.scope.mode is not self.snapshot.mode:
+        if (
+            self.scope.repository != self.snapshot.repository
+            or self.scope.mode is not self.snapshot.mode
+        ):
             raise ValueError("scope and snapshot identity do not match")
         if self.scope.paths != self.snapshot.requested_paths:
             raise ValueError("scope paths and snapshot paths do not match")
