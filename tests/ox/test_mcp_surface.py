@@ -1,6 +1,5 @@
 from byte_mcp import server
 
-
 EXPECTED_NON_OX_TOOLS = {
     "list_roots",
     "list_directory",
