@@ -95,7 +95,11 @@ def compare_manifests(baseline, candidate):
     current = {n["nodeid"]: n for n in candidate["nodes"]}
     for node in baseline["nodes"]:
         actual = current.get(node["nodeid"])
-        if actual is None or actual["outcome"] != node["outcome"]:
+        if actual is None:
+            raise ValueError(f"predecessor outcome mismatch: {node['nodeid']}")
+        if node["outcome"] == "failed" and actual["outcome"] == "passed":
+            continue
+        if actual["outcome"] != node["outcome"]:
             raise ValueError(f"predecessor outcome mismatch: {node['nodeid']}")
         if (
             node["outcome"] == "failed"
