@@ -371,16 +371,23 @@ def test_provider_free_local_paths_never_open_network_connections(
                     objective="Reject unsafe scope locally.",
                 )
 
-            oversized = repository / "oversized.txt"
-            oversized.write_bytes(b"x" * (OX_MAX_ARTIFACT_BYTES + 1))
-            with pytest.raises(OXBundleError):
-                await service.review(
-                    repository="repo",
-                    mode="FULL_REPOSITORY",
-                    paths=None,
-                    objective="Reject oversized snapshot locally.",
-                )
-            oversized.unlink()
+            aggregate_files: list[Path] = []
+            chunk = b"x" * (OX_MAX_ARTIFACT_BYTES - 1)
+            for index in range(4):
+                path = repository / f"aggregate-{index}.txt"
+                path.write_bytes(chunk)
+                aggregate_files.append(path)
+            try:
+                with pytest.raises(OXBundleError):
+                    await service.review(
+                        repository="repo",
+                        mode="FULL_REPOSITORY",
+                        paths=None,
+                        objective="Reject oversized snapshot locally.",
+                    )
+            finally:
+                for path in aggregate_files:
+                    path.unlink()
 
             (repository / "ordinary.py").write_text(
                 credential,
