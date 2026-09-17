@@ -7,13 +7,15 @@ from pathlib import Path
 
 _reports = {}
 OUTCOMES = {"passed", "failed", "skipped"}
-SIGNATURE_VERSION = "repo-root-v1"
+SIGNATURE_VERSION = "repo-root-v2"
 
 
 def _normalize_signature(value):
     root = os.path.normcase(os.path.abspath(os.getcwd())).replace("/", "\\").rstrip("\\")
     text = re.sub(r"\s+", " ", str(value)).strip()
-    return re.sub(re.escape(root), "<REPO>", text, flags=re.IGNORECASE)
+    for variant in (root.replace("\\", "\\\\"), root):
+        text = re.sub(re.escape(variant), "<REPO>", text, flags=re.IGNORECASE)
+    return text
 
 
 def validate_manifest(payload, expected_sha=None):
