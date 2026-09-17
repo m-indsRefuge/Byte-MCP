@@ -65,6 +65,15 @@ jobs:
           src/byte_mcp/ox/evidence.py
           tests/ox/test_evidence.py
 
+      - name: Task 7 security tests
+        run: python -m pytest tests/ox/test_security.py -q
+
+      - name: Task 7 security format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/packet.py
+          tests/ox/test_security.py
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -90,6 +99,7 @@ jobs:
           tests/ox/test_snapshot.py
           tests/ox/test_packet.py
           tests/ox/test_evidence.py
+          tests/ox/test_security.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
