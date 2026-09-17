@@ -6,6 +6,7 @@ import json
 import pytest
 
 from byte_mcp.errors import OXBundleError
+from byte_mcp.ox import packet
 from byte_mcp.ox.models import (
     OXArtifact,
     OXReviewMode,
@@ -13,7 +14,6 @@ from byte_mcp.ox.models import (
     OXSnapshot,
     OXSnapshotExclusion,
 )
-from byte_mcp.ox.packet import SYSTEM_PROMPT, build_review_packet, prepare_ox_request
 from byte_mcp.ox.settings import (
     OX_MAX_PACKET_BYTES,
     OX_MODEL_ID,
@@ -72,8 +72,8 @@ def test_build_review_packet_is_deterministic_and_uses_exact_frozen_text() -> No
     scope = _scope()
     snapshot = _snapshot()
 
-    first = build_review_packet(scope, snapshot)
-    second = build_review_packet(scope, snapshot)
+    first = packet.build_review_packet(scope, snapshot)
+    second = packet.build_review_packet(scope, snapshot)
 
     assert first == second
     assert first.startswith(b"OX REVIEW PACKET\n")
@@ -109,20 +109,20 @@ def test_build_review_packet_rejects_scope_snapshot_identity_mismatch() -> None:
     )
 
     with pytest.raises(OXBundleError):
-        build_review_packet(scope, _snapshot())
+        packet.build_review_packet(scope, _snapshot())
 
 
 def test_build_review_packet_rejects_packet_over_hard_limit() -> None:
     oversized = _artifact("src/huge.txt", b"x" * OX_MAX_PACKET_BYTES)
 
     with pytest.raises(OXBundleError):
-        build_review_packet(_scope(), _snapshot(artifacts=(oversized,)))
+        packet.build_review_packet(_scope(), _snapshot(artifacts=(oversized,)))
 
 
 def test_prepare_ox_request_uses_exact_canonical_provider_body() -> None:
-    packet_bytes = build_review_packet(_scope(), _snapshot())
+    packet_bytes = packet.build_review_packet(_scope(), _snapshot())
 
-    prepared = prepare_ox_request(packet_bytes)
+    prepared = packet.prepare_ox_request(packet_bytes)
     packet_text = packet_bytes.decode("utf-8")
     expected_body = {
         "model": OX_MODEL_ID,
@@ -131,7 +131,7 @@ def test_prepare_ox_request_uses_exact_canonical_provider_body() -> None:
         "reasoning": {"effort": "medium"},
         "providerOptions": {"gateway": {"only": ["zai"]}},
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": packet.SYSTEM_PROMPT},
             {"role": "user", "content": packet_text},
         ],
     }
@@ -151,21 +151,21 @@ def test_prepare_ox_request_uses_exact_canonical_provider_body() -> None:
     assert prepared.body_bytes == expected_body_bytes
     assert prepared.payload_sha256 == _sha256(expected_body_bytes)
     assert packet_bytes in prepared.body_bytes
-    assert "independent adversarial code reviewer" in SYSTEM_PROMPT
-    assert "only the frozen repository material" in SYSTEM_PROMPT
-    assert "correctness" in SYSTEM_PROMPT
-    assert "security" in SYSTEM_PROMPT
-    assert "reliability" in SYSTEM_PROMPT
-    assert "regression" in SYSTEM_PROMPT
-    assert "architecture" in SYSTEM_PROMPT
-    assert "edge cases" in SYSTEM_PROMPT
-    assert "testing" in SYSTEM_PROMPT
-    assert "Respond naturally" in SYSTEM_PROMPT
+    assert "independent adversarial code reviewer" in packet.SYSTEM_PROMPT
+    assert "only the frozen repository material" in packet.SYSTEM_PROMPT
+    assert "correctness" in packet.SYSTEM_PROMPT
+    assert "security" in packet.SYSTEM_PROMPT
+    assert "reliability" in packet.SYSTEM_PROMPT
+    assert "regression" in packet.SYSTEM_PROMPT
+    assert "architecture" in packet.SYSTEM_PROMPT
+    assert "edge cases" in packet.SYSTEM_PROMPT
+    assert "testing" in packet.SYSTEM_PROMPT
+    assert "Respond naturally" in packet.SYSTEM_PROMPT
 
 
 def test_prepare_ox_request_rejects_non_utf8_or_oversized_packet() -> None:
     with pytest.raises(OXBundleError):
-        prepare_ox_request(b"\xff")
+        packet.prepare_ox_request(b"\xff")
 
     with pytest.raises(OXBundleError):
-        prepare_ox_request(b"x" * (OX_MAX_PACKET_BYTES + 1))
+        packet.prepare_ox_request(b"x" * (OX_MAX_PACKET_BYTES + 1))
