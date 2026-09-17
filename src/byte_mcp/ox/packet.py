@@ -21,6 +21,12 @@ SYSTEM_PROMPT = (
 
 _TARGET_ORIGIN = "https://ai-gateway.vercel.sh"
 _ENDPOINT_PATH = "/v1/chat/completions"
+_PRIVATE_KEY_MARKERS = (
+    b"BEGIN PRIVATE KEY",
+    b"BEGIN RSA PRIVATE KEY",
+    b"BEGIN EC PRIVATE KEY",
+    b"BEGIN OPENSSH PRIVATE KEY",
+)
 
 
 def _encode_text(value: str) -> bytes:
@@ -51,6 +57,33 @@ def _validate_scope_snapshot(scope: OXReviewScope, snapshot: OXSnapshot) -> None
         raise OXBundleError("OX packet scope and snapshot identity do not match.")
     if snapshot.policy_version != OX_SNAPSHOT_POLICY_VERSION:
         raise OXBundleError("OX snapshot policy version is not reviewable.")
+
+
+def validate_provider_bound_safety(
+    packet_bytes: bytes,
+    request_bytes: bytes,
+    *,
+    exact_credential: str | None,
+) -> None:
+    """Fail closed if frozen provider-bound bytes contain strong secret indicators."""
+    if not isinstance(packet_bytes, bytes) or not isinstance(request_bytes, bytes):
+        raise OXBundleError("OX provider-bound safety input is invalid.")
+
+    provider_bound = (packet_bytes, request_bytes)
+    if any(marker in material for marker in _PRIVATE_KEY_MARKERS for material in provider_bound):
+        raise OXBundleError("OX provider-bound material failed the local safety scan.")
+
+    if exact_credential is None:
+        return
+    if not isinstance(exact_credential, str) or not exact_credential:
+        raise OXBundleError("OX provider-bound safety input is invalid.")
+    try:
+        credential_bytes = exact_credential.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise OXBundleError("OX provider-bound safety input is invalid.") from exc
+
+    if any(credential_bytes in material for material in provider_bound):
+        raise OXBundleError("OX provider-bound material failed the local safety scan.")
 
 
 def build_review_packet(scope: OXReviewScope, snapshot: OXSnapshot) -> bytes:
