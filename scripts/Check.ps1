@@ -37,6 +37,19 @@ if (-not (Test-Path -LiteralPath $Python)) {
     throw 'Isolated qualification environment not found. Create it outside production.'
 }
 
+$manifestPredecessorSha = $PredecessorSHA
+if ($manifestPath -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    $baselineManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $baselinePredecessorSha = [string]$baselineManifest.predecessor_sha
+    if ($baselinePredecessorSha -notmatch '^[0-9a-f]{40}$') {
+        throw 'Baseline manifest predecessor SHA is invalid.'
+    }
+    if ($manifestPredecessorSha -and $manifestPredecessorSha -cne $baselinePredecessorSha) {
+        throw 'Baseline manifest predecessor SHA does not match the requested predecessor.'
+    }
+    $manifestPredecessorSha = $baselinePredecessorSha
+}
+
 Push-Location $RepoRoot
 try {
     $prefix = (Invoke-DeploymentNative $Python @('-B', '-c', 'import sys; print(sys.prefix)')).Trim()
@@ -60,7 +73,7 @@ try {
     try {
         $candidateManifest = if ($manifestPath) { "$manifestPath.candidate" } else { Join-Path $env:TEMP ("byte-pytest-" + [guid]::NewGuid().ToString() + '.json') }
         $oldPythonPath = $env:PYTHONPATH; $oldManifest = $env:BYTE_PYTEST_MANIFEST; $oldSha = $env:BYTE_PREDECESSOR_SHA
-        $env:PYTHONPATH = Join-Path $PSScriptRoot ''; $env:BYTE_PYTEST_MANIFEST = $candidateManifest; $env:BYTE_PREDECESSOR_SHA = $PredecessorSHA
+        $env:PYTHONPATH = Join-Path $PSScriptRoot ''; $env:BYTE_PYTEST_MANIFEST = $candidateManifest; $env:BYTE_PREDECESSOR_SHA = $manifestPredecessorSha
         $pytestOutput = @(& $Python '-m' 'pytest' '--tb=no' '-q' '-p' 'pytest_manifest' 2>&1 | ForEach-Object { $_.ToString() })
         $pytestExit = $LASTEXITCODE
         $env:PYTHONPATH = $oldPythonPath; $env:BYTE_PYTEST_MANIFEST = $oldManifest; $env:BYTE_PREDECESSOR_SHA = $oldSha
@@ -68,8 +81,13 @@ try {
     finally { $PSNativeCommandUseErrorActionPreference = $oldNativePreference }
     $pytestOutput | ForEach-Object { Write-Host $_ }
     if (-not (Test-Path -LiteralPath $candidateManifest -PathType Leaf)) { throw 'Structured pytest manifest was not generated.' }
-    $manifestCheck = & $Python '-c' "import json,sys; sys.path.insert(0,r'$PSScriptRoot'); from pytest_manifest import validate_manifest; validate_manifest(json.load(open(r'$candidateManifest'))); print('manifest-valid')"
-    if ($LASTEXITCODE -ne 0) { throw 'Candidate pytest manifest is malformed.' }
+    if ($manifestPredecessorSha) {
+        $manifestCheck = & $Python '-c' "import json,sys; sys.path.insert(0,r'$PSScriptRoot'); from pytest_manifest import validate_manifest; validate_manifest(json.load(open(r'$candidateManifest')), r'$manifestPredecessorSha'); print('manifest-valid')"
+    }
+    else {
+        $manifestCheck = & $Python '-c' "import json,sys; sys.path.insert(0,r'$PSScriptRoot'); from pytest_manifest import validate_manifest; validate_manifest(json.load(open(r'$candidateManifest'))); print('manifest-valid')"
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Candidate pytest manifest is malformed or has incorrect predecessor provenance.' }
     if ($manifestPath -and (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         $compare = & $Python '-c' "import json,sys; sys.path.insert(0,r'$PSScriptRoot'); from pytest_manifest import compare_manifests; compare_manifests(json.load(open(r'$manifestPath')),json.load(open(r'$candidateManifest'))); print('differential-valid')"
         if ($LASTEXITCODE -ne 0) { throw 'Structured predecessor differential qualification failed.' }
