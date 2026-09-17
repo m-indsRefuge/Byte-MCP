@@ -9,6 +9,8 @@ _EXPECTED_TOOLS = {
     "nvidia_query",
     "nvidia_review",
     "nvidia_get_review",
+    "ox_get_review",
+    "ox_review",
 }
 
 
