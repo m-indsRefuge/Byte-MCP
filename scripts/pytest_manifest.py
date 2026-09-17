@@ -7,12 +7,43 @@ from pathlib import Path
 
 _reports = {}
 OUTCOMES = {"passed", "failed", "skipped"}
-SIGNATURE_VERSION = "repo-root-v2"
+SIGNATURE_VERSION = "repo-root-v3"
+_SET_DIFF_MARKERS = (
+    "Extra items in the left set:",
+    "Extra items in the right set:",
+)
+_SET_DIFF_BOUNDARIES = (*_SET_DIFF_MARKERS, "Common items:", "Full diff:")
+
+
+def _canonicalize_pytest_set_diff_blocks(value):
+    lines = str(value).splitlines()
+    canonical = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        canonical.append(line)
+        if not any(marker in line for marker in _SET_DIFF_MARKERS):
+            index += 1
+            continue
+
+        index += 1
+        items = []
+        while index < len(lines):
+            candidate = lines[index]
+            if not candidate.strip() or any(
+                boundary in candidate for boundary in _SET_DIFF_BOUNDARIES
+            ):
+                break
+            items.append(candidate)
+            index += 1
+        canonical.extend(sorted(items, key=lambda item: item.strip()))
+    return "\n".join(canonical)
 
 
 def _normalize_signature(value):
     root = os.path.normcase(os.path.abspath(os.getcwd())).replace("/", "\\").rstrip("\\")
-    text = re.sub(r"\s+", " ", str(value)).strip()
+    text = _canonicalize_pytest_set_diff_blocks(value)
+    text = re.sub(r"\s+", " ", text).strip()
     for variant in (root.replace("\\", "\\\\"), root):
         text = re.sub(re.escape(variant), "<REPO>", text, flags=re.IGNORECASE)
     return text
