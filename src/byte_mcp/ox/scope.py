@@ -35,7 +35,12 @@ def _validate_repository_alias(repository: object) -> str:
 
 
 def _validate_bounded_path(logical_path: object) -> str:
-    if not isinstance(logical_path, str) or not logical_path or "\\" in logical_path:
+    if (
+        not isinstance(logical_path, str)
+        or not logical_path
+        or logical_path == "."
+        or "\\" in logical_path
+    ):
         raise OXScopeError("Bounded paths must be normalized repository-relative POSIX paths.")
     if _contains_control_characters(logical_path):
         raise OXScopeError("Bounded paths must not contain control characters.")
