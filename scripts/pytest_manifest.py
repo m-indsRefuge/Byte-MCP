@@ -88,6 +88,8 @@ def validate_manifest(payload, expected_sha=None):
 def compare_manifests(baseline, candidate):
     validate_manifest(baseline)
     validate_manifest(candidate)
+    if baseline["predecessor_sha"] != candidate["predecessor_sha"]:
+        raise ValueError("predecessor SHA mismatch")
     if baseline["signature_version"] != candidate["signature_version"]:
         raise ValueError("signature normalization version mismatch")
     current = {n["nodeid"]: n for n in candidate["nodes"]}
