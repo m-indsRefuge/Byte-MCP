@@ -114,6 +114,12 @@ def fetch(
     return service().fetch(reference, max_chars)
 
 
+@mcp.tool(annotations=READ_ONLY)
+def vscode_active_context() -> dict[str, Any]:
+    """Read the freshest bounded VS Code editor context under approved projects."""
+    return service().vscode_active_context()
+
+
 @mcp.tool(annotations=WOLFRAM_EXTERNAL)
 def wolfram_query(
     input: str,
