@@ -128,6 +128,25 @@ jobs:
           src/byte_mcp/ox/runtime.py
           tests/ox/test_mcp_surface.py
 
+      - name: Task 12 security privacy and isolation tests
+        run: >-
+          python -m pytest
+          tests/ox/test_security.py
+          tests/ox/test_archive_absence.py
+          -q
+
+      - name: Task 12 security qualification quality gate
+        run: >-
+          python -m ruff check
+          tests/ox/test_security.py
+          tests/ox/test_archive_absence.py
+
+      - name: Task 12 security qualification format check
+        run: >-
+          python -m ruff format --check
+          tests/ox/test_security.py
+          tests/ox/test_archive_absence.py
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
