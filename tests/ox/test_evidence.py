@@ -7,7 +7,7 @@ from dataclasses import asdict
 import pytest
 
 from byte_mcp.errors import OXEvidenceError
-from byte_mcp.ox.evidence import OXEvidenceStore
+from byte_mcp.ox import evidence
 from byte_mcp.ox.models import (
     OXArtifact,
     OXPreparedReview,
@@ -55,7 +55,11 @@ def _snapshot() -> OXSnapshot:
     )
 
 
-def _prepared(review_id: str, *, objective: str = "Review the evidence boundary.") -> OXPreparedReview:
+def _prepared(
+    review_id: str,
+    *,
+    objective: str = "Review the evidence boundary.",
+) -> OXPreparedReview:
     scope = _scope(objective=objective)
     snapshot = _snapshot()
     packet_bytes = build_review_packet(scope, snapshot)
@@ -75,7 +79,7 @@ def _review_dir(tmp_path, review_id: str):
 
 
 def test_allocate_review_id_creates_monotonic_atomic_directories(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
 
     first = store.allocate_review_id()
     second = store.allocate_review_id()
@@ -87,7 +91,7 @@ def test_allocate_review_id_creates_monotonic_atomic_directories(tmp_path) -> No
 
 
 def test_persist_prepared_writes_required_layout_without_raw_snapshot_content(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
 
@@ -112,7 +116,7 @@ def test_persist_prepared_writes_required_layout_without_raw_snapshot_content(tm
 
 
 def test_prepared_immutable_evidence_cannot_be_rewritten_with_different_bytes(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     first = _prepared(review_id)
     changed = _prepared(review_id, objective="Review a different objective.")
@@ -128,7 +132,7 @@ def test_prepared_immutable_evidence_cannot_be_rewritten_with_different_bytes(tm
 
 
 def test_claim_send_is_irreversible_and_survives_store_restart(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
     store.persist_prepared(prepared)
@@ -145,7 +149,7 @@ def test_claim_send_is_irreversible_and_survives_store_restart(tmp_path) -> None
         prepared.prepared_request.request_sha256,
         "2026-09-17T17:00:01Z",
     )
-    restarted = OXEvidenceStore(tmp_path)
+    restarted = evidence.OXEvidenceStore(tmp_path)
     assert not restarted.claim_send(
         review_id,
         prepared.prepared_request.request_sha256,
@@ -155,7 +159,7 @@ def test_claim_send_is_irreversible_and_survives_store_restart(tmp_path) -> None
 
 
 def test_claim_send_rejects_request_identity_mismatch_without_consuming_authority(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
     store.persist_prepared(prepared)
@@ -167,7 +171,7 @@ def test_claim_send_rejects_request_identity_mismatch_without_consuming_authorit
 
 
 def test_response_and_review_text_are_write_once(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     store.persist_prepared(_prepared(review_id))
 
@@ -184,7 +188,7 @@ def test_response_and_review_text_are_write_once(tmp_path) -> None:
 
 
 def test_get_projects_ready_then_outcome_unknown_after_claim(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
     store.persist_prepared(prepared)
@@ -200,14 +204,14 @@ def test_get_projects_ready_then_outcome_unknown_after_claim(tmp_path) -> None:
         "2026-09-17T17:00:00Z",
     )
 
-    uncertain = OXEvidenceStore(tmp_path).get(review_id)
+    uncertain = evidence.OXEvidenceStore(tmp_path).get(review_id)
     assert uncertain.state is OXReviewState.OUTCOME_UNKNOWN
     assert uncertain.provider_started_at == "2026-09-17T17:00:00Z"
     assert uncertain.review_text is None
 
 
 def test_finalize_completed_requires_durable_response_and_review_text(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
     store.persist_prepared(prepared)
@@ -234,16 +238,16 @@ def test_finalize_completed_requires_durable_response_and_review_text(tmp_path) 
     store.persist_review_text(review_id, "Looks sound.")
     store.finalize(review_id, terminal)
 
-    evidence = store.get(review_id)
-    assert evidence.state is OXReviewState.COMPLETED
-    assert evidence.attempt_outcome == "COMPLETED"
-    assert evidence.provider_finished_at == "2026-09-17T17:00:03Z"
-    assert evidence.response_bytes == len(body)
-    assert evidence.review_text == "Looks sound."
+    projected = store.get(review_id)
+    assert projected.state is OXReviewState.COMPLETED
+    assert projected.attempt_outcome == "COMPLETED"
+    assert projected.provider_finished_at == "2026-09-17T17:00:03Z"
+    assert projected.response_bytes == len(body)
+    assert projected.review_text == "Looks sound."
 
 
 def test_finalize_failed_projects_safe_terminal_metadata(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
     store.persist_prepared(prepared)
@@ -264,15 +268,15 @@ def test_finalize_failed_projects_safe_terminal_metadata(tmp_path) -> None:
         },
     )
 
-    evidence = store.get(review_id)
-    assert evidence.state is OXReviewState.FAILED
-    assert evidence.attempt_outcome == "REJECTED"
-    assert evidence.response_bytes == len(b"provider rejection")
-    assert evidence.review_text is None
+    projected = store.get(review_id)
+    assert projected.state is OXReviewState.FAILED
+    assert projected.attempt_outcome == "REJECTED"
+    assert projected.response_bytes == len(b"provider rejection")
+    assert projected.review_text is None
 
 
 def test_get_is_a_safe_projection_without_raw_bytes_or_paths(tmp_path) -> None:
-    store = OXEvidenceStore(tmp_path)
+    store = evidence.OXEvidenceStore(tmp_path)
     review_id = store.allocate_review_id()
     prepared = _prepared(review_id)
     store.persist_prepared(prepared)
