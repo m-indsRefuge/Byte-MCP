@@ -238,9 +238,7 @@ def test_bounded_scope_wraps_model_validation_as_scope_error(tmp_path: Path) -> 
 
 
 def test_repository_example_config_contains_only_direct_child_targets() -> None:
-    payload = json.loads(
-        Path("config/ox-repositories.example.json").read_text(encoding="utf-8")
-    )
+    payload = json.loads(Path("config/ox-repositories.example.json").read_text(encoding="utf-8"))
 
     repositories = payload["repositories"]
     assert repositories
