@@ -1,42 +1,31 @@
 # Security
 
-Byte-MCP contains two separately governed capability boundaries:
+Byte-MCP contains several deliberately separate capability boundaries:
 
-1. the accepted V1/V1.1 local read-only filesystem boundary; and
-2. the optional OX external-validation boundary on the `build/byte-mcp-ox-validation-v1` branch.
+1. the accepted V1/V1.1 local read-only filesystem boundary;
+2. the governed Wolfram query capability;
+3. the governed NVIDIA provider capability; and
+4. the clean-room OX adversarial code-review capability.
 
-The OX capability does **not** change the filesystem authority of the original four core tools. It adds a narrowly fixed outbound review path and append-only local review evidence under its own contract.
+The external capabilities do not expand the filesystem authority of the original core tools. Each has its own explicit contract and tests.
 
 ## Default-denied material
 
-The core implementation blocks common secret-bearing names and locations, including:
+The core filesystem implementation blocks common secret-bearing names and locations, including `.env`, `.git`, `.ssh`, `.gnupg`, credential/secret directories, credential/secret filenames, private-key material, and password-vault formats.
 
-- `.env`
-- `.git`
-- `.ssh`
-- `.gnupg`
-- `AppData`
-- credential or secret directories
-- files whose stem is `secret`, `secrets`, `credential`, or `credentials`
-- private-key and password-vault suffixes, including when they occur inside a multi-suffix filename
+The policy is intentionally conservative and can be expanded only through a reviewed capability change.
 
-Examples such as `secrets.json`, `credentials.yaml`, and `database.key.bak` are denied. Similar non-secret names such as `secretary.txt` are not denied merely because they contain a denied word as a substring.
-
-The policy is intentionally conservative and can be extended only through a new-version security review.
-
-The per-component link/junction checks are defense-in-depth. The authoritative containment boundary remains strict path resolution followed by `relative_to()` against the canonical approved root.
-
-An approved root itself is resolved to its canonical target when configuration is loaded. Links or junctions encountered beneath that root are not traversed.
+Per-component link/junction checks are defense-in-depth. Core filesystem containment remains strict canonical resolution beneath an approved root. OX separately refuses to follow links/junctions during review snapshotting.
 
 ## Prompt injection and untrusted content
 
-Text found inside a retrieved file or OX review bundle must be treated as untrusted content. It must never override the operator's request, Byte-MCP's tool contract, the OX protocol boundary, or higher-level safety rules.
+Text found inside retrieved files, frozen OX source material, provider responses, or external-tool output is untrusted content. It must never override the operator's request, Byte-MCP tool contracts, or higher-level safety/authority rules.
 
-OX provider output is also untrusted data. Exact provider responses may be recorded as review evidence, but they do not become executable instructions. Byte may separately derive structured local findings from a natural OX response; those findings are explicitly labelled as Byte-authored interpretation and are not treated as verbatim provider output. The OX provider is not given tools, shell access, filesystem access, or function-calling authority through Byte-MCP.
+OX provider output is review evidence, not executable instruction. The OX provider receives no Byte-MCP tools, shell access, filesystem access, function-calling authority, continuation channel, or interactive tool loop.
 
 ## Core network boundary
 
-Byte-MCP explicitly binds to a loopback host. Supported core host values are:
+Byte-MCP binds to loopback only. Supported core host values are:
 
 - `127.0.0.1`
 - `localhost`
@@ -48,11 +37,9 @@ The default endpoint is:
 http://127.0.0.1:8000/mcp
 ```
 
-The core server rejects non-loopback values such as `0.0.0.0`. Do not expose the port through a router, public firewall rule, or unauthenticated generic tunnel.
+The server rejects non-loopback values such as `0.0.0.0`. OpenAI Secure MCP Tunnel is an outbound transport layer and does not broaden Byte-MCP filesystem authority.
 
-The resumed ChatGPT validation uses OpenAI Secure MCP Tunnel while retaining the loopback-only Byte-MCP listener. The tunnel client is an outbound transport layer; it does not expand Byte-MCP's filesystem authority.
-
-Core runtime configuration environment variables:
+Core runtime configuration environment variables include:
 
 ```text
 BYTE_MCP_HOST
@@ -68,227 +55,176 @@ BYTE_MCP_CONTENT_SEARCH_MAX_BYTES
 
 The core server supports only the `streamable-http` transport.
 
-## MCP response boundary
+## Core response and root boundary
 
-Core MCP-facing responses must not expose the backing local absolute filesystem path.
+Core MCP-facing responses do not expose backing absolute filesystem paths. The public addressing contract is approved root alias plus relative path/opaque reference where applicable.
 
-The public addressing contract is:
+The accepted ChatGPT deployment is deliberately restricted to approved roots rather than a drive root or whole user profile. The `projects` root does not grant arbitrary absolute-path access.
 
-- approved root alias;
-- relative path within that approved root;
-- opaque fetch reference where applicable.
+Opaque references are identifiers, not authentication tokens. Decoded root/path pairs are passed back through approved-root containment checks before access.
 
-`list_roots` returns aliases only. Search and fetch metadata return relative paths and do not include `absolute_path`.
+## Core limits and extraction
 
-Opaque references are identifiers, not authentication tokens and not a security boundary. They are deliberately decodable. Every decoded root/path pair is passed back through the approved-root and containment checks before a file is accessed.
+`fetch` enforces `BYTE_MCP_MAX_FILE_BYTES` before extraction. Content search has its own bounded extraction ceiling. Response text is bounded by the configured response-character limit.
 
-This prevents a remote MCP caller from learning Windows user-profile or machine-specific path details that are unnecessary to use the service while ensuring a forged reference cannot bypass filesystem authority.
-
-## File and extraction limits
-
-`fetch` enforces `BYTE_MCP_MAX_FILE_BYTES` before extraction and raises a `LimitExceededError` when the configured ceiling is exceeded.
-
-Content search separately enforces `BYTE_MCP_CONTENT_SEARCH_MAX_BYTES` before extracting a candidate file. The extractor also has its own hard input ceiling as defense-in-depth so direct internal use cannot accidentally perform unbounded reads.
-
-Response text remains bounded by the configured response-character limit. When a client requests fewer than the V1 minimum, `fetch` reports the actual `max_chars_applied` value in its response.
-
-Malformed or encrypted document-library failures are normalized at the service boundary. A corrupt candidate encountered during content search is treated as a per-file miss so one bad document does not abort the entire search. A corrupt file requested directly through `fetch` returns a Byte-MCP domain error rather than a raw third-party exception.
+Malformed/encrypted document-library failures are normalized at service boundaries. A corrupt search candidate is a per-file miss; a corrupt file requested directly through `fetch` returns a Byte-MCP domain error rather than a raw third-party exception.
 
 ## Core audit
 
-Allowed, denied, and unexpected-error outcomes are appended to the configured audit ledger.
+Allowed, denied, and unexpected core outcomes are appended to the configured audit ledger. Fetched content is not written to that ledger. Search terms and opaque references are fingerprinted rather than stored raw.
 
-The core audit ledger records operation metadata but does not record fetched file contents. Search terms and opaque file references are represented by SHA-256 fingerprints and lengths rather than raw values. Denied operations include a bounded error type and message so the security boundary can be reviewed without storing requested file content.
+Audit persistence is fail-closed. If Byte-MCP cannot persist the audit entry, the operation result is not returned as accepted.
 
-Audit persistence is fail-closed. If Byte-MCP cannot serialize, create, open, or append the configured audit ledger, the operation result is not returned to the client and a Byte-MCP `AuditError` is raised. This is deliberate: an access that cannot be durably recorded is not treated as an accepted access.
-
-`AuditLog` uses an in-process lock and is therefore single-process by contract. Multiple Byte-MCP processes must use distinct audit files. Audit rotation and a dedicated audit reader are deferred capabilities; operators should monitor ledger size. A future reader must tolerate and count malformed or torn JSONL lines rather than failing the whole ledger.
-
-## Runtime layout
-
-The core default configuration paths are derived from the source/repository layout. The supported deployment model is therefore the reviewed repository/editable-install launcher. A standalone wheel installation with unrelated filesystem layout is not yet a supported deployment contract and would require explicit configuration-path design and validation.
-
-## Remote root boundary
-
-The accepted ChatGPT tunnel deployment is deliberately restricted to approved roots rather than a drive root, entire user profile, or arbitrary absolute paths.
-
-The `projects` profile does not grant arbitrary absolute-path access. All requests remain constrained beneath the configured project directory and are still subject to secret-name, traversal, symlink, junction, file-type, size, and response limits.
+`AuditLog` is single-process by contract. Separate Byte-MCP processes must use distinct audit files.
 
 ## Secure tunnel boundary
 
-OpenAI Secure MCP Tunnel is the selected transport for the ChatGPT integration.
+OpenAI Secure MCP Tunnel is the selected ChatGPT transport. Required properties remain:
 
-Required tunnel properties:
-
-- Byte-MCP remains on loopback;
+- Byte-MCP listens only on loopback;
 - the tunnel client connects outbound;
-- no router port forwarding is used;
+- no router port forwarding is required;
 - no public inbound Windows Firewall rule is added;
-- the tunnel runtime uses a restricted Runtime API key with Tunnels **Read** + **Use** only;
-- runtime credentials are never stored in Git or pasted into chat;
-- the tunnel runtime points only to the reviewed local MCP endpoint.
+- tunnel runtime credentials are not stored in Git or pasted into chat;
+- the tunnel points only to the reviewed local MCP endpoint.
 
-Tunnel runtime permissions are transport permissions. They do not authorize filesystem writes or additional Byte-MCP capabilities.
+Tunnel transport permission does not authorize filesystem writes or additional MCP capabilities.
 
-The earlier Cloudflare Quick Tunnel experiment is historical evidence only and is not an accepted final transport.
+## Current MCP surface
 
-## ChatGPT deployment boundary
+The currently qualified surface is exactly:
 
-The original core profile exposes exactly the four accepted read-only filesystem tools:
+```text
+list_roots
+list_directory
+search
+fetch
+wolfram_query
+nvidia_query
+nvidia_review
+nvidia_get_review
+ox_review
+ox_get_review
+```
 
-- `list_roots`
-- `list_directory`
-- `search`
-- `fetch`
+For OX, only `ox_review` can cross the provider boundary. `ox_get_review` is local/read-only and performs zero provider networking.
 
-The integrated OX branch additionally exposes four separately annotated OX tools:
+## OX clean-room authority
 
-- `ox_review`
-- `ox_continue`
-- `ox_revalidate`
-- `ox_get_review`
+The current governing OX contract is `docs/OX.md`. Historical V1/V2 operator/design material is not current authority; see `archive/OX-ARCHIVE.md`.
 
-The three OX tools capable of external action are intentionally **not** classified as read-only or idempotent at the MCP system level. `ox_continue` also contains a local-only `record_findings` mode, but the tool as a whole retains its external-action classification. `ox_get_review` is local/read-only. The reviewed repository itself remains read-only throughout all four OX operations.
+### Repository and scope boundary
 
-## OX external-validation boundary
+OX reuses Byte-MCP's existing `projects` root. The caller supplies a direct-child repository name, not an arbitrary filesystem path.
 
-OX is an optional, fixed-purpose validation capability. It is not a general HTTP client and does not grant OX filesystem or execution authority.
+Supported modes are:
 
-The only supported outbound provider route is:
+- `FULL_REPOSITORY` — all material eligible under the versioned snapshot policy;
+- `BOUNDED` — one or more explicitly selected normalized relative paths.
+
+Bounded scope is never silently widened. Absolute paths, traversal, unsafe/non-normalized paths, and link/junction components fail closed.
+
+### Current-filesystem snapshot boundary
+
+OX freezes current filesystem bytes, including eligible staged, unstaged, and untracked text material. The packet is built only from the frozen snapshot; OX does not reread the repository after freeze.
+
+The snapshot excludes known secret/env/key material, `.git`, dependency/virtualenv directories, caches, generated/build/coverage output, databases, archives, binary/media material, invalid text, nested repositories, and OX/evidence directories. Symlinks/junctions are never followed.
+
+A per-artifact size ceiling determines snapshot eligibility. Included content is additionally subject to hard artifact-count, aggregate-content, packet, and prepared-request limits. Hard included-material overflow fails locally with no truncation, summarization, split request, or provider call.
+
+### OX provider boundary
+
+The outbound route is fixed:
 
 ```text
 Byte-MCP
-  -> OXReviewService
-  -> OXClient
   -> https://ai-gateway.vercel.sh/v1/chat/completions
-  -> provider pin: zai
+  -> provider allow-list: zai
   -> model: zai/glm-5.3-flash
 ```
 
-The V1 OX client uses non-streaming HTTPS, certificate verification, disabled redirects, a fixed gateway URL, a fixed model, and a fixed Z.AI provider pin. There is no caller-supplied base URL, model selection, arbitrary provider routing, or automatic fallback.
+OX has no caller-selected URL/provider/model, provider fallback, dynamic discovery, provider tool loop, redirect following, retry, continuation, revalidation, queue, worker, or recovery resend.
 
-No provider call is made during server startup. OX startup validates only local configuration. If `AI_GATEWAY_API_KEY` is absent, OX is `DISABLED`. If optional OX configuration is invalid, OX is `MISCONFIGURED`. Either condition is fail-isolated: the core Byte-MCP tools can still start and operate.
+One explicit `ox_review` invocation authorizes exactly one synchronous review lifecycle and at most one provider request.
 
-## OX credential boundary
+### OX credential boundary
 
-The Vercel AI Gateway credential is read only from:
+The Vercel AI Gateway credential is read lazily from:
 
 ```text
 AI_GATEWAY_API_KEY
 ```
 
-It must never be committed, written to machine-local repository configuration, stored in OX evidence, copied into audit records, pasted into review material, or returned through MCP.
+It is not required for server import or OX runtime construction. Missing credential stops the individual review before `send.claim` and before networking.
 
-The configured key is held in memory and used only to form the outbound authorization header at request time. `OXSettings.__repr__` reports only whether a key is configured, not its value.
+The key must never be committed, stored in OX evidence, copied into audit logs, pasted into review objectives, or returned through MCP. `OXSettings.__repr__` reports only whether a key is configured.
 
-The OX service also fails closed if the exact configured credential appears anywhere in material that would be persisted, transmitted, replayed, or returned through the supported OX lifecycle. This guard covers:
+Before send authority is consumed, OX checks the exact active credential and strong private-key markers against provider-bound packet/request bytes. Detection fails closed; OX does not silently redact and continue.
 
-- initial review objective, verification, and committed bundle content;
-- blind revalidation preparation;
-- continuation messages and replayed continuation retries;
-- Byte-derived local findings before persistence;
-- adjudication events;
-- targeted revalidation context and replayed targeted retries;
-- all bounded `ox_get_review` response views.
+### OX send and replay boundary
 
-Byte-MCP does not silently redact source code or verification evidence because doing so would corrupt the review artifact. It rejects the operation instead.
+Prepared snapshot/packet/request evidence is persisted before transmission preflight. The canonical request identity is revalidated before send authority is consumed.
 
-## OX repository and scope authority
+`send.claim` is created atomically and is irreversible. Once present, it is never deleted/reset to restore send authority. Concurrent/duplicate execution can therefore produce at most one transport winner for a review identity.
 
-OX reads only repositories named in the machine-local registry:
+Transport outcomes preserve certainty:
+
+- definite connect/pool `NOT_SENT` -> `FAILED`;
+- write/read/deadline/remote ambiguity -> `OUTCOME_UNKNOWN`;
+- complete non-2xx response -> `FAILED/REJECTED`;
+- complete 2xx malformed/empty assistant envelope -> `FAILED` with attempt outcome `COMPLETED`;
+- post-claim evidence-persistence uncertainty -> `OUTCOME_UNKNOWN`.
+
+`OUTCOME_UNKNOWN` never grants retry authority.
+
+### Raw response and evidence boundary
+
+The exact provider response body is persisted to `response.bin` before Byte-MCP decodes the envelope or extracts assistant text.
+
+Per-review evidence can include:
 
 ```text
-config/ox-repositories.local.json
+review.json
+snapshot.json
+packet.bin
+request.bin
+send.claim
+response.bin
+review.txt
 ```
 
-That file is Git-ignored. Each repository entry contains predeclared, versioned subsystem definitions with deterministic source, test, boundary, and context paths.
+`packet.bin`, `request.bin`, `response.bin`, and `snapshot.json` are restricted forensic material. Routine MCP results/logs must not expose raw request bodies, raw provider envelopes, absolute local paths, credentials, authorization headers, proxy/environment values, or arbitrary exception text.
 
-Review-time callers cannot attach arbitrary files or heuristically expand scope. Bundle construction reads immutable committed Git objects rather than substituting the working tree. Mandatory evidence categories, repository tree context, verification records, and the exact base-to-target diff are hash-bound into the prepared review artifact. Oversized or incomplete bundles fail closed rather than being silently truncated.
+`ox_get_review` returns a safe local projection and never performs provider networking.
 
-OX does not execute repository code, tests, builds, package managers, shells, or subprocesses. Verification evidence is supplied by Byte and provenance-labelled.
+### OX runtime isolation
 
-## OX human approval and integrity binding
+OX runtime construction is lazy and fail-isolated. Missing/invalid OX local configuration must not prevent core, Wolfram, or NVIDIA startup.
 
-A new review and a blind revalidation use a two-phase protocol:
-
-1. **Prepare:** deterministically build and persist the proposal. This phase performs zero provider calls.
-2. **Approve/transmit:** after explicit human approval, rebuild the artifact from the committed state and verify that it exactly matches the approved evidence before crossing the provider boundary.
-
-The approval check binds to the complete deterministic manifest and the canonical outbound `payload_sha256`, not merely to byte length or a self-reported digest. Artifact count and message-size limits are also rechecked. A changed objective, verification record, manifest field, subsystem definition, commit, or payload invalidates the approval before any provider request.
-
-Continuation cannot add repository files or expand the prepared scope. Revalidation of a new commit requires a separately prepared approval boundary.
-
-## OX natural-response and provenance boundary
-
-Initial review, blind revalidation, targeted revalidation, and ordinary continuation responses are accepted as natural OX text rather than requiring OX to satisfy a rigid findings JSON schema.
-
-The exact raw provider response is persisted before a successful phase is treated as durably evidenced. Natural assistant text is separately preserved in the corresponding native thread.
-
-Structured findings are created only by an explicit local Byte operation. Canonical local findings evidence uses `byte-derived-findings-v1`, identifies `derivation_authority` as `byte`, identifies the derivation source as `derived-from-ox-natural-review`, and binds to both the completed OX source attempt and the SHA-256 of the exact OX response text. No artifact means no canonical findings decision has been recorded; an explicitly persisted empty findings set means Byte deliberately recorded zero canonical findings.
-
-Targeted revalidation may consume those findings only when this provenance is present. The outbound targeted packet labels them as Byte-derived context so OX is never told that Byte's structured interpretation was verbatim prior OX output.
-
-This is a trust-boundary rule, not merely a formatting preference.
-
-## OX attempts, failures, and retries
-
-Every outbound attempt receives an identity and durable local intent/evidence before the provider boundary is crossed. If pre-request evidence persistence fails, the provider is not called.
-
-Ordinary initial-review approval is idempotent once A001 has been claimed. A repeated approval while the review is `TRANSMITTING` or already `REVIEWED` is satisfied entirely from local evidence: it performs no second provider request and creates no A002. This replay-safe behavior does not weaken retry authorization for terminal uncertainty or failure states.
-
-V1 performs no automatic retries. Transport/provider outcomes distinguish successful completion from failures and from `OUTCOME_UNKNOWN`, where a timeout or connection failure may have occurred after request upload. Byte-MCP never assumes an ambiguous attempt was not received.
-
-A retry is explicit, receives a new attempt identity, and requires renewed approval where defined by the OX lifecycle. Persisted continuation/revalidation histories are hash-checked before replay and are rechecked for the configured credential before a new retry attempt can be claimed.
-
-## OX evidence boundary
-
-Detailed OX evidence is separate from the reviewed repository and from the compact core operation audit. Default locations are user-local data directories:
-
-- Windows: `%LOCALAPPDATA%\Byte-MCP\ox`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/byte-mcp/ox`
-
-The location may be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`.
-
-The OX `EvidenceStore` is intentionally single-process. Its in-process locks make concurrent calls deterministic within one Byte-MCP process; multi-process use of the same evidence root is unsupported and separate processes must use separate evidence roots.
-
-OX evidence records prepared review identity, manifest, bundle, attempt identity, native conversation messages, exact provider responses, optional provenance-bound Byte-derived findings, adjudication events, and revalidation evidence. OX statements are never rewritten into Byte conclusions; interpretation and adjudication are stored separately so provenance remains explicit.
-
-The public retrieval surface is bounded to seven views: `summary`, `findings`, `thread`, `manifest`, `adjudication`, `attempts`, and `revalidation`. Returned material passes through the configured-credential guard before crossing the MCP boundary.
+OX and NVIDIA do not import each other's provider-specific packages. OX does not invoke Wolfram. Shared code is limited to provider-neutral primitives under `byte_mcp.providers`.
 
 ## Frozen authority
 
-The accepted **core filesystem** capability contains no write, rename, move, delete, shell, execute, process-control, registry, application-control, or arbitrary HTTP tool.
+The accepted core filesystem capability contains no write, rename, move, delete, shell, execute, process-control, registry, application-control, or arbitrary HTTP tool.
 
-The OX branch introduces one separately reviewed exception: a fixed-purpose outbound validation client to the fixed Vercel AI Gateway route described above. It does not authorize arbitrary HTTP destinations, caller-selected providers/models, repository mutation, or command execution.
+Wolfram, NVIDIA, and OX are separately governed exceptions. OX specifically authorizes only fixed-purpose outbound code review through the fixed route above.
 
-Adding any broader authority requires:
+Adding broader filesystem authority, arbitrary HTTP, OX retry/continuation/revalidation, provider tool access, alternate provider/model routing, background execution, or materially different authentication requires a new capability contract, threat review, tests, and explicit approval.
 
-1. a new version or separately governed capability increment;
-2. a capability contract;
-3. threat modelling and adversarial tests;
-4. explicit confirmation and rollback design where mutation is possible;
-5. a new release and deployment review.
+## Current OX qualification status
 
-The separate chess-capability branch is not part of this integration and must not be merged merely to complete OX connectivity.
+The clean-room OX feature branch has completed provider-free implementation/security qualification on Windows and Ubuntu. That qualification does not authorize live runtime promotion or a real OX provider request.
 
-## Current OX acceptance status
-
-Automated unit, integration, lifecycle, failure-recovery, and adversarial security tests are green on Windows and Ubuntu for the OX integration candidate.
-
-A deliberately non-sensitive live Vercel AI Gateway → Z.AI → GLM-5.3-Flash handshake has proven the fixed route can complete an end-to-end round trip outside CI. Longer dogfood attempts also produced useful transport/generation evidence that led to the 900-second read timeout and larger generated-token budget.
-
-This live transport evidence does **not** by itself approve private repository transmission. Vercel Model Training opt-out and provider zero-data-retention are separate concerns, and the most recent private-route evidence showed that zero-data-retention was not enabled for that request. The private-source privacy/ZDR gate must therefore be explicitly reassessed before another private dogfood review.
-
-See [OX Validation Operations](OX-VALIDATION.md) for the operational procedure.
+Runtime promotion and the first live clean-room OX review are separate explicit authorization boundaries. See `docs/OX.md` for the operator contract and `docs/FAILURE_MAP.md` for failure diagnostics.
 
 ## Known V1/core limitations
 
-The following are intentionally deferred rather than silently assumed to be solved:
+The following remain intentionally deferred:
 
-- extraction and SHA-256 calculation read a fetched file in separate passes, so a concurrently modified file can create a content/hash TOCTOU mismatch;
-- PDF extraction is byte-bounded but does not yet apply a separate page-count ceiling;
-- PPTX extraction does not guarantee complete traversal of grouped shapes or tables;
-- audit logging has no built-in rotation and is not multi-process safe;
+- extraction and SHA-256 calculation read a fetched file in separate passes, so concurrent modification can create a content/hash TOCTOU mismatch;
+- PDF extraction is byte-bounded but has no separate page-count ceiling;
+- PPTX extraction does not guarantee complete traversal of grouped shapes/tables;
+- core audit logging has no built-in rotation and is not multi-process safe;
 - the default runtime layout assumes the reviewed source/repository deployment model.
 
-These limitations do not expand filesystem authority, but changing any of them should receive tests and review appropriate to the affected boundary.
+These limitations do not expand authority; changing them requires tests/review appropriate to the affected boundary.

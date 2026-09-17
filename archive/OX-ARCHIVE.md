@@ -6,7 +6,7 @@ OX V1 and the abandoned OX V2 implementation are historical only. They are not r
 
 Current clean-room operating guidance lives in `docs/OX.md`. The current OX failure-engineering map lives in `docs/FAILURE_MAP.md`.
 
-`docs/OX-VALIDATION.md` and OX plans/specifications dated before the 2026-09-17 clean-room design are preserved as historical references only. They describe superseded tool surfaces, approval flows, evidence models, retry/continuation/revalidation behavior, or earlier architectural assumptions and must not be used as current execution instructions.
+The former top-level operator manual `docs/OX-VALIDATION.md` and OX plans/specifications dated before the 2026-09-17 clean-room design are historical only. The operator manual has been removed from the active documentation tree so it cannot be mistaken for current guidance; its exact content remains recoverable through Git history and the archived V1 lineage. Older dated plans/specifications remain in the repository as clearly historical engineering records and are not current execution instructions.
 
 ## Implementation campaign base
 
@@ -40,4 +40,4 @@ The approved implementation plan names non-head `refs/archive/*` refs. This Chat
 
 ## Active-tree policy
 
-The clean-room implementation has removed V1/V2 execution code, execution-only tests, runtime registrations, continuation/revalidation/retry/background machinery, and current README links to obsolete OX execution guidance. Historical source, evidence, designs, qualification artifacts, and the superseded operator document remain recoverable through the archive branches and Git history.
+The clean-room implementation has removed V1/V2 execution code, execution-only tests, runtime registrations, continuation/revalidation/retry/background machinery, the superseded top-level V1 operator manual, and current README/security links to obsolete OX execution guidance. Historical source, evidence, designs, qualification artifacts, and superseded documentation remain recoverable through archive branches and Git history.
