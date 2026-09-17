@@ -150,7 +150,8 @@ def test_prepare_ox_request_uses_exact_canonical_provider_body() -> None:
     assert prepared.model_id == OX_MODEL_ID
     assert prepared.body_bytes == expected_body_bytes
     assert prepared.payload_sha256 == _sha256(expected_body_bytes)
-    assert packet_bytes in prepared.body_bytes
+    decoded_body = json.loads(prepared.body_bytes)
+    assert decoded_body["messages"][1]["content"] == packet_text
     assert "independent adversarial code reviewer" in packet.SYSTEM_PROMPT
     assert "only the frozen repository material" in packet.SYSTEM_PROMPT
     assert "correctness" in packet.SYSTEM_PROMPT
