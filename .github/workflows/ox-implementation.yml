@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  task1-red-green:
+  provider-free-gates:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+          python -m pip check
 
       - name: Task 1 focused tests
         run: >-
@@ -30,3 +31,13 @@ jobs:
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
           -q
+
+      - name: Neighbor regression tests
+        run: python -m pytest tests/providers tests/nvidia tests/wolfram -q
+
+      - name: Changed-scope lint
+        run: >-
+          python -m ruff check
+          src/byte_mcp/server.py
+          tests/ox/test_archive_absence.py
+          tests/ox/test_mcp_surface.py
