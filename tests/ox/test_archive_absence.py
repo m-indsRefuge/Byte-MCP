@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 SRC_ROOT = Path("src/byte_mcp")
 LEGACY_MARKERS = (
     "ox_v2_lifetime_probe",
