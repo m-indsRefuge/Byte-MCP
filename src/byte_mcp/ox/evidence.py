@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -108,7 +109,9 @@ def _write_exclusive(path: Path, value: bytes) -> None:
         except OSError as exc:
             raise OXEvidenceError("OX immutable evidence cannot be verified.") from exc
         if existing != value:
-            raise OXEvidenceError("OX immutable evidence already exists with different bytes.")
+            raise OXEvidenceError(
+                "OX immutable evidence already exists with different bytes."
+            ) from None
         return
     except OSError as exc:
         raise OXEvidenceError("OX immutable evidence could not be created.") from exc
@@ -119,10 +122,8 @@ def _write_exclusive(path: Path, value: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
     except OSError as exc:
-        try:
+        with suppress(OSError):
             path.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise OXEvidenceError("OX immutable evidence could not be persisted.") from exc
     _fsync_directory(path.parent)
 
@@ -146,10 +147,8 @@ def _write_atomic(path: Path, value: bytes) -> None:
         os.replace(temp_path, path)
         _fsync_directory(path.parent)
     except OSError as exc:
-        try:
+        with suppress(OSError):
             temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise OXEvidenceError("OX evidence projection could not be persisted.") from exc
 
 
@@ -508,12 +507,13 @@ class OXEvidenceStore:
                     "claimed_at",
                 )
             state = stored_state
-            if stored_state is OXReviewState.READY:
-                state = OXReviewState.OUTCOME_UNKNOWN
-            elif stored_state is OXReviewState.COMPLETED and not self._completion_is_trustworthy(
-                directory,
-                metadata,
-                claim,
+            if stored_state is OXReviewState.READY or (
+                stored_state is OXReviewState.COMPLETED
+                and not self._completion_is_trustworthy(
+                    directory,
+                    metadata,
+                    claim,
+                )
             ):
                 state = OXReviewState.OUTCOME_UNKNOWN
 
