@@ -5,7 +5,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from byte_mcp.ox.snapshot import freeze_snapshot
 
 from byte_mcp.errors import OXBundleError
 from byte_mcp.ox import snapshot as snapshot_module
@@ -17,6 +16,7 @@ from byte_mcp.ox.settings import (
     OX_MAX_SNAPSHOT_CONTENT_BYTES,
     OX_SNAPSHOT_POLICY_VERSION,
 )
+from byte_mcp.ox.snapshot import freeze_snapshot
 
 
 def _repository(tmp_path: Path) -> tuple[Path, OXResolvedRepository]:
