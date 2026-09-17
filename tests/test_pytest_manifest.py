@@ -90,9 +90,10 @@ Full diff:
 }
 """
 
-    assert pytest_manifest._normalize_signature(predecessor) == pytest_manifest._normalize_signature(
-        candidate
-    )
+    predecessor_signature = pytest_manifest._normalize_signature(predecessor)
+    candidate_signature = pytest_manifest._normalize_signature(candidate)
+
+    assert predecessor_signature == candidate_signature
 
 
 def test_comparator_rejects_signature_version_mismatch() -> None:
