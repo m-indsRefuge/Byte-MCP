@@ -47,6 +47,9 @@ jobs:
           src/byte_mcp/ox/snapshot.py
           tests/ox/test_snapshot.py
 
+      - name: Task 5 packet tests
+        run: python -m pytest tests/ox/test_packet.py -q
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -68,6 +71,7 @@ jobs:
           tests/ox/test_models.py
           tests/ox/test_scope.py
           tests/ox/test_snapshot.py
+          tests/ox/test_packet.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
