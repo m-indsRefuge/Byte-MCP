@@ -38,6 +38,9 @@ jobs:
       - name: Task 3 scope tests
         run: python -m pytest tests/ox/test_scope.py -q
 
+      - name: Task 4 snapshot tests
+        run: python -m pytest tests/ox/test_snapshot.py -q
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -53,10 +56,12 @@ jobs:
           src/byte_mcp/ox/models.py
           src/byte_mcp/ox/settings.py
           src/byte_mcp/ox/scope.py
+          src/byte_mcp/ox/snapshot.py
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
           tests/ox/test_models.py
           tests/ox/test_scope.py
+          tests/ox/test_snapshot.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
