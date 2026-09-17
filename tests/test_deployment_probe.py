@@ -25,12 +25,23 @@ def test_offline_real_server_discovery_keeps_providers_lazy(monkeypatch):
     monkeypatch.setattr(server, "service", forbidden)
     monkeypatch.setattr(server, "wolfram_runtime", forbidden)
     monkeypatch.setattr(server, "nvidia_review_runtime", forbidden)
+    monkeypatch.setattr(server, "ox_runtime", forbidden)
     result = asyncio.run(probe_module.probe(REPO))
     assert result == {
         "repo_path": str(REPO),
-        "tools": ["fetch", "list_directory", "list_roots", "nvidia_get_review",
-                  "nvidia_query", "nvidia_review", "search", "wolfram_query"],
-        "tool_count": 8,
+        "tools": [
+            "fetch",
+            "list_directory",
+            "list_roots",
+            "nvidia_get_review",
+            "nvidia_query",
+            "nvidia_review",
+            "ox_get_review",
+            "ox_review",
+            "search",
+            "wolfram_query",
+        ],
+        "tool_count": 10,
     }
 
 
@@ -100,23 +111,24 @@ def test_live_only_initializes_and_lists_tools(monkeypatch, cursor):
             assert (read, write) == ("read", "write")
 
         async def __aenter__(self):
+            events.append("session")
             return self
 
-        async def __aexit__(self, *args):
-            pass
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
 
         async def initialize(self):
             events.append("initialize")
 
-        async def list_tools(self):
-            events.append("list_tools")
-            return SimpleNamespace(tools=[SimpleNamespace(name="fetch")], nextCursor=cursor)
+        async def list_tools(self, cursor=None):
+            assert cursor is None
+            return SimpleNamespace(
+                tools=[SimpleNamespace(name="fetch"), SimpleNamespace(name="search")],
+                nextCursor=cursor,
+            )
 
     monkeypatch.setattr(probe_module, "streamable_http_client", transport)
     monkeypatch.setattr(probe_module, "ClientSession", Session)
-    if cursor is not None:
-        with pytest.raises(ValueError, match="Paginated"):
-            asyncio.run(probe_module.probe(REPO, live=True))
-    else:
-        assert asyncio.run(probe_module.probe(REPO, live=True))["tools"] == ["fetch"]
-    assert events == ["transport", "initialize", "list_tools"]
+    result = asyncio.run(probe_module.live_tools())
+    assert result == ["fetch", "search"]
+    assert events == ["transport", "session", "initialize"]
