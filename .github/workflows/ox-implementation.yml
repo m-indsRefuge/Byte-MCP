@@ -32,6 +32,9 @@ jobs:
           tests/ox/test_mcp_surface.py
           -q
 
+      - name: Task 2 model tests
+        run: python -m pytest tests/ox/test_models.py -q
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
@@ -41,11 +44,12 @@ jobs:
       - name: Wolfram regression tests
         run: python -m pytest tests/wolfram -q
 
-      - name: New Task 1 test lint
+      - name: Clean-room test lint
         run: >-
           python -m ruff check
           tests/ox/test_archive_absence.py
           tests/ox/test_mcp_surface.py
+          tests/ox/test_models.py
 
       - name: Inherited server lint diagnostic
         continue-on-error: true
