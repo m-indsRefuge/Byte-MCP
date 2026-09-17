@@ -29,8 +29,9 @@ def test_offline_real_server_discovery_keeps_providers_lazy(monkeypatch):
     assert result == {
         "repo_path": str(REPO),
         "tools": ["fetch", "list_directory", "list_roots", "nvidia_get_review",
-                  "nvidia_query", "nvidia_review", "search", "wolfram_query"],
-        "tool_count": 8,
+                  "nvidia_query", "nvidia_review", "search", "vscode_active_context",
+                  "wolfram_query"],
+        "tool_count": 9,
     }
 
 
