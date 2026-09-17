@@ -23,7 +23,7 @@ from byte_mcp.ox.models import (
 from byte_mcp.ox.packet import build_review_packet, prepare_ox_request
 from byte_mcp.ox.scope import OXScopeResolver
 from byte_mcp.ox.service import OXReviewService
-from byte_mcp.ox.settings import OXSettings, OX_SNAPSHOT_POLICY_VERSION
+from byte_mcp.ox.settings import OX_SNAPSHOT_POLICY_VERSION, OXSettings
 
 _API_KEY = "test-only-task10-key"
 _STARTED = "2026-09-17T19:00:00+00:00"
