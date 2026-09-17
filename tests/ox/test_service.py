@@ -5,10 +5,9 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+import byte_mcp.ox.service as ox_service
 import httpx
 import pytest
-
-import byte_mcp.ox.service as ox_service
 from byte_mcp.errors import OXBundleError, OXConfigurationError, OXEvidenceError, OXScopeError
 from byte_mcp.ox.evidence import OXEvidenceStore
 from byte_mcp.ox.models import OXPreparedReview, OXReviewMode, OXReviewScope
@@ -28,7 +27,10 @@ def _projects_root(tmp_path: Path, *, content: str = "print('hello')\n") -> Path
     return projects
 
 
-def _settings_loader(evidence_root: Path, api_key: str | None = _API_KEY) -> Callable[[], OXSettings]:
+def _settings_loader(
+    evidence_root: Path,
+    api_key: str | None = _API_KEY,
+) -> Callable[[], OXSettings]:
     return lambda: OXSettings(api_key=api_key, evidence_root=evidence_root)
 
 
