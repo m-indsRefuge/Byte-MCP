@@ -155,3 +155,12 @@ def test_comparator_allows_new_passing_test() -> None:
     )
 
     assert pytest_manifest.compare_manifests(baseline, candidate) is True
+
+
+def test_comparator_allows_inherited_failure_to_be_fixed() -> None:
+    baseline = _manifest(
+        [{"nodeid": "test_a", "outcome": "failed", "failure_signature": "AssertionError: old debt"}]
+    )
+    candidate = _manifest([{"nodeid": "test_a", "outcome": "passed"}])
+
+    assert pytest_manifest.compare_manifests(baseline, candidate) is True
