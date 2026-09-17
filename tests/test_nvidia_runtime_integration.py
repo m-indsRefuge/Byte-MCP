@@ -7,6 +7,8 @@ _EXPECTED_TOOLS = {
     "nvidia_get_review",
     "nvidia_query",
     "nvidia_review",
+    "ox_get_review",
+    "ox_review",
     "search",
     "wolfram_query",
 }
