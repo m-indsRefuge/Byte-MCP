@@ -1,0 +1,373 @@
+name: Deployment hardening V2 disposable E2E
+
+on:
+  push:
+    branches:
+      - ops/deployment-hardening-v2-e2e
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-promotion-and-rollback:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      BASELINE_SHA: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
+      CANDIDATE_SHA: b50746e6b1d71a4d400fcd74bccf80042eb3dc37
+    steps:
+      - name: Checkout orchestration branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.12.10
+
+      - name: Install frozen qualification tooling
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv==0.12.1
+          uv --version
+
+      - name: Run disposable success and rollback rehearsals
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+
+          $baseline = $env:BASELINE_SHA
+          $candidate = $env:CANDIDATE_SHA
+          $harness = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          $evidence = Join-Path $harness 'e2e-evidence'
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+
+          # Provider credentials are deliberately absent for this provider-free rehearsal.
+          foreach ($name in @(
+              'NVIDIA_API_KEY','NVIDIA_API_TOKEN','WOLFRAM_APP_ID','OPENAI_API_KEY',
+              'OX_API_KEY','ANTHROPIC_API_KEY','GOOGLE_API_KEY'
+          )) {
+              Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+          }
+
+          $expectedTools = @(
+              'fetch','list_directory','list_roots','nvidia_get_review',
+              'nvidia_query','nvidia_review','search','wolfram_query'
+          )
+
+          function Invoke-Checked {
+              param([Parameter(Mandatory)][string] $FilePath, [Parameter(Mandatory)][string[]] $Arguments)
+              & $FilePath @Arguments
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Command failed: $FilePath $($Arguments -join ' ') (exit $LASTEXITCODE)"
+              }
+          }
+
+          function Get-FreeTcpPort {
+              $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+              $listener.Start()
+              try { return ([Net.IPEndPoint]$listener.LocalEndpoint).Port }
+              finally { $listener.Stop() }
+          }
+
+          function New-DisposableRuntime {
+              param([Parameter(Mandatory)][string] $Runtime)
+              if (Test-Path -LiteralPath $Runtime) { throw "Disposable runtime already exists: $Runtime" }
+              Invoke-Checked git @('clone','--quiet','https://github.com/m-indsRefuge/Byte-MCP.git',$Runtime)
+              Invoke-Checked git @('-C',$Runtime,'cat-file','-e',"$baseline^{commit}")
+              Invoke-Checked git @('-C',$Runtime,'cat-file','-e',"$candidate^{commit}")
+              Invoke-Checked git @('-C',$Runtime,'checkout','--quiet','--detach',$baseline)
+              $python = Join-Path $Runtime '.venv\Scripts\python.exe'
+              Invoke-Checked uv @('venv','--python','3.12','--seed',(Join-Path $Runtime '.venv'))
+              Invoke-Checked uv @('pip','install','--python',$python,'-e',"${Runtime}[dev]")
+              Invoke-Checked $python @('-m','pip','check')
+              return $python
+          }
+
+          function New-BaselineManifest {
+              param(
+                  [Parameter(Mandatory)][string] $Runtime,
+                  [Parameter(Mandatory)][string] $Python,
+                  [Parameter(Mandatory)][string] $Manifest
+              )
+              $oldPythonPath = $env:PYTHONPATH
+              $oldManifest = $env:BYTE_PYTEST_MANIFEST
+              $oldSha = $env:BYTE_PREDECESSOR_SHA
+              $oldNative = $PSNativeCommandUseErrorActionPreference
+              try {
+                  $env:PYTHONPATH = Join-Path $harness 'scripts'
+                  $env:BYTE_PYTEST_MANIFEST = $Manifest
+                  $env:BYTE_PREDECESSOR_SHA = $baseline
+                  $PSNativeCommandUseErrorActionPreference = $false
+                  Push-Location $Runtime
+                  try {
+                      & $Python -m pytest --tb=no -q -p pytest_manifest
+                      $pytestExit = $LASTEXITCODE
+                  }
+                  finally { Pop-Location }
+                  if ($pytestExit -ne 1) {
+                      throw "Expected inherited-baseline pytest exit 1, got $pytestExit"
+                  }
+              }
+              finally {
+                  $env:PYTHONPATH = $oldPythonPath
+                  $env:BYTE_PYTEST_MANIFEST = $oldManifest
+                  $env:BYTE_PREDECESSOR_SHA = $oldSha
+                  $PSNativeCommandUseErrorActionPreference = $oldNative
+              }
+              if (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
+                  throw 'Baseline manifest was not generated.'
+              }
+              $plugin = Join-Path $harness 'scripts'
+              $code = "import json,sys; sys.path.insert(0,r'$plugin'); from pytest_manifest import validate_manifest; p=json.load(open(r'$Manifest')); validate_manifest(p, expected_sha='$baseline'); assert p['signature_version']=='repo-root-v2'; assert p['collected_count']>0; print(p['collected_count'],p['passed_count'],p['failed_count'],p['skipped_count'])"
+              Invoke-Checked $Python @('-B','-c',$code)
+          }
+
+          function Get-RehearsalSupervisors {
+              param([Parameter(Mandatory)][string] $Runtime)
+              $script = Join-Path $harness 'scripts\RehearsalSupervisor.ps1'
+              @(
+                  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                      $_.CommandLine -and
+                      $_.CommandLine -match [regex]::Escape($script) -and
+                      $_.CommandLine -match [regex]::Escape($Runtime)
+                  }
+              )
+          }
+
+          function Assert-OneSupervisor {
+              param([Parameter(Mandatory)][string] $Runtime, [Parameter(Mandatory)][string] $StateRoot)
+              $processes = @(Get-RehearsalSupervisors -Runtime $Runtime)
+              if ($processes.Count -ne 1) {
+                  throw "Expected exactly one rehearsal supervisor for $Runtime; found $($processes.Count)."
+              }
+              $statePath = Join-Path $StateRoot 'supervisor.json'
+              $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+              if ([int]$state.pid -ne [int]$processes[0].ProcessId) {
+                  throw 'Supervisor state PID does not identify the unique running supervisor.'
+              }
+              return [pscustomobject]@{ count = 1; pid = [int]$processes[0].ProcessId; created = $processes[0].CreationDate }
+          }
+
+          function Stop-DisposableScenario {
+              param([Parameter(Mandatory)][pscustomobject] $Context)
+              try {
+                  $running = @(Get-RehearsalSupervisors -Runtime $Context.RuntimeRepo)
+                  if ($running.Count -eq 1) {
+                      try {
+                          $supervisor = Get-DeploymentSupervisor -RuntimeRepo $Context.RuntimeRepo -Context $Context
+                          Suspend-DeploymentSupervisor $supervisor
+                      }
+                      catch { Write-Host "Cleanup supervisor warning: $($_.Exception.Message)" }
+                  }
+                  try { Stop-DeploymentRuntime -RuntimeRepo $Context.RuntimeRepo -Context $Context }
+                  catch { Write-Host "Cleanup runtime warning: $($_.Exception.Message)" }
+              }
+              finally {
+                  $remaining = @(Get-RehearsalSupervisors -Runtime $Context.RuntimeRepo)
+                  foreach ($process in $remaining) {
+                      # Bound cleanup to the exact disposable rehearsal command line.
+                      Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+                  }
+              }
+          }
+
+          # The orchestration commit may add only workflow material; the reviewed harness itself is frozen.
+          Invoke-Checked git @('-C',$harness,'diff','--exit-code',$candidate,'HEAD','--','scripts','tests/launcher')
+          . (Join-Path $harness 'scripts\Deployment.Common.ps1')
+
+          $root = Join-Path $env:RUNNER_TEMP ('byte-mcp-e2e-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $baselineManifest = Join-Path $evidence 'baseline-manifest.json'
+
+          # Build the reusable exact-predecessor manifest from a fresh checkout.
+          $manifestRuntime = Join-Path $root 'manifest-runtime'
+          $manifestPython = New-DisposableRuntime -Runtime $manifestRuntime
+          New-BaselineManifest -Runtime $manifestRuntime -Python $manifestPython -Manifest $baselineManifest
+          $baselinePayload = Get-Content -LiteralPath $baselineManifest -Raw | ConvertFrom-Json
+          if ($baselinePayload.failed_count -ne 15) {
+              throw "Inherited baseline changed: expected 15 failures, found $($baselinePayload.failed_count)."
+          }
+
+          $successContext = $null
+          $rollbackContext = $null
+          $summary = [ordered]@{
+              baseline_sha = $baseline
+              candidate_sha = $candidate
+              expected_tools = $expectedTools
+              manifest_hardening = 'PASS'
+              success = [ordered]@{}
+              rollback = [ordered]@{}
+              provider_requests = [ordered]@{ nvidia = 0; ox = 0; wolfram = 0 }
+          }
+
+          try {
+              # SUCCESS PATH: fresh runtime, fresh state root, fresh high ports.
+              $successRoot = Join-Path $root 'success'
+              New-Item -ItemType Directory -Force -Path $successRoot | Out-Null
+              $successRuntime = Join-Path $successRoot 'runtime'
+              $successCandidate = Join-Path $successRoot 'candidate'
+              $successState = Join-Path $successRoot 'state'
+              $successPython = New-DisposableRuntime -Runtime $successRuntime
+              $successMcp = Get-FreeTcpPort
+              do { $successTunnel = Get-FreeTcpPort } while ($successTunnel -eq $successMcp)
+              $successName = 'rehearsal-success-' + [guid]::NewGuid().ToString('N')
+              $successContext = New-DeploymentContext -RuntimeRepo $successRuntime -StateRoot $successState `
+                  -McpPort $successMcp -TunnelPort $successTunnel -SupervisorKind LocalProcess `
+                  -SupervisorName $successName -Mode Disposable -BaselineFailureFile $baselineManifest
+              $successVenvBefore = Get-DeploymentVenvIdentity $successRuntime
+              $initialSuccessSupervisor = Start-LocalDeploymentSupervisor -Context $successContext
+              $successBefore = Wait-DeploymentRuntime -RuntimeRepo $successRuntime -Context $successContext `
+                  -ExpectedHead $baseline -ExpectedTools $expectedTools -TaskName $successName
+              $initialSuccessPid = [int]$initialSuccessSupervisor.process_id
+
+              & (Join-Path $harness 'scripts\Promote-ByteMCP.ps1') `
+                  -RuntimeRepo $successRuntime -ExpectedPredecessor $baseline -TargetCommit $candidate `
+                  -CandidateRepo $successCandidate -Apply -StateRoot $successState `
+                  -McpPort $successMcp -TunnelPort $successTunnel -SupervisorKind LocalProcess `
+                  -SupervisorName $successName -Mode Disposable -BaselineFailureFile $baselineManifest | Out-Host
+
+              $successAfter = Wait-DeploymentRuntime -RuntimeRepo $successRuntime -Context $successContext `
+                  -ExpectedHead $candidate -ExpectedTools $expectedTools -TaskName $successName
+              $successSupervisor = Assert-OneSupervisor -Runtime $successRuntime -StateRoot $successState
+              if ($successSupervisor.pid -eq $initialSuccessPid) {
+                  throw 'Success path reused the predecessor supervisor PID.'
+              }
+              if ((Get-DeploymentVenvIdentity $successRuntime) -cne $successVenvBefore) {
+                  throw 'Disposable runtime venv identity changed on successful promotion.'
+              }
+              if ((Get-DeploymentHead $successRuntime) -cne $candidate) {
+                  throw 'Success runtime did not remain at the frozen candidate SHA.'
+              }
+              $successReceiptPath = Join-Path $successCandidate '.venv\deployment-receipt.json'
+              $successReceipt = Get-Content -LiteralPath $successReceiptPath -Raw | ConvertFrom-Json
+              if ($successReceipt.result -cne 'PROMOTED') { throw 'Success receipt did not record PROMOTED.' }
+              Copy-Item -LiteralPath $successReceiptPath -Destination (Join-Path $evidence 'success-receipt.json') -Force
+              Copy-Item -LiteralPath ($baselineManifest + '.candidate') -Destination (Join-Path $evidence 'success-candidate-manifest.json') -Force
+              $summary.success = [ordered]@{
+                  result = 'PROMOTED'
+                  head = Get-DeploymentHead $successRuntime
+                  repo_path = $successAfter.repo_path
+                  status = $successAfter.status
+                  tools = @($successAfter.tools)
+                  predecessor_server_pid = [int]$successBefore.server_pid
+                  candidate_server_pid = [int]$successAfter.server_pid
+                  predecessor_supervisor_pid = $initialSuccessPid
+                  final_supervisor_pid = $successSupervisor.pid
+                  supervisor_count = $successSupervisor.count
+                  production_venv_recreated = [bool]$successReceipt.production_venv_recreated
+              }
+              Write-Host 'SUCCESS_PROMOTION=PASS'
+              Write-Host 'SUPERVISOR_COUNT_AFTER_SUCCESS=1'
+
+              Stop-DisposableScenario -Context $successContext
+              $successContext = $null
+
+              # ROLLBACK PATH: independent fresh runtime and state, then controlled disposable-only failure.
+              $rollbackRoot = Join-Path $root 'rollback'
+              New-Item -ItemType Directory -Force -Path $rollbackRoot | Out-Null
+              $rollbackRuntime = Join-Path $rollbackRoot 'runtime'
+              $rollbackCandidate = Join-Path $rollbackRoot 'candidate'
+              $rollbackState = Join-Path $rollbackRoot 'state'
+              $rollbackPython = New-DisposableRuntime -Runtime $rollbackRuntime
+              $rollbackMcp = Get-FreeTcpPort
+              do { $rollbackTunnel = Get-FreeTcpPort } while ($rollbackTunnel -eq $rollbackMcp)
+              $rollbackName = 'rehearsal-rollback-' + [guid]::NewGuid().ToString('N')
+              $rollbackContext = New-DeploymentContext -RuntimeRepo $rollbackRuntime -StateRoot $rollbackState `
+                  -McpPort $rollbackMcp -TunnelPort $rollbackTunnel -SupervisorKind LocalProcess `
+                  -SupervisorName $rollbackName -Mode Disposable -BaselineFailureFile $baselineManifest
+              $rollbackVenvBefore = Get-DeploymentVenvIdentity $rollbackRuntime
+              $initialRollbackSupervisor = Start-LocalDeploymentSupervisor -Context $rollbackContext
+              $rollbackBefore = Wait-DeploymentRuntime -RuntimeRepo $rollbackRuntime -Context $rollbackContext `
+                  -ExpectedHead $baseline -ExpectedTools $expectedTools -TaskName $rollbackName
+              $initialRollbackPid = [int]$initialRollbackSupervisor.process_id
+
+              $rollbackThrown = $false
+              $rollbackMessage = ''
+              try {
+                  & (Join-Path $harness 'scripts\Promote-ByteMCP.ps1') `
+                      -RuntimeRepo $rollbackRuntime -ExpectedPredecessor $baseline -TargetCommit $candidate `
+                      -CandidateRepo $rollbackCandidate -Apply -StateRoot $rollbackState `
+                      -McpPort $rollbackMcp -TunnelPort $rollbackTunnel -SupervisorKind LocalProcess `
+                      -SupervisorName $rollbackName -Mode Disposable -BaselineFailureFile $baselineManifest `
+                      -InjectPostStartFailure | Out-Host
+              }
+              catch {
+                  $rollbackThrown = $true
+                  $rollbackMessage = $_.Exception.Message
+                  Write-Host "EXPECTED_ROLLBACK_EXCEPTION=$rollbackMessage"
+              }
+              if (-not $rollbackThrown -or $rollbackMessage -notmatch 'outcome=ROLLED_BACK') {
+                  throw 'Controlled post-start failure did not complete a verified rollback.'
+              }
+
+              $rollbackAfter = Wait-DeploymentRuntime -RuntimeRepo $rollbackRuntime -Context $rollbackContext `
+                  -ExpectedHead $baseline -ExpectedTools $expectedTools -TaskName $rollbackName
+              $rollbackSupervisor = Assert-OneSupervisor -Runtime $rollbackRuntime -StateRoot $rollbackState
+              if ($rollbackSupervisor.pid -eq $initialRollbackPid) {
+                  throw 'Rollback path reused the original supervisor PID.'
+              }
+              if ([int]$rollbackAfter.server_pid -eq [int]$rollbackBefore.server_pid -and
+                  $rollbackAfter.server_started -eq $rollbackBefore.server_started) {
+                  throw 'Rollback path reused stale predecessor server identity.'
+              }
+              if ((Get-DeploymentVenvIdentity $rollbackRuntime) -cne $rollbackVenvBefore) {
+                  throw 'Disposable runtime venv identity changed during rollback.'
+              }
+              if ((Get-DeploymentHead $rollbackRuntime) -cne $baseline) {
+                  throw 'Rollback runtime did not restore the exact predecessor SHA.'
+              }
+              $rollbackReceiptPath = Join-Path $rollbackCandidate '.venv\deployment-receipt.json'
+              $rollbackReceipt = Get-Content -LiteralPath $rollbackReceiptPath -Raw | ConvertFrom-Json
+              if ($rollbackReceipt.result -cne 'ROLLED_BACK' -or $rollbackReceipt.rollback.status -cne 'READY') {
+                  throw 'Rollback receipt does not prove predecessor READY.'
+              }
+              Copy-Item -LiteralPath $rollbackReceiptPath -Destination (Join-Path $evidence 'rollback-receipt.json') -Force
+              Copy-Item -LiteralPath ($baselineManifest + '.candidate') -Destination (Join-Path $evidence 'rollback-candidate-manifest.json') -Force
+              $summary.rollback = [ordered]@{
+                  result = 'ROLLED_BACK'
+                  head = Get-DeploymentHead $rollbackRuntime
+                  repo_path = $rollbackAfter.repo_path
+                  status = $rollbackAfter.status
+                  tools = @($rollbackAfter.tools)
+                  initial_server_pid = [int]$rollbackBefore.server_pid
+                  restored_server_pid = [int]$rollbackAfter.server_pid
+                  initial_supervisor_pid = $initialRollbackPid
+                  restored_supervisor_pid = $rollbackSupervisor.pid
+                  supervisor_count = $rollbackSupervisor.count
+                  stale_supervisor_reuse = $false
+                  production_venv_recreated = [bool]$rollbackReceipt.production_venv_recreated
+              }
+              Write-Host 'ROLLBACK_REHEARSAL=PASS'
+              Write-Host 'SUPERVISOR_COUNT_AFTER_ROLLBACK=1'
+              Write-Host 'STALE_SUPERVISOR_REUSE=FALSE'
+
+              $summaryPath = Join-Path $evidence 'summary.json'
+              [IO.File]::WriteAllText(
+                  $summaryPath,
+                  ($summary | ConvertTo-Json -Depth 10) + [Environment]::NewLine,
+                  [Text.UTF8Encoding]::new($false)
+              )
+              Write-Host 'POST_REVIEW_HARDENING=PASS'
+              Write-Host 'REAL_PRODUCTION_MUTATION=FALSE'
+              Write-Host 'NVIDIA_PROVIDER_REQUESTS=0'
+              Write-Host 'OX_PROVIDER_REQUESTS=0'
+              Write-Host 'WOLFRAM_PROVIDER_REQUESTS=0'
+          }
+          finally {
+              if ($null -ne $successContext) { Stop-DisposableScenario -Context $successContext }
+              if ($null -ne $rollbackContext) { Stop-DisposableScenario -Context $rollbackContext }
+          }
+
+      - name: Upload disposable E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-hardening-v2-disposable-e2e-${{ github.sha }}
+          path: e2e-evidence
+          if-no-files-found: warn
