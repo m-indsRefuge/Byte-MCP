@@ -41,6 +41,12 @@ jobs:
       - name: Task 4 snapshot tests
         run: python -m pytest tests/ox/test_snapshot.py -q
 
+      - name: Task 4 snapshot format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/snapshot.py
+          tests/ox/test_snapshot.py
+
       - name: Provider-neutral regression tests
         run: python -m pytest tests/providers -q
 
