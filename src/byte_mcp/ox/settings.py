@@ -1,60 +1,60 @@
+"""Fixed configuration for the clean-room OX provider path."""
+
+from __future__ import annotations
+
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from byte_mcp.providers.transport import ProviderTimeoutPolicy
+
+OX_REVIEW_ID_PREFIX = "OX-"
+OX_GATEWAY_URL = "https://ai-gateway.vercel.sh/v1/chat/completions"
+OX_MODEL_ID = "zai/glm-5.3-flash"
+OX_SNAPSHOT_POLICY_VERSION = "ox-snapshot-v1"
+OX_PACKET_POLICY_VERSION = "ox-packet-v1"
+OX_MAX_ARTIFACT_BYTES = 1_000_000
+OX_MAX_ARTIFACTS = 5_000
+OX_MAX_SNAPSHOT_CONTENT_BYTES = 3_250_000
+OX_MAX_PACKET_BYTES = 3_500_000
+OX_TIMEOUT_POLICY = ProviderTimeoutPolicy(
+    connect_seconds=10.0,
+    write_seconds=30.0,
+    read_seconds=600.0,
+    pool_seconds=10.0,
+    absolute_deadline_seconds=600.0,
+)
+
+
+def _default_evidence_root() -> Path:
+    if sys.platform == "win32":
+        local_app_data = os.getenv("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        return base / "Byte-MCP" / "ox"
+    xdg_data_home = os.getenv("XDG_DATA_HOME")
+    base = Path(xdg_data_home) if xdg_data_home else Path.home() / ".local" / "share"
+    return base / "byte-mcp" / "ox"
+
+
+def _resolve_evidence_root(raw: str | None) -> Path:
+    value = Path(os.path.expandvars(raw)).expanduser() if raw else _default_evidence_root()
+    return value.resolve()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
 class OXSettings:
-    api_key: str | None
-    repositories_file: Path
+    api_key: str | None = field(repr=False)
     evidence_root: Path
-    max_bundle_bytes: int = 4_000_000
-    max_output_tokens: int = 65_536
-    orphan_recovery_seconds: int = 1_800
-    gateway_url: str = "https://ai-gateway.vercel.sh/v1/chat/completions"
-    model: str = "zai/glm-5.3-flash"
-    provider_slug: str = "zai"
 
     def __repr__(self) -> str:
-        return f"OXSettings(api_key_configured={self.api_key is not None})"
+        return (
+            "OXSettings("
+            f"api_key_configured={self.api_key is not None}, evidence_root={self.evidence_root!r})"
+        )
 
     @classmethod
-    def load(cls, repo_root: Path) -> "OXSettings":
-        def bounded(name: str, default: int, low: int, high: int) -> int:
-            value = int(os.getenv(name, str(default)))
-            if not low <= value <= high:
-                raise ValueError(f"{name} must be between {low} and {high}")
-            return value
-
-        repositories = Path(
-            os.getenv("BYTE_MCP_OX_REPOSITORIES_FILE", "config/ox-repositories.local.json")
-        )
-        if not repositories.is_absolute():
-            repositories = repo_root / repositories
-        evidence = os.getenv("BYTE_MCP_OX_EVIDENCE_DIR")
-        if evidence:
-            evidence_root = Path(evidence)
-        elif sys.platform == "win32":
-            evidence_root = (
-                Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData/Local")) / "Byte-MCP" / "ox"
-            )
-        else:
-            evidence_root = (
-                Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local/share")) / "byte-mcp" / "ox"
-            )
+    def load(cls) -> OXSettings:
         key = os.getenv("AI_GATEWAY_API_KEY", "").strip() or None
-        return cls(
-            api_key=key,
-            repositories_file=repositories,
-            evidence_root=evidence_root,
-            max_bundle_bytes=bounded(
-                "BYTE_MCP_OX_MAX_BUNDLE_BYTES", 4_000_000, 16_384, 16_000_000
-            ),
-            max_output_tokens=bounded(
-                "BYTE_MCP_OX_MAX_OUTPUT_TOKENS", 65_536, 1_024, 131_072
-            ),
-            orphan_recovery_seconds=bounded(
-                "BYTE_MCP_OX_ORPHAN_RECOVERY_SECONDS", 1_800, 901, 86_400
-            ),
-        )
+        evidence_root = _resolve_evidence_root(os.getenv("BYTE_MCP_OX_EVIDENCE_DIR"))
+        return cls(api_key=key, evidence_root=evidence_root)

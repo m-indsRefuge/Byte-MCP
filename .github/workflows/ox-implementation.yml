@@ -1,0 +1,185 @@
+name: OX Implementation Focused Gate
+
+on:
+  push:
+    branches:
+      - feat/ox-clean-room-rebuild
+
+permissions:
+  contents: read
+
+jobs:
+  provider-free-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip check
+
+      - name: Task 1 focused tests
+        run: >-
+          python -m pytest
+          tests/ox/test_archive_absence.py
+          tests/ox/test_mcp_surface.py
+          -q
+
+      - name: Task 2 model tests
+        run: python -m pytest tests/ox/test_models.py -q
+
+      - name: Task 3 scope tests
+        run: python -m pytest tests/ox/test_scope.py -q
+
+      - name: Task 4 snapshot tests
+        run: python -m pytest tests/ox/test_snapshot.py -q
+
+      - name: Task 4 snapshot format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/snapshot.py
+          tests/ox/test_snapshot.py
+
+      - name: Task 5 packet tests
+        run: python -m pytest tests/ox/test_packet.py -q
+
+      - name: Task 5 packet format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/packet.py
+          tests/ox/test_packet.py
+
+      - name: Task 6 evidence tests
+        run: python -m pytest tests/ox/test_evidence.py -q
+
+      - name: Task 6 evidence format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/evidence.py
+          tests/ox/test_evidence.py
+
+      - name: Task 7 security tests
+        run: python -m pytest tests/ox/test_security.py -q
+
+      - name: Task 7 security format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/packet.py
+          tests/ox/test_security.py
+
+      - name: Task 8 client tests
+        run: python -m pytest tests/ox/test_client.py -q
+
+      - name: Task 8 client format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/client.py
+          tests/ox/test_client.py
+
+      - name: Task 9 service and security tests
+        run: >-
+          python -m pytest
+          tests/ox/test_service.py
+          tests/ox/test_security.py
+          -q
+
+      - name: Task 9 service format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/service.py
+          tests/ox/test_service.py
+          tests/ox/test_security.py
+
+      - name: Task 10 crash, replay, and concurrency tests
+        run: >-
+          python -m pytest
+          tests/ox/test_crash_and_concurrency.py
+          tests/ox/test_evidence.py
+          tests/ox/test_service.py
+          -q
+
+      - name: Task 10 crash and evidence format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/ox/evidence.py
+          tests/ox/test_crash_and_concurrency.py
+
+      - name: Task 11 lazy runtime and MCP surface tests
+        run: python -m pytest tests/ox/test_mcp_surface.py -q
+
+      - name: Task 11 runtime and server quality gate
+        run: >-
+          python -m ruff check
+          src/byte_mcp/server.py
+          src/byte_mcp/ox/runtime.py
+          tests/ox/test_mcp_surface.py
+
+      - name: Task 11 runtime and server format check
+        run: >-
+          python -m ruff format --check
+          src/byte_mcp/server.py
+          src/byte_mcp/ox/runtime.py
+          tests/ox/test_mcp_surface.py
+
+      - name: Task 12 security privacy and isolation tests
+        run: >-
+          python -m pytest
+          tests/ox/test_security.py
+          tests/ox/test_archive_absence.py
+          -q
+
+      - name: Task 12 security qualification quality gate
+        run: >-
+          python -m ruff check
+          tests/ox/test_security.py
+          tests/ox/test_archive_absence.py
+
+      - name: Task 12 security qualification format check
+        run: >-
+          python -m ruff format --check
+          tests/ox/test_security.py
+          tests/ox/test_archive_absence.py
+
+      - name: Provider-neutral regression tests
+        run: python -m pytest tests/providers -q
+
+      - name: NVIDIA regression tests
+        run: python -m pytest tests/nvidia -q
+
+      - name: Wolfram regression tests
+        run: python -m pytest tests/wolfram -q
+
+      - name: Clean-room lint
+        run: >-
+          python -m ruff check
+          src/byte_mcp/ox/models.py
+          src/byte_mcp/ox/settings.py
+          src/byte_mcp/ox/scope.py
+          src/byte_mcp/ox/snapshot.py
+          src/byte_mcp/ox/packet.py
+          src/byte_mcp/ox/evidence.py
+          src/byte_mcp/ox/client.py
+          src/byte_mcp/ox/service.py
+          src/byte_mcp/ox/runtime.py
+          tests/ox/test_archive_absence.py
+          tests/ox/test_mcp_surface.py
+          tests/ox/test_models.py
+          tests/ox/test_scope.py
+          tests/ox/test_snapshot.py
+          tests/ox/test_packet.py
+          tests/ox/test_evidence.py
+          tests/ox/test_security.py
+          tests/ox/test_client.py
+          tests/ox/test_service.py
+          tests/ox/test_crash_and_concurrency.py
+
+      - name: Inherited server lint diagnostic
+        continue-on-error: true
+        run: python -m ruff check src/byte_mcp/server.py

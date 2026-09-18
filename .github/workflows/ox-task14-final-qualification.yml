@@ -1,0 +1,57 @@
+name: OX Task 14 Final Provider-Free Qualification
+
+on:
+  push:
+    branches:
+      - feat/ox-clean-room-rebuild
+
+permissions:
+  contents: read
+
+jobs:
+  final-provider-free-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Task 14 dependency compile and lint
+        run: |
+          python -m pip check
+          python -m compileall -q src tests scripts/mcp_smoke_test.py scripts/wolfram_qualification.py scripts/wolfram_native_calibration.py
+          python -m ruff check .
+
+      - name: Task 14 exact clean-room format check
+        run: python -m ruff format --check src/byte_mcp/ox src/byte_mcp/server.py tests/ox
+
+      - name: Task 14 OX suite
+        run: python -m pytest tests/ox -q
+
+      - name: Task 14 neighbor regression suite
+        run: python -m pytest tests/providers tests/nvidia tests/wolfram -q
+
+      - name: Task 14 full suite
+        run: python -m pytest
+
+      - name: Task 14 exact surface and legacy absence
+        run: python -m pytest tests/ox/test_mcp_surface.py tests/ox/test_archive_absence.py -q
+
+      - name: Task 14 neighboring production drift guard
+        run: >-
+          git diff --exit-code
+          61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9...HEAD
+          --
+          src/byte_mcp/nvidia
+          src/byte_mcp/wolfram
+          src/byte_mcp/providers

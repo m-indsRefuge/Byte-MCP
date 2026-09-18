@@ -1,487 +1,288 @@
+from __future__ import annotations
+
+import asyncio
 import json
-from collections.abc import Mapping
-from dataclasses import asdict
-from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 import pytest
 
-from byte_mcp.errors import (
-    OXAuthenticationError,
-    OXContextLimitError,
-    OXPermissionError,
-    OXProtocolError,
-    OXProviderUnavailableError,
-    OXQuotaError,
-    OXRateLimitError,
-    OXRequestError,
-    OXTransportError,
-    OXTransportFailureKind,
-)
-from byte_mcp.ox import client as client_module
-from byte_mcp.ox.client import OXClient
-from byte_mcp.ox.models import ProviderUsage
-from byte_mcp.ox.settings import OXSettings
-
-SECRET = "SENTINEL-SECRET"
-ATTEMPT_ID = "OX-000001-A001"
-MESSAGES = [
-    {"role": "system", "content": "You are an independent validator."},
-    {"role": "user", "content": "Review this bounded packet."},
-]
-SUCCESS_BODY = {
-    "id": "chatcmpl-123",
-    "model": "zai/glm-5.3-flash",
-    "choices": [
-        {
-            "index": 0,
-            "message": {"role": "assistant", "content": "The packet is reviewable."},
-            "finish_reason": "stop",
-        }
-    ],
-    "usage": {
-        "prompt_tokens": 7,
-        "completion_tokens": 3,
-        "total_tokens": 10,
-        "prompt_tokens_details": {"cached_tokens": 1},
-    },
-}
-
-
-def make_settings() -> OXSettings:
-    return OXSettings(SECRET, Path("repositories.json"), Path("evidence"))
-
-
-def make_client(handler):
-    return OXClient(make_settings(), transport=httpx.MockTransport(handler))
-
-
-_APPROVED_TRANSPORT_ERROR_FIELDS = frozenset(
-    {
-        "attempt_outcome",
-        "transport_failure_kind",
-        "provider_started_at",
-        "provider_finished_at",
-        "elapsed_ms",
-        "transport_observation",
-    }
+import byte_mcp.ox.client as ox_client
+from byte_mcp.errors import OXProtocolError
+from byte_mcp.ox.client import execute_ox_transport, extract_ox_review_text
+from byte_mcp.ox.packet import prepare_ox_request
+from byte_mcp.providers import (
+    ProviderAttemptOutcome,
+    ProviderTimeoutPolicy,
+    ProviderTransmissionContext,
+    ProviderTransportError,
+    ProviderTransportFailureKind,
 )
 
+STARTED_AT = "2026-09-17T18:00:00+00:00"
+API_KEY = "test-only-ox-key"
 
-def assert_safe_transport_error_state(
-    error: OXTransportError,
-    *,
-    sentinel: str,
-    original_exception: BaseException,
-) -> None:
-    assert {
-        "attempt_outcome",
-        "transport_failure_kind",
-        "provider_started_at",
-        "provider_finished_at",
-        "elapsed_ms",
-    } <= set(error.__dict__)
-    assert set(error.__dict__) <= _APPROVED_TRANSPORT_ERROR_FIELDS
-    _assert_state_does_not_retain_transport_failure(
-        error.__dict__, sentinel=sentinel, original_exception=original_exception
+
+def _prepared_request():
+    return prepare_ox_request(b"OX REVIEW PACKET\nOBJECTIVE:\nReview the frozen code.\n")
+
+
+def _transmission_context(prepared=None) -> ProviderTransmissionContext:
+    request = _prepared_request() if prepared is None else prepared
+    return ProviderTransmissionContext(
+        provider_started_at=STARTED_AT,
+        expected_request_sha256=request.request_sha256,
     )
-    assert isinstance(error.attempt_outcome, str)
-    assert isinstance(error.transport_failure_kind, OXTransportFailureKind)
-    assert isinstance(error.provider_started_at, str)
-    assert isinstance(error.provider_finished_at, str)
-    assert isinstance(error.elapsed_ms, int)
-    assert not isinstance(error.elapsed_ms, bool)
 
 
-def _assert_state_does_not_retain_transport_failure(
-    value: object,
-    *,
-    sentinel: str,
-    original_exception: BaseException,
-) -> None:
-    assert value is not original_exception
-    assert not isinstance(value, BaseException)
-    if isinstance(value, str):
-        assert sentinel not in value
-    elif isinstance(value, Mapping):
-        for key, item in value.items():
-            _assert_state_does_not_retain_transport_failure(
-                key, sentinel=sentinel, original_exception=original_exception
-            )
-            _assert_state_does_not_retain_transport_failure(
-                item, sentinel=sentinel, original_exception=original_exception
-            )
-    elif isinstance(value, tuple | list | set | frozenset):
-        for item in value:
-            _assert_state_does_not_retain_transport_failure(
-                item, sentinel=sentinel, original_exception=original_exception
-            )
-
-
-def test_complete_posts_one_fixed_request_and_preserves_safe_response_evidence():
-    requests = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, json=SUCCESS_BODY)
-
-    client = make_client(handler)
-    result = client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
-
-    assert len(requests) == 1
-    request = requests[0]
-    assert request.method == "POST"
-    assert str(request.url) == "https://ai-gateway.vercel.sh/v1/chat/completions"
-    assert request.headers["authorization"] == f"Bearer {SECRET}"
-    body = json.loads(request.content)
-    assert body == {
-        "messages": MESSAGES,
-        "model": "zai/glm-5.3-flash",
-        "stream": False,
-        "max_tokens": 65_536,
-        "reasoning": {"effort": "medium"},
-        "providerOptions": {"gateway": {"only": ["zai"]}},
-    }
-    assert result.content == "The packet is reviewable."
-    assert result.response_id == "chatcmpl-123"
-    assert result.model == "zai/glm-5.3-flash"
-    assert result.usage == ProviderUsage(
-        input_tokens=7,
-        output_tokens=3,
-        total_tokens=10,
-        cached_input_tokens=1,
+def _execute(*, prepared=None, context=None, transport=None):
+    request = _prepared_request() if prepared is None else prepared
+    transmission_context = _transmission_context(request) if context is None else context
+    return asyncio.run(
+        execute_ox_transport(
+            request,
+            transmission_context,
+            api_key=API_KEY,
+            transport=transport,
+        )
     )
-    assert result.raw_response == SUCCESS_BODY
-    assert SECRET not in repr(client)
-    assert SECRET not in repr(result)
-    assert SECRET not in json.dumps(asdict(result))
 
 
-def test_complete_requests_json_object_response_format_in_json_mode():
-    requests = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, json=SUCCESS_BODY)
-
-    make_client(handler).complete(MESSAGES, json_mode=True, attempt_id=ATTEMPT_ID)
-
-    body = json.loads(requests[0].content)
-    assert body["response_format"] == {"type": "json_object"}
-
-
-@pytest.mark.parametrize(
-    ("status", "payload", "error_type"),
-    [
-        (401, {"error": {"code": "invalid_api_key"}}, OXAuthenticationError),
-        (403, {"error": {"code": "forbidden"}}, OXPermissionError),
-        (400, {"error": {"code": "context_length_exceeded"}}, OXContextLimitError),
-        (400, {"error": {"code": "invalid_request_error"}}, OXRequestError),
-        (429, {"error": {"code": "rate_limit_exceeded"}}, OXRateLimitError),
-        (429, {"error": {"code": "insufficient_quota"}}, OXQuotaError),
-        (500, {"error": {"code": "internal_error"}}, OXProviderUnavailableError),
-    ],
-)
-def test_complete_maps_provider_status_to_safe_domain_error(status, payload, error_type):
-    calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(status, json=payload)
-
-    with pytest.raises(error_type) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
-
-    assert calls == 1
-    assert raised.value.attempt_outcome == "REJECTED"
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert SECRET not in str(raised.value)
-    assert SECRET not in repr(raised.value)
-
-
-@pytest.mark.parametrize(
-    ("exception_type", "outcome"),
-    [
-        (httpx.ConnectError, "NOT_SENT"),
-        (httpx.ConnectTimeout, "NOT_SENT"),
-        (httpx.PoolTimeout, "NOT_SENT"),
-        (httpx.WriteTimeout, "OUTCOME_UNKNOWN"),
-        (httpx.ReadTimeout, "OUTCOME_UNKNOWN"),
-        (httpx.ReadError, "OUTCOME_UNKNOWN"),
-        (httpx.WriteError, "OUTCOME_UNKNOWN"),
-        (httpx.RemoteProtocolError, "OUTCOME_UNKNOWN"),
-    ],
-)
-def test_complete_maps_transport_failure_without_retry(exception_type, outcome):
-    calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        raise exception_type("transport failure", request=request)
-
-    with pytest.raises(OXTransportError) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
-
-    assert calls == 1
-    assert raised.value.attempt_outcome == outcome
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert SECRET not in repr(raised.value)
-
-
-def test_q03h_ac08_ambiguous_transport_diagnostic_is_bounded_and_timed():
-    sentinel = "Q03H-READ-ERROR-SENTINEL"
-    calls = 0
-    original_exception = None
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls, original_exception
-        calls += 1
-        original_exception = httpx.ReadError(sentinel, request=request)
-        raise original_exception
-
-    earliest = datetime.now(UTC)
-    with pytest.raises(OXTransportError) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
-    latest = datetime.now(UTC)
-
-    assert calls == 1
-    assert raised.value.attempt_outcome == "OUTCOME_UNKNOWN"
-    assert raised.value.transport_failure_kind is OXTransportFailureKind.READ_ERROR
-    started_at = datetime.fromisoformat(raised.value.provider_started_at)
-    finished_at = datetime.fromisoformat(raised.value.provider_finished_at)
-    assert started_at.tzinfo == UTC
-    assert finished_at.tzinfo == UTC
-    assert earliest <= started_at <= finished_at <= latest
-    assert raised.value.elapsed_ms >= 0
-    assert original_exception is not None
-    assert_safe_transport_error_state(
-        raised.value, sentinel=sentinel, original_exception=original_exception
-    )
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert sentinel not in repr(raised.value)
-
-
-@pytest.mark.parametrize(
-    ("exception_type", "outcome", "kind"),
-    [
-        (TimeoutError, "OUTCOME_UNKNOWN", OXTransportFailureKind.ABSOLUTE_DEADLINE),
-        (httpx.ConnectTimeout, "NOT_SENT", OXTransportFailureKind.CONNECT_TIMEOUT),
-        (httpx.ConnectError, "NOT_SENT", OXTransportFailureKind.CONNECT_ERROR),
-        (httpx.PoolTimeout, "NOT_SENT", OXTransportFailureKind.POOL_TIMEOUT),
-        (httpx.ReadTimeout, "OUTCOME_UNKNOWN", OXTransportFailureKind.READ_TIMEOUT),
-        (httpx.ReadError, "OUTCOME_UNKNOWN", OXTransportFailureKind.READ_ERROR),
-        (httpx.WriteTimeout, "OUTCOME_UNKNOWN", OXTransportFailureKind.WRITE_TIMEOUT),
-        (httpx.WriteError, "OUTCOME_UNKNOWN", OXTransportFailureKind.WRITE_ERROR),
-        (
-            httpx.RemoteProtocolError,
-            "OUTCOME_UNKNOWN",
-            OXTransportFailureKind.REMOTE_PROTOCOL_ERROR,
-        ),
-        (httpx.HTTPError, "OUTCOME_UNKNOWN", OXTransportFailureKind.HTTP_TRANSPORT_ERROR),
-    ],
-)
-def test_q03h_ac09_transport_exception_matrix_preserves_outcome_and_kind(
-    monkeypatch, exception_type, outcome, kind
-):
-    sentinel = f"Q03H-{exception_type.__name__}-SENTINEL"
-    calls = 0
-    original_exception = None
-
-    if exception_type in (TimeoutError, httpx.HTTPError):
-
-        async def raise_from_boundary(**kwargs):
-            nonlocal calls, original_exception
-            calls += 1
-            original_exception = exception_type(sentinel)
-            raise original_exception
-
-        monkeypatch.setattr(client_module, "_post_with_total_deadline", raise_from_boundary)
-        client = OXClient(make_settings())
-    else:
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls, original_exception
-            calls += 1
-            original_exception = exception_type(sentinel, request=request)
-            raise original_exception
-
-        client = make_client(handler)
-
-    with pytest.raises(OXTransportError) as raised:
-        client.complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
-
-    assert calls == 1
-    assert raised.value.attempt_outcome == outcome
-    assert isinstance(raised.value.transport_failure_kind, OXTransportFailureKind)
-    assert raised.value.transport_failure_kind is kind
-    assert original_exception is not None
-    assert_safe_transport_error_state(
-        raised.value, sentinel=sentinel, original_exception=original_exception
-    )
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert sentinel not in repr(raised.value)
-
-
-@pytest.mark.parametrize(
-    "malformed",
-    [
-        {"id": "resp", "model": "model", "choices": []},
-        {"id": "resp", "model": "model", "choices": [{"message": {}}]},
+def _response_body(content: str) -> bytes:
+    return json.dumps(
         {
-            "id": "resp",
-            "model": "model",
-            "choices": [{"message": {"role": "user", "content": "wrong"}}],
-        },
-        {
-            "id": "resp",
-            "model": "model",
-            "choices": [{"message": {"role": "assistant", "content": None}}],
-        },
-        {
-            "id": "resp",
-            "model": "model",
+            "id": "provider-response-id",
             "choices": [
-                {"message": {"role": "assistant", "content": "one"}},
-                {"message": {"role": "assistant", "content": "two"}},
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    },
+                    "finish_reason": "stop",
+                }
             ],
-        },
-        {"id": "resp", "model": "model", "choices": SUCCESS_BODY["choices"], "usage": []},
-    ],
-)
-def test_complete_rejects_malformed_success_response(malformed):
-    calls = 0
+            "usage": {"total_tokens": 123},
+        }
+    ).encode("utf-8")
 
-    def handler(request: httpx.Request) -> httpx.Response:
+
+def test_execute_ox_transport_sends_exact_prepared_request_once_without_parsing() -> None:
+    prepared = _prepared_request()
+    calls = 0
+    seen: dict[str, object] = {}
+    raw_response = b"not-json-but-transport-complete"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=malformed)
+        seen["method"] = request.method
+        seen["url"] = str(request.url)
+        seen["body"] = await request.aread()
+        seen["authorization"] = request.headers["Authorization"]
+        return httpx.Response(200, content=raw_response)
 
-    with pytest.raises(OXProtocolError) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+    response = _execute(prepared=prepared, transport=httpx.MockTransport(handler))
 
     assert calls == 1
-    assert raised.value.attempt_outcome == "COMPLETED"
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert SECRET not in repr(raised.value)
+    assert seen == {
+        "method": "POST",
+        "url": "https://ai-gateway.vercel.sh/v1/chat/completions",
+        "body": prepared.body_bytes,
+        "authorization": f"Bearer {API_KEY}",
+    }
+    assert response.outcome is ProviderAttemptOutcome.COMPLETED
+    assert response.status_code == 200
+    assert response.body == raw_response
 
 
-def test_complete_suppresses_response_json_failure_details():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=f'{{"content":"{SECRET}"'.encode(),
-            headers={"content-type": "application/json"},
+@pytest.mark.parametrize("status_code", [302, 400, 429, 500])
+def test_execute_ox_transport_returns_complete_rejection_without_redirect_or_retry(
+    status_code: int,
+) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        headers = {"Location": "https://example.invalid/fallback"} if status_code == 302 else {}
+        return httpx.Response(status_code, headers=headers, content=b"complete-rejection")
+
+    response = _execute(transport=httpx.MockTransport(handler))
+
+    assert calls == 1
+    assert response.outcome is ProviderAttemptOutcome.REJECTED
+    assert response.status_code == status_code
+    assert response.body == b"complete-rejection"
+
+
+def test_execute_ox_transport_rejects_request_identity_mismatch_before_transport() -> None:
+    prepared = _prepared_request()
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=b"unexpected")
+
+    mismatched = ProviderTransmissionContext(
+        provider_started_at=STARTED_AT,
+        expected_request_sha256="b" * 64,
+    )
+
+    with pytest.raises(ValueError, match="request_sha256"):
+        _execute(
+            prepared=prepared,
+            context=mismatched,
+            transport=httpx.MockTransport(handler),
         )
 
-    with pytest.raises(OXProtocolError) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
-
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert SECRET not in repr(raised.value)
+    assert calls == 0
 
 
-@pytest.mark.parametrize("field", ["id", "model"])
-def test_complete_rejects_unsafe_response_metadata_shape(field):
-    malformed = {**SUCCESS_BODY, field: {"not": "a string"}}
+class _RaisingTransport(httpx.AsyncBaseTransport):
+    def __init__(self, exception_type: type[httpx.TransportError]) -> None:
+        self.exception_type = exception_type
+        self.calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=malformed)
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
+        raise self.exception_type("RAW SECRET TRANSPORT MESSAGE", request=request)
 
+
+@pytest.mark.parametrize(
+    ("exception_type", "expected_outcome", "expected_kind"),
+    [
+        (
+            httpx.ConnectTimeout,
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.CONNECT_TIMEOUT,
+        ),
+        (
+            httpx.ConnectError,
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.CONNECT_ERROR,
+        ),
+        (
+            httpx.PoolTimeout,
+            ProviderAttemptOutcome.NOT_SENT,
+            ProviderTransportFailureKind.POOL_TIMEOUT,
+        ),
+        (
+            httpx.WriteTimeout,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.WRITE_TIMEOUT,
+        ),
+        (
+            httpx.WriteError,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.WRITE_ERROR,
+        ),
+        (
+            httpx.ReadTimeout,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.READ_TIMEOUT,
+        ),
+        (
+            httpx.ReadError,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.READ_ERROR,
+        ),
+        (
+            httpx.RemoteProtocolError,
+            ProviderAttemptOutcome.OUTCOME_UNKNOWN,
+            ProviderTransportFailureKind.REMOTE_PROTOCOL_ERROR,
+        ),
+    ],
+)
+def test_execute_ox_transport_preserves_shared_failure_mapping_without_retry(
+    exception_type: type[httpx.TransportError],
+    expected_outcome: ProviderAttemptOutcome,
+    expected_kind: ProviderTransportFailureKind,
+) -> None:
+    transport = _RaisingTransport(exception_type)
+
+    with pytest.raises(ProviderTransportError) as captured:
+        _execute(transport=transport)
+
+    assert transport.calls == 1
+    assert captured.value.attempt_outcome is expected_outcome
+    assert captured.value.transport_failure_kind is expected_kind
+    assert "RAW SECRET TRANSPORT MESSAGE" not in str(captured.value)
+
+
+def test_execute_ox_transport_absolute_deadline_is_outcome_unknown_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    monkeypatch.setattr(
+        ox_client,
+        "OX_TIMEOUT_POLICY",
+        ProviderTimeoutPolicy(
+            connect_seconds=1.0,
+            write_seconds=1.0,
+            read_seconds=1.0,
+            pool_seconds=1.0,
+            absolute_deadline_seconds=0.001,
+        ),
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.02)
+        return httpx.Response(200, content=b"too-late")
+
+    with pytest.raises(ProviderTransportError) as captured:
+        _execute(transport=httpx.MockTransport(handler))
+
+    assert calls == 1
+    assert captured.value.attempt_outcome is ProviderAttemptOutcome.OUTCOME_UNKNOWN
+    assert captured.value.transport_failure_kind is ProviderTransportFailureKind.ABSOLUTE_DEADLINE
+
+
+def test_extract_ox_review_text_preserves_arbitrary_free_form_review_exactly() -> None:
+    review = "## Review\n\nI found no material issues.\n\n- No forced schema here.\n"
+
+    assert extract_ox_review_text(_response_body(review)) == review
+
+
+@pytest.mark.parametrize(
+    "response_body",
+    [
+        b"{",
+        b"\xff",
+        b"[]",
+        b"{}",
+        json.dumps({"choices": []}).encode(),
+        json.dumps(
+            {
+                "choices": [
+                    {"message": {"role": "assistant", "content": "one"}},
+                    {"message": {"role": "assistant", "content": "two"}},
+                ]
+            }
+        ).encode(),
+        json.dumps({"choices": [42]}).encode(),
+        json.dumps({"choices": [{"message": []}]}).encode(),
+        json.dumps({"choices": [{"message": {"content": "missing role"}}]}).encode(),
+        json.dumps({"choices": [{"message": {"role": "user", "content": "wrong role"}}]}).encode(),
+        json.dumps({"choices": [{"message": {"role": "assistant", "content": 42}}]}).encode(),
+        json.dumps({"choices": [{"message": {"role": "assistant", "content": "  \n\t"}}]}).encode(),
+    ],
+)
+def test_extract_ox_review_text_rejects_invalid_provider_envelopes(response_body: bytes) -> None:
     with pytest.raises(OXProtocolError):
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=ATTEMPT_ID)
+        extract_ox_review_text(response_body)
 
 
-@pytest.mark.parametrize(
-    "attempt_id",
-    [
-        "OX-000001",
-        "OX-00001-A001",
-        "OX-000001-A01",
-        "OX-000001-A001-extra",
-        "HEAD",
-        None,
-    ],
-)
-def test_complete_rejects_invalid_attempt_id_before_http_call(attempt_id):
-    calls = 0
+def test_extract_ox_review_text_does_not_echo_raw_invalid_response() -> None:
+    raw_secret = "TOP-SECRET-RAW-RESPONSE"
+    response_body = json.dumps(
+        {"choices": [{"message": {"role": "assistant", "content": 7, "raw": raw_secret}}]}
+    ).encode()
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(200, json=SUCCESS_BODY)
+    with pytest.raises(OXProtocolError) as captured:
+        extract_ox_review_text(response_body)
 
-    with pytest.raises(OXRequestError) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=attempt_id)
-
-    assert calls == 0
-    assert raised.value.attempt_outcome == "NOT_SENT"
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert SECRET not in repr(raised.value)
-
-
-@pytest.mark.parametrize("attempt_id", ["OX-0000001-A001", "OX-000001-A0001"])
-def test_complete_rejects_overlong_attempt_id_before_http_call(attempt_id):
-    calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(200, json=SUCCESS_BODY)
-
-    with pytest.raises(OXRequestError) as raised:
-        make_client(handler).complete(MESSAGES, json_mode=False, attempt_id=attempt_id)
-
-    assert calls == 0
-    assert raised.value.attempt_outcome == "NOT_SENT"
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-
-
-@pytest.mark.parametrize(
-    "messages",
-    [
-        "not a message sequence",
-        ({"role": "user", "content": "x"} for _ in range(1)),
-        ["not a mapping"],
-        [{"role": "developer", "content": "x"}],
-        [{"role": "user"}],
-        [{"content": "x"}],
-        [{"role": "user", "content": None}],
-        [{"role": "user", "content": "x", "extra": object()}],
-    ],
-)
-def test_complete_rejects_invalid_messages_before_http_call(messages):
-    calls = 0
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        calls += 1
-        return httpx.Response(200, json=SUCCESS_BODY)
-
-    with pytest.raises(OXRequestError) as raised:
-        make_client(handler).complete(messages, json_mode=False, attempt_id=ATTEMPT_ID)
-
-    assert calls == 0
-    assert raised.value.attempt_outcome == "NOT_SENT"
-    assert raised.value.args == ()
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
-    assert SECRET not in repr(raised.value)
+    assert raw_secret not in str(captured.value)
+    assert raw_secret not in repr(captured.value)

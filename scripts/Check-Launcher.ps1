@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([string] $RepoRoot = (Split-Path -Parent $PSScriptRoot))
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -21,13 +21,12 @@ if ($null -eq $pester) {
 
 Import-Module $pester.Path -Force
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
 $result = Invoke-Pester `
     -Path (Join-Path $repoRoot 'tests\launcher') `
     -PassThru `
     -Output Detailed
 
-if ($result.FailedCount -gt 0) {
+if ($result.FailedCount -gt 0 -or $result.PassedCount -eq 0 -or $result.Result -ne 'Passed') {
     throw "Launcher Pester suite failed: $($result.FailedCount) failed."
 }
 

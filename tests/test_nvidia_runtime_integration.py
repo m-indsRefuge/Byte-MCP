@@ -10,12 +10,14 @@ _EXPECTED_TOOLS = {
     "nvidia_get_review",
     "nvidia_query",
     "nvidia_review",
+    "ox_get_review",
+    "ox_review",
     "search",
     "wolfram_query",
 }
 
 
-def test_runtime_surface_preserves_nvidia_and_adds_bel02_tools() -> None:
+def test_runtime_surface_preserves_bel02_ox_nvidia_and_core_tools() -> None:
     registered = set(server.mcp._tool_manager._tools)
 
     assert registered == _EXPECTED_TOOLS

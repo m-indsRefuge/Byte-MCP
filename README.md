@@ -1,36 +1,40 @@
 # Byte-MCP
 
-Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved local resources and separately governed external validation capabilities.
+Byte-MCP is an extensible, permissioned Model Context Protocol server for connecting Byte to explicitly approved local resources and separately governed external capabilities.
 
 ## Project status
 
-Byte-MCP V1.1 remains the accepted read-only filesystem baseline. The ChatGPT Web connection through OpenAI Secure MCP Tunnel is accepted, Launcher V1 manages that local stack on Windows, and the OX integration candidate is implemented and awaiting its final end-to-end MCP acceptance test.
+Byte-MCP V1.1 remains the accepted read-only filesystem baseline. The ChatGPT Web connection through OpenAI Secure MCP Tunnel is accepted, Launcher V1 manages that local stack on Windows, and the clean-room OX implementation has completed its provider-free implementation/security qualification on its feature branch.
 
 ```text
-Release baseline:          0.1.1
-Core filesystem authority: accepted / read-only
-Remote MCP transport:      OpenAI Secure MCP Tunnel / accepted
-Launcher V1:               integrated
-OX implementation:         automated + adversarial gates green
-OX live provider route:    Vercel -> Z.AI -> GLM-5.3-Flash proven
-OX via MCP:                acceptance test pending
-Private OX dogfood:        privacy/ZDR gate remains separate
+Release baseline:            0.1.1
+Core filesystem authority:   accepted / read-only
+Remote MCP transport:        OpenAI Secure MCP Tunnel / accepted
+Launcher V1:                 integrated
+NVIDIA governed provider:    integrated
+Wolfram query capability:    integrated
+OX clean-room implementation: provider-free qualification green
+OX runtime promotion:        requires separate explicit authorization
+First live clean-room OX call: requires separate explicit authorization
 ```
 
-Byte-MCP now contains two deliberately separate capability groups:
+The currently registered MCP surface is deliberately bounded to ten tools across four capability groups:
 
-- **Core local access:** four read-only filesystem tools with no external side effects.
-- **OX validation:** four high-level review tools that can transmit only an explicitly approved, deterministic review packet to the fixed OX provider route and append local review evidence. They never mutate or execute the reviewed repository.
+- **Core local access:** `list_roots`, `list_directory`, `search`, `fetch`.
+- **Wolfram:** `wolfram_query`.
+- **NVIDIA:** `nvidia_query`, `nvidia_review`, `nvidia_get_review`.
+- **OX clean-room review:** `ox_review`, `ox_get_review`.
 
-Authoritative records:
+Authoritative current records:
 
 - [V1.1 Closeout and Freeze](docs/V1.1-CLOSEOUT.md)
 - [Remote Integration Resumption](docs/REMOTE-INTEGRATION-RESUMPTION.md)
-- [OX Validation Operations](docs/OX-VALIDATION.md)
+- [OX Clean-Room Operator Contract](docs/OX.md)
+- [OX Historical Archive](archive/OX-ARCHIVE.md)
 - [Security](docs/SECURITY.md)
-- [OX Integration Design](docs/superpowers/specs/2026-08-29-ox-integration-design.md)
-- [OX Natural Review Superseding Design](docs/superpowers/specs/2026-08-30-ox-natural-review-architecture-design.md)
 - [Changelog](CHANGELOG.md)
+
+Pre-clean-room OX operator/design documents are historical references only; the archive note identifies the preserved generations and the current contract boundary.
 
 ## Core filesystem capability
 
@@ -54,18 +58,20 @@ The four core MCP tools are:
 
 No core write, rename, delete, execute, shell, process-control MCP tool, or unrestricted-path tool exists.
 
-## OX validation capability
+## OX clean-room review capability
 
-The OX subsystem adds exactly four MCP tools:
+OX is a small synchronous adversarial code-review subsystem. It exposes exactly two MCP tools:
 
-- `ox_review`
-- `ox_continue`
-- `ox_revalidate`
-- `ox_get_review`
+- `ox_review(repository, mode, objective, paths=None)`
+- `ox_get_review(review_id)`
 
-OX reads only explicitly allowlisted Git repositories and predeclared subsystem definitions from immutable committed states. It cannot execute repository code, run tests, invoke a shell, modify files, apply patches, commit, delete, or broaden review scope heuristically.
+OX is code-review-only. It does not execute repository code, run tests, invoke a shell, modify files, apply patches, commit, delete, provide general chat, or give the provider access to Byte-MCP tools.
 
-The provider route is fixed in V1:
+Repository authority comes from Byte-MCP's existing `projects` root. The caller selects a direct-child repository name beneath that root rather than an arbitrary absolute path. `FULL_REPOSITORY` reviews all eligible frozen material; `BOUNDED` reviews only explicitly selected normalized relative paths.
+
+The snapshot uses current filesystem bytes, so eligible staged, unstaged, and untracked material can be reviewed. Sensitive/generated/non-text material and link/junction/nested-repository boundaries are excluded or rejected under the versioned snapshot policy. Hard included-content/packet/request limits fail locally rather than truncating or splitting a review.
+
+The provider route is fixed:
 
 ```text
 ChatGPT / Byte
@@ -74,25 +80,25 @@ ChatGPT / Byte
     v
 Byte-MCP
     |
-    +-- natural OXReviewService
+    +-- clean-room OXReviewService
           |
           v
 Vercel AI Gateway
     |
-    +-- pinned provider: Z.AI
+    +-- provider allow-list: Z.AI
           |
           +-- zai/glm-5.3-flash
 ```
 
-There is no generic provider abstraction or automatic provider/model fallback in OX V1.
-
 ### Human approval boundary
 
-A new review or blind revalidation uses a two-phase protocol. The first call prepares and persists a deterministic proposal and performs **zero provider calls**. Transmission occurs only after a second explicit approval call revalidates the complete persisted manifest and canonical outbound-payload digest.
+One explicit `ox_review` invocation authorizes that review's complete synchronous lifecycle and permits at most one outbound provider request. There is no second approval gate, automatic retry, continuation, revalidation, worker, recovery loop, or second POST under the same review identity.
 
-OX responses are preserved as exact natural-language provider evidence. Byte may separately derive strict structured findings through `ox_continue` using `record_findings`. Those records are explicitly Byte-authored interpretation, provenance-bound to the exact OX source attempt and response digest; they are never represented as verbatim OX JSON.
+Before transport, Byte-MCP freezes the snapshot and canonical request, persists prepared evidence, loads the credential lazily, verifies request identity and provider-bound safety, then creates an irreversible `send.claim`. Once that claim exists, send authority is consumed permanently for that review identity.
 
-See [OX Validation Operations](docs/OX-VALIDATION.md) for configuration, evidence, retry, privacy, and lifecycle rules.
+The exact raw provider response is persisted before Byte-MCP decodes the provider envelope. OX's review remains free-form prose; no findings/severity/decision schema is imposed.
+
+See [OX Clean-Room Operator Contract](docs/OX.md) for the complete scope, evidence, failure-state, privacy, and approval contract. Historical OX V1/V2 behavior is preserved only through the [OX Historical Archive](archive/OX-ARCHIVE.md) and Git history.
 
 ## Launcher V1
 
@@ -147,7 +153,7 @@ roots.web.json
 audit.web.jsonl
 ```
 
-The launcher inherits ordinary parent-process environment variables when starting Byte-MCP. OX therefore sees `AI_GATEWAY_API_KEY` only when that variable is present in the launcher process environment; the key is not stored in repository configuration or launcher state.
+The launcher inherits ordinary parent-process environment variables when starting Byte-MCP. OX reads `AI_GATEWAY_API_KEY` only when an `ox_review` reaches transmission preflight; the key is not stored in repository configuration or launcher state by the clean-room OX subsystem.
 
 ## Approved local roots
 
@@ -159,17 +165,11 @@ config/roots.local.json
 
 For the accepted ChatGPT profile, the remote filesystem root remains deliberately bounded to the approved project location rather than a drive root or whole user profile.
 
-OX repository/subsystem authorization is separate and machine-local:
-
-```text
-config/ox-repositories.local.json
-```
-
-That file is Git-ignored. Start from [`config/ox-repositories.example.json`](config/ox-repositories.example.json).
+Clean-room OX reuses the existing `projects` root. Repository arguments are direct-child directory names beneath that root. [`config/ox-repositories.example.json`](config/ox-repositories.example.json) is documentation-only and is not a second runtime authorization registry.
 
 ## Supported extraction
 
-Text/source/config formats, PDF, DOCX, XLSX, PPTX, and ZIP metadata listings are supported. ZIP archives are listed only; Byte-MCP does not execute files or automatically extract archive contents.
+Text/source/config formats, PDF, DOCX, XLSX, PPTX, and ZIP metadata listings are supported by the core filesystem capability. ZIP archives are listed only; Byte-MCP does not execute files or automatically extract archive contents.
 
 ## Manual server run
 
@@ -187,7 +187,7 @@ http://127.0.0.1:8000/mcp
 
 The server remains loopback-only. `BYTE_MCP_HOST` accepts only `127.0.0.1`, `localhost`, or `::1`.
 
-OX is optional. Without `AI_GATEWAY_API_KEY`, OX initializes as `DISABLED` while the four core tools remain available. Invalid optional OX configuration produces a fail-isolated `MISCONFIGURED` OX runtime rather than preventing core startup.
+OX runtime construction is lazy and fail-isolated. It does not require the provider key at server import/startup. If the clean-room OX local runtime cannot be constructed, OX remains unavailable without preventing core, Wolfram, or NVIDIA startup. If `AI_GATEWAY_API_KEY` is absent, an individual `ox_review` stops before `send.claim` and performs zero provider requests.
 
 ## Validate the repository
 
@@ -203,7 +203,7 @@ The Python gate performs dependency integrity, compilation, Ruff, and full pytes
 .\scripts\Check-Launcher.ps1
 ```
 
-CI validates Python 3.12 on Windows and Ubuntu and runs the dedicated Windows launcher job.
+CI validates Python 3.12 on Windows and Ubuntu and runs the dedicated Windows launcher jobs.
 
 ## Validate the live core MCP protocol
 
@@ -232,10 +232,12 @@ Core runtime audit records are stored at the location configured by `BYTE_MCP_AU
 
 Fetched content is never written to that ledger. Search terms and opaque references are fingerprinted before audit storage.
 
-OX keeps detailed review evidence separately, outside the reviewed repository. The default is a user-local data directory and can be overridden with `BYTE_MCP_OX_EVIDENCE_DIR`. Evidence includes prepared scope, manifests, attempts, raw provider responses, natural conversation history, optional Byte-derived findings, adjudication, and revalidation records.
+OX keeps detailed review evidence separately, outside the reviewed repository. The default is `%LOCALAPPDATA%\Byte-MCP\ox` on Windows and `${XDG_DATA_HOME:-~/.local/share}/byte-mcp/ox` on POSIX; `BYTE_MCP_OX_EVIDENCE_DIR` may override it.
+
+Each clean-room review directory can contain `review.json`, `snapshot.json`, `packet.bin`, `request.bin`, irreversible `send.claim`, `response.bin`, and `review.txt`. Raw packet/request/response evidence is restricted forensic material and is not returned by `ox_get_review`.
 
 ## Authority boundary
 
-The core V1.1 filesystem authority remains frozen. OX is a separately reviewed capability exception for **fixed-purpose outbound validation**, not arbitrary HTTP access. Launcher process control is local operator infrastructure only and does not alter the MCP authority exposed to ChatGPT.
+The core V1.1 filesystem authority remains frozen. Wolfram, NVIDIA, and OX are separately governed capability exceptions; OX specifically is fixed-purpose outbound code review, not arbitrary HTTP access. Launcher process control is local operator infrastructure only and does not alter the MCP authority exposed to ChatGPT.
 
-Any future addition of write, rename, move, delete, rollback, shell, process, registry, application-control, arbitrary HTTP, broader filesystem roots, or materially different authentication/provider authority requires a new capability contract and security review.
+Any future addition of write, rename, move, delete, rollback, shell, process, registry, application-control, arbitrary HTTP, broader filesystem roots, OX continuation/retry/revalidation, provider tool access, or materially different authentication/provider authority requires a new capability contract and security review.

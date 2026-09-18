@@ -1,58 +1,48 @@
-"""Fail-isolated local runtime for the optional OX validation capability."""
+"""Lazy, fail-isolated construction of the clean-room OX review service."""
 
+from __future__ import annotations
+
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from pathlib import Path
 
-from byte_mcp.errors import OXEvidenceError, OXUnavailableError
-
-from .client import OXClient
-from .evidence import EvidenceStore
-from .jobs import OXProviderJobManager
-from .models import OXAvailability
-from .natural_service import OXReviewService
-from .repositories import validate_ox_local_config
-from .settings import OXSettings
+from byte_mcp.errors import ByteMCPError, OXConfigurationError
+from byte_mcp.ox.evidence import OXEvidenceStore
+from byte_mcp.ox.scope import OXScopeResolver
+from byte_mcp.ox.service import OXReviewService
+from byte_mcp.ox.settings import OXSettings, _resolve_evidence_root
+from byte_mcp.settings import Settings
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class OXRuntime:
-    """Represent the locally validated availability of the OX subsystem."""
+    """Construct OX from existing root authority without loading provider credentials."""
 
-    state: OXAvailability
-    _service: OXReviewService | None = None
+    service: OXReviewService | None = None
+    error_type: str | None = None
 
     @classmethod
-    def initialize(cls, settings: OXSettings, audit) -> "OXRuntime":
-        """Validate only local OX configuration; never contact the provider."""
-        if settings.api_key is None:
-            return cls(OXAvailability.DISABLED)
-
+    def load(cls, settings: Settings, roots: Mapping[str, Path]) -> OXRuntime:
+        """Build local OX state lazily while containing configuration failures."""
         try:
-            validate_ox_local_config(settings)
-            jobs = OXProviderJobManager()
-            evidence = EvidenceStore(settings.evidence_root)
-            evidence.recover_stale_transmissions(
-                stale_after=timedelta(seconds=settings.orphan_recovery_seconds),
-                runtime_session_id=jobs.runtime_session_id,
-            )
-            service = OXReviewService(
-                settings,
-                evidence,
-                OXClient(settings),
-                audit,
-                jobs,
-            )
-        except (OSError, OXEvidenceError, TypeError, ValueError):
-            return cls(OXAvailability.MISCONFIGURED)
-        return cls(OXAvailability.AVAILABLE, service)
+            if not isinstance(settings, Settings):
+                raise TypeError("settings must be Settings")
+            if not isinstance(roots, Mapping):
+                raise TypeError("roots must be a mapping")
 
-    @classmethod
-    def misconfigured(cls) -> "OXRuntime":
-        """Create a fail-isolated state when OX settings cannot be loaded."""
-        return cls(OXAvailability.MISCONFIGURED)
+            projects_root = roots["projects"]
+            evidence_root = _resolve_evidence_root(os.getenv("BYTE_MCP_OX_EVIDENCE_DIR"))
+            review_service = OXReviewService(
+                scope_resolver=OXScopeResolver(projects_root),
+                evidence_store=OXEvidenceStore(evidence_root),
+                settings_loader=OXSettings.load,
+            )
+        except (ByteMCPError, KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+            return cls(error_type=type(error).__name__)
+        return cls(service=review_service)
 
     def require_service(self) -> OXReviewService:
-        """Return the OX service only when local startup validation succeeded."""
-        if self._service is None or self.state is not OXAvailability.AVAILABLE:
-            raise OXUnavailableError(f"OX validation is {self.state.value.casefold()}.")
-        return self._service
+        if self.service is None:
+            raise OXConfigurationError("OX runtime is unavailable.")
+        return self.service

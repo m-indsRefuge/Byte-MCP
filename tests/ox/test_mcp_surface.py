@@ -1,143 +1,158 @@
+from __future__ import annotations
+
+import importlib
+from pathlib import Path
+
+import pytest
+
 from byte_mcp import server
+from byte_mcp.errors import OXConfigurationError
+from byte_mcp.ox.settings import OXSettings
+from byte_mcp.settings import Settings
+
+EXPECTED_NON_OX_TOOLS = {
+    "list_roots",
+    "list_directory",
+    "search",
+    "fetch",
+    "wolfram_query",
+    "nvidia_query",
+    "nvidia_review",
+    "nvidia_get_review",
+}
+EXPECTED_OX_TOOLS = {"ox_review", "ox_get_review"}
 
 
-def test_v1_ox_tools_are_not_registered() -> None:
-    registered = server.mcp._tool_manager._tools
-    assert "ox_review" not in registered
-    assert "ox_continue" not in registered
-    assert "ox_revalidate" not in registered
-    assert "ox_get_review" not in registered
-    assert set(registered) == {
-        "list_roots", "list_directory", "search", "fetch", "wolfram_query"
-    }
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        repo_root=tmp_path,
+        roots_file=tmp_path / "roots.json",
+        audit_file=tmp_path / "audit.jsonl",
+        max_file_bytes=10_000_000,
+        max_response_chars=60_000,
+        max_search_files=20_000,
+        content_search_max_bytes=1_000_000,
+    )
 
 
-def test_q03h_ac18_attempts_view_is_bounded_local_and_secret_free(
-    tmp_path
+def test_task11_preserves_exact_current_surface() -> None:
+    registered = set(server.mcp._tool_manager._tools)
+
+    assert registered == EXPECTED_NON_OX_TOOLS | EXPECTED_OX_TOOLS
+    assert {name for name in registered if name.startswith("ox_")} == EXPECTED_OX_TOOLS
+
+
+def test_task11_ox_tool_annotations_are_exact() -> None:
+    tools = server.mcp._tool_manager._tools
+    review = tools["ox_review"].annotations
+    get_review = tools["ox_get_review"].annotations
+
+    assert review.readOnlyHint is False
+    assert review.destructiveHint is False
+    assert review.idempotentHint is False
+    assert review.openWorldHint is True
+
+    assert get_review.readOnlyHint is True
+    assert get_review.destructiveHint is False
+    assert get_review.idempotentHint is True
+    assert get_review.openWorldHint is False
+
+
+def test_server_reload_does_not_load_ox_provider_settings(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import json
-    from datetime import datetime, timedelta
+    def forbidden_load(cls) -> OXSettings:
+        raise AssertionError("OX provider settings must remain lazy at server startup")
 
-    from byte_mcp.errors import OXTransportFailureKind
-    from byte_mcp.ox.evidence import EvidenceStore
-    from byte_mcp.ox.models import AttemptOutcome
-    from byte_mcp.ox.service import OXReviewService
-    from byte_mcp.ox.settings import OXSettings
+    monkeypatch.setattr(OXSettings, "load", classmethod(forbidden_load))
 
-    manifest_sha256 = "a" * 64
-    runtime_session_id = "b" * 32
+    reloaded = importlib.reload(server)
 
-    class ProjectionEvidenceStore(EvidenceStore):
-        def get_review(self, review_id: str) -> dict[str, object]:
-            review = super().get_review(review_id)
-            for attempt in review["attempts"]:
-                attempt.update(
-                    {
-                        "raw_body": "RAW-BODY-SENTINEL",
-                        "authorization_header": "HEADER-SENTINEL",
-                        "cookie": "COOKIE-SENTINEL",
-                        "exception_text": "EXCEPTION-SENTINEL",
-                        "stack": "STACK-SENTINEL",
-                    }
-                )
-            return review
+    assert set(reloaded.mcp._tool_manager._tools) == EXPECTED_NON_OX_TOOLS | EXPECTED_OX_TOOLS
 
-    class FailIfCalledClient:
-        def complete(self, *args, **kwargs):
-            raise AssertionError("retrieval must not call the provider")
 
-    class Audit:
-        def record(self, *args, **kwargs) -> None:
-            return None
+def test_ox_runtime_uses_existing_projects_root_without_loading_provider_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_module = importlib.import_module("byte_mcp.ox.runtime")
+    projects = tmp_path / "projects"
+    repository = projects / "example"
+    repository.mkdir(parents=True)
+    evidence_root = tmp_path / "evidence"
+    monkeypatch.setenv("BYTE_MCP_OX_EVIDENCE_DIR", str(evidence_root))
 
-    store = ProjectionEvidenceStore(tmp_path / "evidence")
-    review_id = store.persist_prepared_review(
-        identity={
-            "repository": "fixture",
-            "subsystem": "validation",
-            "objective": "review",
-        },
-        manifest={"manifest_sha256": manifest_sha256},
-        bundle={"packet": "prepared"},
+    def forbidden_load(cls) -> OXSettings:
+        raise AssertionError("runtime construction must not load the provider credential")
+
+    monkeypatch.setattr(runtime_module.OXSettings, "load", classmethod(forbidden_load))
+
+    runtime = runtime_module.OXRuntime.load(
+        _settings(tmp_path),
+        {"projects": projects, "other": tmp_path},
     )
-    events_path = store._root / "reviews" / review_id / "events.jsonl"
-    legacy_attempt_id = f"{review_id}-A001"
-    legacy_events = [
+    ox_service = runtime.require_service()
+
+    resolved = ox_service._scope_resolver.resolve_repository("example")
+    assert resolved.path == repository.resolve()
+    assert evidence_root.resolve().is_dir()
+
+
+def test_ox_runtime_missing_projects_root_is_fail_isolated(tmp_path: Path) -> None:
+    runtime_module = importlib.import_module("byte_mcp.ox.runtime")
+
+    runtime = runtime_module.OXRuntime.load(
+        _settings(tmp_path),
+        {"not-projects": tmp_path},
+    )
+
+    with pytest.raises(OXConfigurationError, match="OX runtime is unavailable"):
+        runtime.require_service()
+
+
+def test_ox_review_delegates_one_synchronous_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeService:
+        async def review(self, **kwargs: object) -> dict[str, object]:
+            calls.append(kwargs)
+            return {"review_id": "OX-000001", "state": "COMPLETED"}
+
+    monkeypatch.setattr(server, "ox_service", lambda: FakeService())
+
+    result = __import__("asyncio").run(
+        server.ox_review(
+            repository="example",
+            mode="BOUNDED",
+            objective="Review the changed subsystem.",
+            paths=["src", "tests"],
+        )
+    )
+
+    assert result == {"review_id": "OX-000001", "state": "COMPLETED"}
+    assert calls == [
         {
-            "attempt_id": legacy_attempt_id,
-            "event_type": "TRANSMISSION_INTENT",
-            "manifest_sha256": manifest_sha256,
-            "recorded_at": "2026-09-01T00:00:00+00:00",
-        },
-        {
-            "attempt_id": legacy_attempt_id,
-            "event_type": "ATTEMPT_OUTCOME",
-            "outcome": AttemptOutcome.NOT_SENT.value,
-        },
+            "repository": "example",
+            "mode": "BOUNDED",
+            "objective": "Review the changed subsystem.",
+            "paths": ["src", "tests"],
+        }
     ]
-    with events_path.open("ab") as handle:
-        for event in legacy_events:
-            handle.write(
-                json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8")
-                + b"\n"
-            )
 
-    owned = store.claim_retry_transmission(
-        review_id,
-        manifest_sha256,
-        renewed_approval=True,
-        runtime_session_id=runtime_session_id,
-    )
-    store.record_provider_request_started(
-        review_id,
-        owned["attempt_id"],
-        runtime_session_id=runtime_session_id,
-        phase="initial",
-    )
-    started_at = store.get_review(review_id)["attempts"][-1]["provider_started_at"]
-    assert isinstance(started_at, str)
-    finished_at = (datetime.fromisoformat(started_at) + timedelta(milliseconds=25)).isoformat()
-    store.record_attempt_outcome(
-        review_id,
-        owned["attempt_id"],
-        AttemptOutcome.OUTCOME_UNKNOWN,
-    )
-    store.record_provider_transport_metadata(
-        review_id,
-        owned["attempt_id"],
-        runtime_session_id=runtime_session_id,
-        provider_finished_at=finished_at,
-        elapsed_ms=25,
-        transport_failure_kind=OXTransportFailureKind.READ_ERROR,
-    )
 
-    settings = OXSettings(
-        "FAKE-TEST-KEY",
-        tmp_path / "repositories.json",
-        store._root,
-    )
-    service = OXReviewService(settings, store, FailIfCalledClient(), Audit())
+def test_ox_get_review_is_local_service_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeService:
+        def get_review(self, review_id: str) -> dict[str, object]:
+            assert review_id == "OX-000007"
+            return {"review_id": review_id, "state": "READY"}
 
-    result = service.get_review(review_id, view="attempts")
+    monkeypatch.setattr(server, "ox_service", lambda: FakeService())
 
-    assert result == {
-        "review_id": review_id,
-        "attempts": [
-            {
-                "attempt_id": legacy_attempt_id,
-                "manifest_sha256": manifest_sha256,
-                "outcome": AttemptOutcome.NOT_SENT.value,
-            },
-            {
-                "attempt_id": owned["attempt_id"],
-                "manifest_sha256": manifest_sha256,
-                "runtime_session_id": runtime_session_id,
-                "provider_request_started": True,
-                "outcome": AttemptOutcome.OUTCOME_UNKNOWN.value,
-                "provider_started_at": started_at,
-                "provider_finished_at": finished_at,
-                "elapsed_ms": 25,
-                "transport_failure_kind": OXTransportFailureKind.READ_ERROR.value,
-            },
-        ],
+    assert server.ox_get_review("OX-000007") == {
+        "review_id": "OX-000007",
+        "state": "READY",
     }
