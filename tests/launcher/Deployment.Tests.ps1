@@ -259,10 +259,10 @@ Describe 'Qualification context projection' {
             -PythonPath 'C:\\candidate\\.venv\\Scripts\\python.exe' `
             -Context $context
 
-        $check.StateRoot | Should -Be 'C:\\rehearsal\\state'
-        $check.McpPort | Should -Be 18000
-        $check.TunnelPort | Should -Be 18080
-        $check.SupervisorName | Should -Be 'rehearsal-supervisor'
+        $check.StateRoot | Should -Be $context.StateRoot
+        $check.McpPort | Should -Be $context.McpPort
+        $check.TunnelPort | Should -Be $context.TunnelPort
+        $check.SupervisorName | Should -Be $context.SupervisorName
     }
 }
 
