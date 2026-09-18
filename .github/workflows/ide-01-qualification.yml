@@ -1,9 +1,9 @@
-name: IDE-01 production-lineage qualification
+name: IDE-01 deployment-fix qualification
 
 on:
   push:
     branches:
-      - ops/ide-01-qualification
+      - ops/ide-01-deployment-fix-qualification
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 env:
   IDE01_PREDECESSOR_SHA: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
-  IDE01_CANDIDATE_SHA: d163394fbcbe67ecab734f70a68c79e557deadcb
+  IDE01_CANDIDATE_SHA: 9610d5008f6a78736836090c6bd27d4ed94fb880
   PYTHONHASHSEED: "0"
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout frozen IDE-01 candidate
         uses: actions/checkout@v4
         with:
-          ref: d163394fbcbe67ecab734f70a68c79e557deadcb
+          ref: 9610d5008f6a78736836090c6bd27d4ed94fb880
           path: candidate
           fetch-depth: 1
 
@@ -324,7 +324,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: d163394fbcbe67ecab734f70a68c79e557deadcb
+          ref: 9610d5008f6a78736836090c6bd27d4ed94fb880
       - name: Ensure Pester 5+
         shell: pwsh
         run: |
@@ -345,7 +345,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: d163394fbcbe67ecab734f70a68c79e557deadcb
+          ref: 9610d5008f6a78736836090c6bd27d4ed94fb880
       - name: Install Pester 6.1.0
         shell: pwsh
         run: Install-Module Pester -RequiredVersion 6.1.0 -Scope CurrentUser -Force -SkipPublisherCheck
