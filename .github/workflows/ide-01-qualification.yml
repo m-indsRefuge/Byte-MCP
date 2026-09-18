@@ -11,7 +11,7 @@ permissions:
 
 env:
   IDE01_PREDECESSOR_SHA: 6dbb9ed8d2db6982219194b4aefb920a9507898d
-  IDE01_CANDIDATE_SHA: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
+  IDE01_CANDIDATE_SHA: 2b3c699d7154fc46da194ea9db16098de87c4359
   PYTHONHASHSEED: "0"
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
       - name: Checkout frozen IDE-01 candidate
         uses: actions/checkout@v4
         with:
-          ref: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
+          ref: 2b3c699d7154fc46da194ea9db16098de87c4359
           path: candidate
           fetch-depth: 1
 
@@ -330,7 +330,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
+          ref: 2b3c699d7154fc46da194ea9db16098de87c4359
       - name: Ensure Pester 5+
         shell: pwsh
         run: |
@@ -351,7 +351,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
+          ref: 2b3c699d7154fc46da194ea9db16098de87c4359
       - name: Install Pester 6.1.0
         shell: pwsh
         run: Install-Module Pester -RequiredVersion 6.1.0 -Scope CurrentUser -Force -SkipPublisherCheck
