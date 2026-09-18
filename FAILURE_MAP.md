@@ -157,3 +157,89 @@ A query failure never causes a second provider call inside the same invocation. 
 - **Data risk:** Copying the blob between identities does not make it portable and can encourage insecure plaintext migration attempts.
 - **Do not:** Do not weaken DPAPI scope, change to Machine scope, or export plaintext merely to make one blob work across users.
 - **Related tests:** DPAPI CurrentUser round-trip; missing/corrupt store behavior; provider-free credential validation and startup qualification.
+
+## BEL-02 read-only proxy subsystem
+
+### BEL-02 service unavailable
+- **Boundary:** Byte-MCP -> loopback BEL-02 MCP.
+- **Observable symptom:** `Bel02ProxyError` reports BEL-02 unavailable.
+- **Likely causes:** BEL-02 D0 not running, wrong local port, MCP protocol failure.
+- **First diagnostics:** verify `http://127.0.0.1:8012/mcp` is listening and run the BEL-02 local smoke test.
+- **Propagation:** only BEL-02 proxy tools fail; Byte-MCP core and other providers must remain available.
+- **Safe recovery:** start or repair BEL-02, then retry the read-only request.
+- **Data risk:** none for D0 read-only calls.
+- **Do not:** bypass BEL-02 by running the requested command directly on the Byte-MCP host.
+
+### Non-loopback BEL-02 URL configured
+- **Boundary:** proxy configuration.
+- **Observable symptom:** proxy initialization rejects the URL.
+- **Likely cause:** `BYTE_MCP_BEL02_URL` points outside loopback or contains credentials/query data.
+- **First diagnostics:** inspect only the configured URL value.
+- **Propagation:** BEL-02 tools unavailable; Byte-MCP core unaffected.
+- **Safe recovery:** restore a loopback `/mcp` URL on a high port.
+- **Data risk:** prevented by fail-closed validation.
+- **Do not:** weaken loopback validation to make a remote endpoint work.
+
+### Unauthorized BEL-02 tool requested
+- **Boundary:** fixed proxy allow-list.
+- **Observable symptom:** `bel02_run` or another unapproved tool is rejected.
+- **Likely cause:** caller attempted generic forwarding.
+- **First diagnostics:** inspect requested tool name.
+- **Propagation:** request fails locally before contacting BEL-02.
+- **Safe recovery:** use only `bel02_status`, `bel02_git_status`, or `bel02_git_diff`.
+- **Data risk:** none.
+- **Do not:** expose a caller-supplied BEL-02 tool name in this milestone.
+
+### BEL-02 receipt exceeds Byte-MCP response bound
+- **Boundary:** returned evidence size.
+- **Observable symptom:** proxy rejects the receipt instead of returning partial evidence.
+- **Likely cause:** unexpectedly large Git diff or malformed/verbose downstream response.
+- **First diagnostics:** reproduce locally against BEL-02 and inspect scope.
+- **Propagation:** one proxy call fails; no mutation occurs.
+- **Safe recovery:** narrow the downstream read operation before future promotion.
+- **Data risk:** no silent truncation; evidence remains untrusted until inspected.
+- **Do not:** report partial output as a complete receipt.
+
+### MCP client compatibility drift
+- **Boundary:** Byte-MCP MCP SDK -> BEL-02 MCP SDK.
+- **Observable symptom:** initialization/transport failure after dependency upgrade.
+- **Likely cause:** Streamable HTTP API or protocol-version drift.
+- **First diagnostics:** run `tests/test_bel02_proxy.py`, then the live read-only smoke test.
+- **Propagation:** BEL-02 proxy tools only.
+- **Safe recovery:** revalidate the pinned SDK pair before changing either side.
+- **Data risk:** none for read-only D0.
+- **Do not:** silently fall back to host shell or direct Docker execution.
+
+### Nested MCP client lifecycle hang
+
+- **Boundary:** Byte-MCP -> BEL-02 internal proxy transport.
+- **Observed symptom:** `bel02_status` and `bel02_git_status` returned, then the live Byte-MCP canary hung before `bel02_git_diff` completed.
+- **Isolation evidence:** direct BEL-02 MCP `bel02_git_diff` returned the expected calculator diff with exit code 0; a raw bounded HTTP/JSON-RPC MCP sequence (`initialize -> status -> git status -> git diff`) also passed completely.
+- **Cause classification:** the failure is isolated to the nested MCP SDK client/session lifecycle previously used by Byte-MCP, not to BEL-02, Docker, Codex, Git, or the canary repository.
+- **Safe recovery:** use the fixed loopback-only bounded HTTP/JSON-RPC MCP adapter for the three approved read-only BEL-02 tools.
+- **Propagation:** only BEL-02 proxy calls are affected; Byte-MCP core and unrelated provider tools remain independent.
+- **Data risk:** no mutation occurred; `bel02_run` remains unexposed.
+- **Do not:** add retries around an indefinitely hanging nested client session, weaken BEL-02 containment, or upgrade the entire Byte-MCP MCP SDK merely to bypass this isolated proxy transport defect.
+- **Regression tests:** stateless MCP sequence, stateful session-header forwarding, timeout normalization, protocol-error rejection, and `bel02_run` denial in `tests/test_bel02_proxy.py`.
+
+### Runtime validation environment lacks development dependencies
+
+- **Boundary:** BEL-02 promotion verification in the deployed Byte-MCP runtime worktree.
+- **Observable symptom:** `scripts/Check.ps1` invokes the runtime `.venv` and reports `No module named pip`, `No module named ruff`, and `No module named pytest`, but can continue to launcher tests and print a repository PASS.
+- **Likely cause:** the deployed runtime virtual environment contains runtime dependencies only, while `Check.ps1` assumes development tooling is installed and does not fail closed on those native-command failures in the observed Windows PowerShell path.
+- **First diagnostics:** inspect `.venv\Scripts` for `pip`, `ruff`, and `pytest`; record each native command exit code rather than trusting the final banner.
+- **Propagation:** Python compile/lint/test qualification is skipped or fails before execution while the launcher-only suite may still pass.
+- **Safe recovery:** use the known-good development interpreter against the runtime source tree with explicit import provenance and exit-code checks; repair `Check.ps1` separately from BEL-02 promotion.
+- **Data risk:** none, but a false-positive validation receipt can authorize an unsafe promotion.
+- **Do not:** install ad-hoc development packages into the deployed runtime environment merely to make promotion validation green.
+
+### Repository pytest basetemp inaccessible
+
+- **Boundary:** pytest setup/cleanup for the runtime worktree.
+- **Observable symptom:** many otherwise unrelated tests fail during setup with `PermissionError: [WinError 5] Access is denied` while pytest attempts to remove `.pytest-tmp`.
+- **Known evidence:** the failures share the same configured base-temp path; this is a harness/filesystem boundary, not hundreds of independent test failures.
+- **First diagnostics:** inspect the path owner, ACL, attributes, and any process retaining handles before modifying it.
+- **Propagation:** pytest cannot establish a clean base temp directory, so large portions of the suite error before test bodies execute.
+- **Safe recovery for qualification:** run verification with a unique external `--basetemp` while leaving the inaccessible path untouched; investigate the stale path separately.
+- **Data risk:** aggressive cleanup or permission resets can affect unrelated runtime state.
+- **Do not:** weaken filesystem permissions, recursively take ownership, or treat setup errors as product-code regressions without evidence.

@@ -8,6 +8,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from .bel02_proxy import Bel02Proxy, Bel02ProxySettings
 from .service import FileService
 from .settings import Settings
 from .wolfram.runtime import WolframRuntime
@@ -43,6 +44,7 @@ mcp = FastMCP(
 
 _service: FileService | None = None
 _wolfram_runtime_instance: WolframRuntime | None = None
+_bel02_proxy_instance: Bel02Proxy | None = None
 
 
 def service() -> FileService:
@@ -50,6 +52,17 @@ def service() -> FileService:
     if _service is None:
         _service = FileService(SETTINGS)
     return _service
+
+
+def bel02_proxy() -> Bel02Proxy:
+    """Initialize BEL-02 lazily so it can never block Byte-MCP startup."""
+    global _bel02_proxy_instance
+    if _bel02_proxy_instance is None:
+        settings = Bel02ProxySettings.load(
+            max_response_chars=SETTINGS.max_response_chars,
+        )
+        _bel02_proxy_instance = Bel02Proxy(settings)
+    return _bel02_proxy_instance
 
 
 def wolfram_runtime() -> WolframRuntime:
@@ -112,6 +125,24 @@ def fetch(
 ) -> dict[str, Any]:
     """Read one file returned by search using its opaque reference."""
     return service().fetch(reference, max_chars)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def bel02_status() -> dict[str, Any]:
+    """Read the local BEL-02 executor readiness and security boundary."""
+    return await bel02_proxy().call("bel02_status")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def bel02_git_status() -> dict[str, Any]:
+    """Read Git status from BEL-02's configured disposable canary."""
+    return await bel02_proxy().call("bel02_git_status")
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def bel02_git_diff() -> dict[str, Any]:
+    """Read the current Git diff from BEL-02's configured disposable canary."""
+    return await bel02_proxy().call("bel02_git_diff")
 
 
 @mcp.tool(annotations=WOLFRAM_EXTERNAL)

@@ -60,7 +60,7 @@
     "nvidia_query",
     "nvidia_review"
   ],
-  "failure_map_sha256": "d656ac882f3b4854f181ddacd75223113eae23db18d0616a58dd65e73e5186bc",
+  "failure_map_sha256": "00b4410e169a8b230c0f0c6c6ea411f5351f850cd3d28680044dc7ff172bd94d",
   "provider_calls": 0,
   "query_qualification": {
     "lightning": "OFFLINE_QUALIFIED",
