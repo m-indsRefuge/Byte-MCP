@@ -495,7 +495,7 @@ function Wait-DeploymentRuntime {
         try {
              $snapshot = Get-DeploymentRuntime -RuntimeRepo $context.RuntimeRepo -Context $context
             Assert-DeploymentRuntime $snapshot $context.RuntimeRepo $ExpectedHead $ExpectedTools
-            $null = Get-DeploymentSupervisor -Context $context
+            $null = Get-DeploymentSupervisor -RuntimeRepo $context.RuntimeRepo -TaskName $TaskName -Context $context
             return $snapshot
         }
         catch { $lastFailure = $_.Exception.Message }
