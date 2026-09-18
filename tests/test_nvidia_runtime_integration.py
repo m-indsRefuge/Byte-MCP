@@ -11,6 +11,7 @@ _EXPECTED_TOOLS = {
     "nvidia_query",
     "nvidia_review",
     "search",
+    "vscode_active_context",
     "wolfram_query",
 }
 

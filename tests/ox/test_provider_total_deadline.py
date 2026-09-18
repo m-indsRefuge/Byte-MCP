@@ -100,7 +100,10 @@ def test_trickle_response_cannot_extend_request_beyond_absolute_deadline(
     monkeypatch.setattr(
         client_module,
         "_TIMEOUT",
-        httpx.Timeout(connect=0.2, read=0.05, write=0.2, pool=0.2),
+        # Keep the per-read timeout comfortably above the absolute deadline so
+        # scheduler jitter cannot turn this absolute-deadline test into a
+        # competing READ_TIMEOUT race on slower Windows hosts.
+        httpx.Timeout(connect=0.2, read=0.5, write=0.2, pool=0.2),
     )
     monkeypatch.setattr(
         client_module,

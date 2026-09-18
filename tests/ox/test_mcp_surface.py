@@ -8,7 +8,18 @@ def test_v1_ox_tools_are_not_registered() -> None:
     assert "ox_revalidate" not in registered
     assert "ox_get_review" not in registered
     assert set(registered) == {
-        "list_roots", "list_directory", "search", "fetch", "wolfram_query"
+        "bel02_git_diff",
+        "bel02_git_status",
+        "bel02_status",
+        "fetch",
+        "list_directory",
+        "list_roots",
+        "nvidia_get_review",
+        "nvidia_query",
+        "nvidia_review",
+        "search",
+        "vscode_active_context",
+        "wolfram_query",
     }
 
 

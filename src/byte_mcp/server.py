@@ -128,6 +128,12 @@ def fetch(
 
 
 @mcp.tool(annotations=READ_ONLY)
+def vscode_active_context() -> dict[str, Any]:
+    """Read the freshest bounded VS Code editor context under approved projects."""
+    return service().vscode_active_context()
+
+
+@mcp.tool(annotations=READ_ONLY)
 async def bel02_status() -> dict[str, Any]:
     """Read the local BEL-02 executor readiness and security boundary."""
     return await bel02_proxy().call("bel02_status")

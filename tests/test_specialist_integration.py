@@ -1,22 +1,44 @@
 from byte_mcp import server
 
 _EXPECTED_TOOLS = {
+    "bel02_git_diff",
+    "bel02_git_status",
+    "bel02_status",
     "list_roots",
     "list_directory",
     "search",
     "fetch",
-    "ox_review",
-    "ox_continue",
-    "ox_revalidate",
-    "ox_get_review",
+    "vscode_active_context",
     "wolfram_query",
+    "nvidia_query",
+    "nvidia_review",
+    "nvidia_get_review",
 }
 
 
-def test_combined_byte_mcp_surface_registers_core_ox_and_wolfram_tools() -> None:
+def _assert_expected_tool_surface() -> None:
     registered = set(server.mcp._tool_manager._tools)
 
     assert registered == _EXPECTED_TOOLS
+
+
+def test_combined_byte_mcp_surface_registers_core_ox_and_wolfram_tools() -> None:
+    """Preserve the predecessor node ID while validating the reconciled surface."""
+    _assert_expected_tool_surface()
+
+
+def test_production_lineage_surface_registers_core_nvidia_vscode_and_wolfram_tools() -> None:
+    _assert_expected_tool_surface()
+
+
+def test_vscode_active_context_is_local_read_only_tool() -> None:
+    registered = server.mcp._tool_manager._tools
+    annotations = registered["vscode_active_context"].annotations
+
+    assert annotations.readOnlyHint is True
+    assert annotations.destructiveHint is False
+    assert annotations.idempotentHint is True
+    assert annotations.openWorldHint is False
 
 
 def test_wolfram_tool_remains_read_only_and_open_world() -> None:

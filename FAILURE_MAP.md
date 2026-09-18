@@ -243,3 +243,38 @@ A query failure never causes a second provider call inside the same invocation. 
 - **Safe recovery for qualification:** run verification with a unique external `--basetemp` while leaving the inaccessible path untouched; investigate the stale path separately.
 - **Data risk:** aggressive cleanup or permission resets can affect unrelated runtime state.
 - **Do not:** weaken filesystem permissions, recursively take ownership, or treat setup errors as product-code regressions without evidence.
+
+## Deployment hardening and IDE-01 promotion
+
+### F29 — Production qualification misclassified as disposable
+
+- **Boundary:** Production candidate qualification passes production state-root, ports, or supervisor identity into the disposable `Check.ps1` context.
+- **Observable symptom:** Qualification fails before live checkout with `Disposable context cannot use the production runtime.`
+- **Likely cause:** Production deployment context was forwarded wholesale into a check path where presence of explicit state-root/ports means disposable rehearsal infrastructure.
+- **First diagnostics:** Inspect the qualification parameter map and confirm production mode forwards baseline manifest provenance but not disposable-only infrastructure fields.
+- **Propagation path:** production context → disposable inference → safety boundary rejects production runtime → promotion stops before mutation.
+- **Safe recovery:** Keep production qualification on the normal production path; pass disposable state-root/ports/supervisor values only for disposable mode; rerun provider-free qualification.
+- **Do not:** Do not weaken the production/disposable separation check.
+- **Related tests:** `tests/launcher/Deployment.Tests.ps1` — `Qualification context wiring`.
+
+### F30 — Post-start supervisor verification loses runtime identity
+
+- **Boundary:** `Wait-DeploymentRuntime` verifies the supervisor without passing the explicit runtime repository.
+- **Observable symptom:** Post-start verification or rollback reports `Cannot bind argument to parameter 'Path' because it is an empty string.`
+- **Likely cause:** `Get-DeploymentSupervisor` was called with context only even though its scheduled-task validation resolves the explicit `RuntimeRepo` argument.
+- **First diagnostics:** Inspect the call from `Wait-DeploymentRuntime`; confirm both `-RuntimeRepo $context.RuntimeRepo` and `-Context $context` are supplied.
+- **Propagation path:** healthy runtime → supervisor verification receives empty runtime path → false post-start failure → rollback path can report `ROLLBACK_NOT_READY` even when checkout recovery succeeds.
+- **Safe recovery:** Restore the explicit runtime argument, verify predecessor health, and rerun qualification before another live promotion.
+- **Do not:** Do not bypass supervisor identity verification or treat a false verifier failure as proof that live code is unhealthy.
+- **Related tests:** `tests/launcher/Deployment.Tests.ps1` — `Runtime wait supervisor verification wiring`.
+
+### F31 — Absolute-deadline test races a shorter read timeout
+
+- **Boundary:** The local trickle-response deadline test configures an HTTP read timeout shorter than the absolute wall-clock deadline it intends to exercise.
+- **Observable symptom:** A previously passing predecessor node intermittently fails during manifest qualification, causing the fail-closed comparator to reject promotion with a predecessor outcome mismatch.
+- **Likely cause:** Host scheduler jitter lets the shorter per-read timeout win before the absolute deadline.
+- **First diagnostics:** Run only `tests/ox/test_provider_total_deadline.py::test_trickle_response_cannot_extend_request_beyond_absolute_deadline` locally; compare the configured read timeout with `_TOTAL_DEADLINE_SECONDS`.
+- **Propagation path:** scheduling delay → READ_TIMEOUT wins the race → timing test fails → repo-root manifest records pass-to-fail regression → promotion stops before mutation.
+- **Safe recovery:** Keep the per-read timeout comfortably above the absolute deadline so the test isolates only the intended deadline boundary, then rerun the full provider-free qualification.
+- **Do not:** Do not relax the manifest comparator, whitelist the failure, or retry promotion until the deterministic test boundary is restored.
+- **Related tests:** `tests/ox/test_provider_total_deadline.py`, `scripts/pytest_manifest.py`.
