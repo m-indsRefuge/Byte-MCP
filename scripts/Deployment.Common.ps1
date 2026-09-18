@@ -519,6 +519,35 @@ function New-DeploymentCandidate {
     Invoke-DeploymentGit $CandidateRepo @('checkout', '--no-overwrite-ignore', '--detach', $Target)
 }
 
+function Get-DeploymentQualificationCheckParameters {
+    param(
+        [string] $RuntimeRepo,
+        [string] $CandidateRepo,
+        [string] $PythonPath,
+        [pscustomobject] $Context
+    )
+
+    $check = @{
+        RepoRoot = $CandidateRepo
+        PythonPath = $PythonPath
+        ProductionRepo = $RuntimeRepo
+    }
+    if ($null -ne $Context) {
+        $check.BaselineFailureFile = $Context.BaselineFailureFile
+        $check.BaselineManifestFile = $Context.BaselineFailureFile
+        if ($Context.Mode -eq 'Disposable') {
+            $check.StateRoot = $Context.StateRoot
+            $check.McpPort = $Context.McpPort
+            $check.TunnelPort = $Context.TunnelPort
+            $check.SupervisorName = $Context.SupervisorName
+        }
+        elseif ($Context.Mode -ne 'Production') {
+            throw "Unsupported deployment qualification context mode: $($Context.Mode)"
+        }
+    }
+    $check
+}
+
 function Invoke-DeploymentQualification {
     param([string] $RuntimeRepo, [string] $CandidateRepo, [string] $PythonPath, [pscustomobject] $Context)
     Assert-DeploymentIsolation $RuntimeRepo $CandidateRepo $PythonPath
@@ -530,15 +559,8 @@ function Invoke-DeploymentQualification {
     Assert-DeploymentIsolation $RuntimeRepo $CandidateRepo $PythonPath
     Invoke-DeploymentNative 'uv' @('pip', 'install', '--python', $PythonPath, '-e', "$CandidateRepo`[dev`]")
     # Use this reviewed gate, not an arbitrary candidate-supplied replacement.
-    $check = @{ RepoRoot = $CandidateRepo; PythonPath = $PythonPath; ProductionRepo = $RuntimeRepo }
-    if ($null -ne $Context) {
-        $check.StateRoot = $Context.StateRoot
-        $check.BaselineFailureFile = $Context.BaselineFailureFile
-        $check.BaselineManifestFile = $Context.BaselineFailureFile
-        $check.McpPort = $Context.McpPort
-        $check.TunnelPort = $Context.TunnelPort
-        $check.SupervisorName = $Context.SupervisorName
-    }
+    $check = Get-DeploymentQualificationCheckParameters `
+        -RuntimeRepo $RuntimeRepo -CandidateRepo $CandidateRepo -PythonPath $PythonPath -Context $Context
     & (Join-Path $PSScriptRoot 'Check.ps1') @check
 }
 
