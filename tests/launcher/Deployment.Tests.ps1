@@ -64,6 +64,35 @@ Describe 'Deployment path and identity boundaries' {
     }
 }
 
+Describe 'Runtime stability verifier context propagation' {
+    It 'passes explicit runtime identity into supervisor verification' {
+        $runtime = 'C:\\deployment-test\\runtime'
+        $context = [pscustomobject]@{
+            RuntimeRepo = $runtime
+            SupervisorKind = 'ScheduledTask'
+            SupervisorName = 'Byte-MCP Daemon'
+        }
+
+        Mock Get-DeploymentRuntime { New-PromotionSnapshot }
+        Mock Assert-DeploymentRuntime {}
+        Mock Get-DeploymentSupervisor { [pscustomobject]@{ task_name = 'fake' } }
+
+        $null = Wait-DeploymentRuntime `
+            -RuntimeRepo $runtime `
+            -Context $context `
+            -ExpectedHead ('a' * 40) `
+            -ExpectedTools @('fetch', 'search') `
+            -TaskName 'Byte-MCP Daemon' `
+            -TimeoutSeconds 1
+
+        Should -Invoke Get-DeploymentSupervisor -Times 1 -Exactly -ParameterFilter {
+            $RuntimeRepo -ceq $runtime -and
+            $TaskName -ceq 'Byte-MCP Daemon' -and
+            $Context.RuntimeRepo -ceq $runtime
+        }
+    }
+}
+
 Describe 'Promotion transaction with isolated boundary doubles' {
     BeforeEach {
         $script:events = [Collections.Generic.List[string]]::new()
