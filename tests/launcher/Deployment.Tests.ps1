@@ -225,6 +225,47 @@ Describe 'Real Git promotion preserves a production environment' {
     }
 }
 
+Describe 'Qualification context projection' {
+    It 'does not project production runtime state into disposable candidate qualification' {
+        $context = New-DeploymentContext -RuntimeRepo 'C:\\Users\\nolan\\AIProjects\\Byte-MCP-runtime\\daemon'
+
+        $check = Get-DeploymentQualificationCheckParameters `
+            -RuntimeRepo 'C:\\Users\\nolan\\AIProjects\\Byte-MCP-runtime\\daemon' `
+            -CandidateRepo 'C:\\candidate' `
+            -PythonPath 'C:\\candidate\\.venv\\Scripts\\python.exe' `
+            -Context $context
+
+        $check.ProductionRepo | Should -Be 'C:\\Users\\nolan\\AIProjects\\Byte-MCP-runtime\\daemon'
+        $check.RepoRoot | Should -Be 'C:\\candidate'
+        $check.PythonPath | Should -Be 'C:\\candidate\\.venv\\Scripts\\python.exe'
+        $check.ContainsKey('StateRoot') | Should -BeFalse
+        $check.ContainsKey('McpPort') | Should -BeFalse
+        $check.ContainsKey('TunnelPort') | Should -BeFalse
+        $check.ContainsKey('SupervisorName') | Should -BeFalse
+    }
+
+    It 'projects isolated state into disposable candidate qualification' {
+        $context = New-DeploymentContext `
+            -RuntimeRepo 'C:\\rehearsal\\daemon' `
+            -StateRoot 'C:\\rehearsal\\state' `
+            -McpPort 18000 -TunnelPort 18080 `
+            -SupervisorKind LocalProcess `
+            -SupervisorName 'rehearsal-supervisor' `
+            -Mode Disposable
+
+        $check = Get-DeploymentQualificationCheckParameters `
+            -RuntimeRepo 'C:\\rehearsal\\daemon' `
+            -CandidateRepo 'C:\\candidate' `
+            -PythonPath 'C:\\candidate\\.venv\\Scripts\\python.exe' `
+            -Context $context
+
+        $check.StateRoot | Should -Be 'C:\\rehearsal\\state'
+        $check.McpPort | Should -Be 18000
+        $check.TunnelPort | Should -Be 18080
+        $check.SupervisorName | Should -Be 'rehearsal-supervisor'
+    }
+}
+
 Describe 'Explicit deployment context boundary' {
     BeforeAll {
         $script:productionRuntime = 'C:\Users\nolan\AIProjects\Byte-MCP-runtime\daemon'
