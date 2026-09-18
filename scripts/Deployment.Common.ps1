@@ -495,7 +495,7 @@ function Wait-DeploymentRuntime {
         try {
              $snapshot = Get-DeploymentRuntime -RuntimeRepo $context.RuntimeRepo -Context $context
             Assert-DeploymentRuntime $snapshot $context.RuntimeRepo $ExpectedHead $ExpectedTools
-            $null = Get-DeploymentSupervisor -Context $context
+            $null = Get-DeploymentSupervisor -RuntimeRepo $context.RuntimeRepo -Context $context
             return $snapshot
         }
         catch { $lastFailure = $_.Exception.Message }
@@ -519,6 +519,34 @@ function New-DeploymentCandidate {
     Invoke-DeploymentGit $CandidateRepo @('checkout', '--no-overwrite-ignore', '--detach', $Target)
 }
 
+function New-DeploymentQualificationCheckParameters {
+    param(
+        [string] $RuntimeRepo,
+        [string] $CandidateRepo,
+        [string] $PythonPath,
+        [pscustomobject] $Context
+    )
+    $check = @{
+        RepoRoot = $CandidateRepo
+        PythonPath = $PythonPath
+        ProductionRepo = $RuntimeRepo
+    }
+    if ($null -ne $Context) {
+        $check.BaselineFailureFile = $Context.BaselineFailureFile
+        $check.BaselineManifestFile = $Context.BaselineFailureFile
+        if ([string] $Context.Mode -eq 'Disposable') {
+            $check.StateRoot = $Context.StateRoot
+            $check.McpPort = $Context.McpPort
+            $check.TunnelPort = $Context.TunnelPort
+            $check.SupervisorName = $Context.SupervisorName
+        }
+        elseif ([string] $Context.Mode -ne 'Production') {
+            throw "Unexpected deployment context mode during qualification: $($Context.Mode)"
+        }
+    }
+    $check
+}
+
 function Invoke-DeploymentQualification {
     param([string] $RuntimeRepo, [string] $CandidateRepo, [string] $PythonPath, [pscustomobject] $Context)
     Assert-DeploymentIsolation $RuntimeRepo $CandidateRepo $PythonPath
@@ -530,15 +558,8 @@ function Invoke-DeploymentQualification {
     Assert-DeploymentIsolation $RuntimeRepo $CandidateRepo $PythonPath
     Invoke-DeploymentNative 'uv' @('pip', 'install', '--python', $PythonPath, '-e', "$CandidateRepo`[dev`]")
     # Use this reviewed gate, not an arbitrary candidate-supplied replacement.
-    $check = @{ RepoRoot = $CandidateRepo; PythonPath = $PythonPath; ProductionRepo = $RuntimeRepo }
-    if ($null -ne $Context) {
-        $check.StateRoot = $Context.StateRoot
-        $check.BaselineFailureFile = $Context.BaselineFailureFile
-        $check.BaselineManifestFile = $Context.BaselineFailureFile
-        $check.McpPort = $Context.McpPort
-        $check.TunnelPort = $Context.TunnelPort
-        $check.SupervisorName = $Context.SupervisorName
-    }
+    $check = New-DeploymentQualificationCheckParameters -RuntimeRepo $RuntimeRepo -CandidateRepo $CandidateRepo `
+        -PythonPath $PythonPath -Context $Context
     & (Join-Path $PSScriptRoot 'Check.ps1') @check
 }
 
