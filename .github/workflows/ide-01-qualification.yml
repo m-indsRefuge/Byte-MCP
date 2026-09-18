@@ -1,4 +1,4 @@
-name: IDE-01 deployment-fix qualification
+name: IDE-01 BEL-02 lineage qualification
 
 on:
   push:
@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 env:
-  IDE01_PREDECESSOR_SHA: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
-  IDE01_CANDIDATE_SHA: b53a0327f66091d9d9e605d42ca55e4a8b22d2d1
+  IDE01_PREDECESSOR_SHA: 6dbb9ed8d2db6982219194b4aefb920a9507898d
+  IDE01_CANDIDATE_SHA: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
   PYTHONHASHSEED: "0"
 
 jobs:
@@ -23,14 +23,14 @@ jobs:
       - name: Checkout production predecessor
         uses: actions/checkout@v4
         with:
-          ref: 61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9
+          ref: 6dbb9ed8d2db6982219194b4aefb920a9507898d
           path: predecessor
           fetch-depth: 1
 
       - name: Checkout frozen IDE-01 candidate
         uses: actions/checkout@v4
         with:
-          ref: b53a0327f66091d9d9e605d42ca55e4a8b22d2d1
+          ref: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
           path: candidate
           fetch-depth: 1
 
@@ -119,6 +119,9 @@ jobs:
           $predPython = Join-Path $qualification 'predecessor.venv/Scripts/python.exe'
           $candPython = Join-Path $qualification 'candidate.venv/Scripts/python.exe'
           $expectedPredecessor = @(
+            'bel02_git_diff',
+            'bel02_git_status',
+            'bel02_status',
             'fetch',
             'list_directory',
             'list_roots',
@@ -129,6 +132,9 @@ jobs:
             'wolfram_query'
           ) | Sort-Object
           $expectedCandidate = @(
+            'bel02_git_diff',
+            'bel02_git_status',
+            'bel02_status',
             'fetch',
             'list_directory',
             'list_roots',
@@ -197,7 +203,7 @@ jobs:
 
           $env:PYTHONPATH = $collectorDir
           $env:PYTHONHASHSEED = '0'
-          $env:BYTE_PREDECESSOR_SHA = '61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9'
+          $env:BYTE_PREDECESSOR_SHA = '6dbb9ed8d2db6982219194b4aefb920a9507898d'
 
           $collectorHash = (Get-FileHash -Algorithm SHA256 (Join-Path $collectorDir 'pytest_manifest.py')).Hash
           Write-Host "COLLECTOR_SHA256=$collectorHash"
@@ -296,7 +302,7 @@ jobs:
           '@
           $compareScript = Join-Path $qualification 'compare_manifests.py'
           Set-Content -LiteralPath $compareScript -Value $script -Encoding utf8
-          & $candPython $compareScript $collectorDir $predManifest $candManifest '61c77ed1bcaa2a1aeac2bfe3ca3f0aab8ee680c9'
+          & $candPython $compareScript $collectorDir $predManifest $candManifest '6dbb9ed8d2db6982219194b4aefb920a9507898d'
           if ($LASTEXITCODE -ne 0) { throw 'structured predecessor differential qualification failed' }
 
           Write-Host "PREDECESSOR_PYTEST_EXIT=$predExit"
@@ -324,7 +330,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b53a0327f66091d9d9e605d42ca55e4a8b22d2d1
+          ref: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
       - name: Ensure Pester 5+
         shell: pwsh
         run: |
@@ -345,7 +351,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b53a0327f66091d9d9e605d42ca55e4a8b22d2d1
+          ref: 4cbf6f36af13dc84cddf70b93c08ff2032912b5d
       - name: Install Pester 6.1.0
         shell: pwsh
         run: Install-Module Pester -RequiredVersion 6.1.0 -Scope CurrentUser -Force -SkipPublisherCheck
