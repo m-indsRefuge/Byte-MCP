@@ -1,6 +1,9 @@
 from byte_mcp import server
 
 _EXPECTED_TOOLS = {
+    "bel02_git_diff",
+    "bel02_git_status",
+    "bel02_status",
     "list_roots",
     "list_directory",
     "search",

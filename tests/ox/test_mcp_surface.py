@@ -11,6 +11,9 @@ from byte_mcp.ox.settings import OXSettings
 from byte_mcp.settings import Settings
 
 EXPECTED_NON_OX_TOOLS = {
+    "bel02_git_diff",
+    "bel02_git_status",
+    "bel02_status",
     "list_roots",
     "list_directory",
     "search",

@@ -23,6 +23,7 @@ def test_offline_real_server_discovery_keeps_providers_lazy(monkeypatch):
         raise AssertionError("A provider or file service was initialized.")
 
     monkeypatch.setattr(server, "service", forbidden)
+    monkeypatch.setattr(server, "bel02_proxy", forbidden)
     monkeypatch.setattr(server, "wolfram_runtime", forbidden)
     monkeypatch.setattr(server, "nvidia_review_runtime", forbidden)
     monkeypatch.setattr(server, "ox_runtime", forbidden)
@@ -30,6 +31,9 @@ def test_offline_real_server_discovery_keeps_providers_lazy(monkeypatch):
     assert result == {
         "repo_path": str(REPO),
         "tools": [
+            "bel02_git_diff",
+            "bel02_git_status",
+            "bel02_status",
             "fetch",
             "list_directory",
             "list_roots",
@@ -41,7 +45,7 @@ def test_offline_real_server_discovery_keeps_providers_lazy(monkeypatch):
             "search",
             "wolfram_query",
         ],
-        "tool_count": 10,
+        "tool_count": 13,
     }
 
 
