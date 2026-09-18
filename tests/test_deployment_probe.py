@@ -28,10 +28,10 @@ def test_offline_real_server_discovery_keeps_providers_lazy(monkeypatch):
     result = asyncio.run(probe_module.probe(REPO))
     assert result == {
         "repo_path": str(REPO),
-        "tools": ["fetch", "list_directory", "list_roots", "nvidia_get_review",
-                  "nvidia_query", "nvidia_review", "search", "vscode_active_context",
-                  "wolfram_query"],
-        "tool_count": 9,
+        "tools": ["bel02_git_diff", "bel02_git_status", "bel02_status", "fetch",
+                  "list_directory", "list_roots", "nvidia_get_review", "nvidia_query",
+                  "nvidia_review", "search", "vscode_active_context", "wolfram_query"],
+        "tool_count": 12,
     }
 
 
