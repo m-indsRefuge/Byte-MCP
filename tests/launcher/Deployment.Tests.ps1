@@ -64,6 +64,79 @@ Describe 'Deployment path and identity boundaries' {
     }
 }
 
+Describe 'Qualification context wiring' {
+    It 'keeps production qualification out of disposable infrastructure' {
+        $context = [pscustomobject]@{
+            Mode = 'Production'
+            StateRoot = 'C:\Users\test\.byte-mcp'
+            BaselineFailureFile = 'C:\baseline.json'
+            McpPort = 8000
+            TunnelPort = 8080
+            SupervisorName = 'Byte-MCP Daemon'
+        }
+
+        $check = New-DeploymentQualificationCheckParameters `
+            -RuntimeRepo 'C:\deployment-test\runtime' `
+            -CandidateRepo 'C:\deployment-test\candidate' `
+            -PythonPath 'C:\deployment-test\candidate\.venv\Scripts\python.exe' `
+            -Context $context
+
+        $check.ProductionRepo | Should -Be 'C:\deployment-test\runtime'
+        $check.BaselineManifestFile | Should -Be 'C:\baseline.json'
+        $check.ContainsKey('StateRoot') | Should -BeFalse
+        $check.ContainsKey('McpPort') | Should -BeFalse
+        $check.ContainsKey('TunnelPort') | Should -BeFalse
+        $check.ContainsKey('SupervisorName') | Should -BeFalse
+    }
+
+    It 'preserves disposable qualification isolation inputs' {
+        $context = [pscustomobject]@{
+            Mode = 'Disposable'
+            StateRoot = 'C:\deployment-test\state'
+            BaselineFailureFile = 'C:\baseline.json'
+            McpPort = 18000
+            TunnelPort = 18080
+            SupervisorName = 'rehearsal-supervisor'
+        }
+
+        $check = New-DeploymentQualificationCheckParameters `
+            -RuntimeRepo 'C:\deployment-test\runtime' `
+            -CandidateRepo 'C:\deployment-test\candidate' `
+            -PythonPath 'C:\deployment-test\candidate\.venv\Scripts\python.exe' `
+            -Context $context
+
+        $check.StateRoot | Should -Be 'C:\deployment-test\state'
+        $check.McpPort | Should -Be 18000
+        $check.TunnelPort | Should -Be 18080
+        $check.SupervisorName | Should -Be 'rehearsal-supervisor'
+    }
+}
+
+Describe 'Runtime wait supervisor verification wiring' {
+    It 'passes the explicit runtime path into supervisor verification' {
+        $context = [pscustomobject]@{
+            RuntimeRepo = 'C:\deployment-test\runtime'
+        }
+
+        Mock Get-DeploymentRuntime { New-PromotionSnapshot }
+        Mock Get-DeploymentSupervisor { [pscustomobject]@{ kind = 'ScheduledTask' } }
+
+        $snapshot = Wait-DeploymentRuntime `
+            -RuntimeRepo 'C:\deployment-test\runtime' `
+            -Context $context `
+            -ExpectedHead ('a' * 40) `
+            -ExpectedTools @('fetch', 'search') `
+            -TaskName 'Byte-MCP Daemon' `
+            -TimeoutSeconds 1
+
+        $snapshot.status | Should -Be 'READY'
+        Should -Invoke Get-DeploymentSupervisor -Times 1 -Exactly -ParameterFilter {
+            $RuntimeRepo -eq 'C:\deployment-test\runtime' -and
+            $Context.RuntimeRepo -eq 'C:\deployment-test\runtime'
+        }
+    }
+}
+
 Describe 'Promotion transaction with isolated boundary doubles' {
     BeforeEach {
         $script:events = [Collections.Generic.List[string]]::new()
